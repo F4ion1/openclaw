@@ -2970,6 +2970,7 @@ export const en: TranslationMap & {
     sidePanel: {
       label: "Side panel",
       addTab: "Add side panel tab",
+      closeFileChanges: "Save changes to {file} before closing?",
       expand: "Focus",
       expandPanel: "Expand {panel}",
       restore: "Restore split",
