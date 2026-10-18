@@ -17,6 +17,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
+import type { SessionPlacementPresentation } from "../../components/session-placement-move-dialog.tsx";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -153,6 +154,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   protected async changeHeaderPlacement(
     row: GatewaySessionRow,
     mode: "move" | "recover" | "reclaim",
+    presentation?: SessionPlacementPresentation,
+    machineName?: string,
   ): Promise<void> {
     const scope = this.captureConnectionScope();
     if (!scope) {
@@ -191,6 +194,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
       await reclaimChatPanePlacement({
         ...params,
+        currentRow: () => {
+          const current = this.state ? selectedChatSessionRow(this.state) : undefined;
+          return current?.key === row.key ? current : undefined;
+        },
+        machineName,
         reclaimingKey: pendingKey,
         placementStartup,
         onReclaimingChange: onPendingChange,
@@ -201,6 +209,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       await changeSessionPlacement({
         ...params,
         mode,
+        presentation,
         pendingKey,
         requiredProfile: () =>
           scope.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
@@ -354,20 +363,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       };
     }
     const overlays = this.context.overlays;
+    const snapshot = overlays?.snapshot;
     const inlineApproval = visible
-      ? currentInlineSessionApproval(
-          state,
-          agentId,
-          overlays?.snapshot?.approvalQueue,
-          matchesConversation,
-        )
+      ? currentInlineSessionApproval(state, agentId, snapshot?.approvalQueue, matchesConversation)
       : null;
     return {
       gatewayQuestionPrompts: this.questionProjection.prompts,
       inlineApproval,
-      approvalBusy: overlays?.snapshot?.approvalBusy,
-      approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
-      approvalErrors: overlays?.snapshot?.approvalErrors,
+      approvalBusy: snapshot?.approvalBusy,
+      approvalCanGrant: snapshot?.approvalCanGrant ?? false,
+      approvalErrors: snapshot?.approvalErrors,
       onApprovalDecision:
         overlays && visible
           ? (approvalId: string, decision: ExecApprovalDecision) =>
