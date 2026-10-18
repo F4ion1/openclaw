@@ -106,6 +106,7 @@ export function createInitialCronState<Row = CronJob>(
     cronRunsDeliveryStatuses: [],
     cronRunsQuery: "",
     cronRunsSortDir: "desc",
+    cronRunsSortBy: "time",
     cronBusy: false,
   };
 }
