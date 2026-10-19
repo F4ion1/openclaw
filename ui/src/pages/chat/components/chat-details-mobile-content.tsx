@@ -49,6 +49,9 @@ import { ChatOutputsMobile, getChatOutputsCount } from "./chat-outputs.tsx";
 import {
   ChatPullRequestMobileCollection,
   ChatPullRequestMobileDetail,
+  ChatPullRequestMobileChecks,
+  ChatPullRequestMobileMonitoring,
+  type ChatPullRequestMobileCiProps,
   type ChatPullRequestMobileCollectionProps,
   type ChatPullRequestMobileDetailProps,
 } from "./chat-pull-request-mobile.tsx";
@@ -127,6 +130,10 @@ export type ChatDetailsMobilePage =
   | { kind: "task-progress"; content: ChatDetailsMobileProgressPreference }
   | { kind: "pull-requests"; content: ChatPullRequestMobileCollectionProps }
   | { kind: "pull-request"; content: ChatPullRequestMobileDetailProps }
+  | {
+      kind: "pull-request-checks" | "pull-request-monitoring";
+      content: Omit<ChatPullRequestMobileCiProps, "presented">;
+    }
   | { kind: "versions"; content: ChatSessionVersionsMobileProps }
   | { kind: "outputs" }
   | { kind: "context" }
@@ -398,6 +405,14 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
       </Match>
       <Match when={props.page.kind === "pull-request" && props.page}>
         {(page) => <ChatPullRequestMobileDetail {...page().content} />}
+      </Match>
+      <Match when={props.page.kind === "pull-request-checks" && props.page}>
+        {(page) => <ChatPullRequestMobileChecks {...page().content} presented={props.presented} />}
+      </Match>
+      <Match when={props.page.kind === "pull-request-monitoring" && props.page}>
+        {(page) => (
+          <ChatPullRequestMobileMonitoring {...page().content} presented={props.presented} />
+        )}
       </Match>
       <Match when={props.page.kind === "versions" && props.page}>
         {(page) => <ChatSessionVersionsMobile {...page().content} />}

@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetailsPeople } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -124,13 +125,16 @@ suite.define(() => {
           expect(response?.status()).toBe(200);
           const header = page.locator(".chat-pane__header").first();
           await header.waitFor({ state: "visible" });
-          await expect.poll(() => header.locator(".session-owner-chip--header").count()).toBe(1);
+          for (const id of ["profile-ada", "profile-zoe", "profile-lin"]) {
+            await expect.poll(() => header.locator(`[data-viewer-id="${id}"]`).count()).toBe(1);
+          }
           await expect
             .poll(() =>
-              header.locator('.chat-pane__participants .viewer-avatar[aria-label="Zoe"]').count(),
+              header
+                .locator(".chat-pane__presence .viewer-facepile")
+                .getAttribute("data-viewer-count"),
             )
-            .toBe(1);
-          await expect.poll(() => header.locator('[data-viewer-id="profile-lin"]').count()).toBe(1);
+            .toBe("3");
 
           const screenshotPath = path.join(outputDir, `${face}-header.png`);
           const clip = await header.boundingBox();
@@ -140,26 +144,22 @@ suite.define(() => {
           await page.screenshot({ animations: "disabled", clip, path: screenshotPath });
           process.stdout.write(`Chat header screenshot: ${screenshotPath}\n`);
 
-          await expect
-            .poll(() =>
-              header
-                .locator(".chat-pane__presence .viewer-facepile")
-                .getAttribute("data-viewer-count"),
-            )
-            .toBe("1");
-          await expect.poll(() => header.locator('[data-viewer-id="profile-ada"]').count()).toBe(0);
-          await expect
-            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]:visible').count())
-            .toBe(1);
-          await expect
-            .poll(() => header.locator(".session-owner-chip--header").getAttribute("class"))
-            .not.toContain("session-owner-chip--away");
+          const people = await openChatDetailsPeople(page);
+          const members = people.locator(".chat-details-people__person");
+          const owner = members.filter({ hasText: "Ada" });
+          const participant = members.filter({ hasText: "Zoe" });
+          await owner.waitFor({ state: "visible" });
+          await participant.waitFor({ state: "visible" });
+          expect(await members.count()).toBe(2);
+          expect(await owner.count()).toBe(1);
+          expect(await owner.locator(".chat-details-people__role").textContent()).toBe("Owner");
+          expect(await participant.count()).toBe(1);
 
           await gateway.emitGatewayEvent("presence", { presence: [] });
           await expect.poll(() => header.locator(".chat-pane__presence").count()).toBe(0);
-          await expect
-            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]:visible').count())
-            .toBe(1);
+          expect(await members.count()).toBe(2);
+          expect(await owner.isVisible()).toBe(true);
+          expect(await participant.isVisible()).toBe(true);
         },
       );
     },

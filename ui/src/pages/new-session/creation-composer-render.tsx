@@ -75,6 +75,7 @@ function prepareCreationComposer(
 
 export function CreationComposer(props: {
   composer: CreationComposerOwner | undefined;
+  mobileComposer?: boolean;
   onOpenImage: (item: ImageLightboxItem) => void;
 }) {
   const owner = createMemo(() => {
@@ -108,7 +109,7 @@ export function CreationComposer(props: {
                 {error()}
               </div>
             </Show>
-            <ChatComposer {...prepared()} />
+            <ChatComposer {...prepared()} mobileComposer={props.mobileComposer} />
           </section>
         );
       }}

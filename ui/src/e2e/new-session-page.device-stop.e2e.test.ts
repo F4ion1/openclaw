@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureDeviceRuntimeUiProof,
   captureUiProofEnabled,
@@ -109,12 +110,13 @@ suite.define(() => {
         });
         await waitForCommittedChatRoute(page);
 
-        await page.locator(".chat-pane__placement-chip").click();
+        const details = await openChatDetails(page);
+        await details.locator(".chat-environment__machine-trigger").click();
         const stop = page.locator(".chat-pane__placement-reclaim");
         await stop.waitFor({ state: "visible" });
         const menuText = (await stop.textContent())?.trim();
         await captureDeviceRuntimeUiProof(suite, page, "device-startup-menu.png", {
-          surface: page.locator('.chat-pane__placement-menu > [role="menu"]'),
+          surface: details.locator(".chat-pane__placement-menu").getByRole("menu"),
           content: [stop],
         });
         await stop.click();
@@ -136,7 +138,8 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
 
-        await page.locator(".chat-pane__placement-chip").click();
+        await openChatDetails(page);
+        await details.locator(".chat-environment__machine-trigger").click();
         await stop.click();
         await (
           await waitForConfirmModal(page)

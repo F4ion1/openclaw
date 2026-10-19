@@ -15,11 +15,11 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   for (const colorScheme of ["light", "dark"] as const) {
     for (const viewport of [
-      { label: "desktop", width: 800 },
+      { label: "desktop", width: 1000 },
       { label: "mobile", width: 760 },
       { label: "phone", width: 390 },
     ] as const) {
-      it(`lays out and navigates the ${viewport.label} project-parent-child trail in ${colorScheme} mode`, async () => {
+      it(`lays out the ${viewport.label} session identity in ${colorScheme} mode`, async () => {
         const context = await suite.newBrowserContext({
           colorScheme,
           locale: "en-US",
@@ -56,23 +56,68 @@ suite.define(() => {
 
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-          const header = page.locator(
-            "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__header",
+          const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+          const desktop = viewport.label === "desktop";
+          const header = pane.locator(
+            desktop ? ".chat-pane__header" : ".agent-chat__header--mobile",
           );
+          const titleSelector = desktop
+            ? ".chat-pane__session-title-text"
+            : ".mobile-header__title-text";
           await header.waitFor();
-          await header.locator(".workspace-icon").waitFor();
+          const projectSurface = header.locator(
+            desktop ? ".workspace-icon" : ".mobile-header__project",
+          );
+          await projectSurface.waitFor();
 
           if (captureUiProofEnabled) {
             const frame = await takeControlUiScreenshotFrame(
               page,
               header,
-              [header.locator(".workspace-icon"), header.locator(".chat-pane__session-title-text")],
+              [projectSurface, header.locator(titleSelector)],
               { animations: "disabled" },
             );
             await writeFile(
               path.join(suite.artifactDir, `project-icon-${viewport.label}-${colorScheme}.png`),
               frame.png,
             );
+          }
+
+          if (!desktop) {
+            const geometry = await header.evaluate((root) => {
+              const rect = (selector: string) =>
+                root.querySelector(selector)!.getBoundingClientRect();
+              const title = rect(".mobile-header__title-text");
+              const identity = rect(".mobile-header__identity");
+              const navigation = rect(".mobile-header__navigation");
+              const capsule = rect(".mobile-header__capsule");
+              const project = rect(".mobile-header__project");
+              return {
+                overflow: root.scrollWidth - root.clientWidth,
+                titleWidth: title.width,
+                title: root.querySelector(".mobile-header__title-text")!.textContent,
+                navigationRight: navigation.right,
+                identityLeft: identity.left,
+                identityRight: identity.right,
+                capsuleLeft: capsule.left,
+                projectBottom: project.bottom,
+                titleTop: title.top,
+              };
+            });
+            expect(geometry.overflow).toBeLessThanOrEqual(1);
+            expect(geometry.titleWidth).toBeGreaterThan(0);
+            expect(geometry.title).toBe(
+              "Implement parent breadcrumb navigation and polish overflow behavior",
+            );
+            expect(geometry.navigationRight).toBeLessThanOrEqual(geometry.identityLeft);
+            expect(geometry.identityRight).toBeLessThanOrEqual(geometry.capsuleLeft);
+            expect(geometry.projectBottom).toBeLessThanOrEqual(geometry.titleTop);
+            await header
+              .getByRole("button", { name: "Panels", exact: true })
+              .click({ trial: true });
+            await header.locator(".mobile-header__title").click();
+            await pane.locator(".chat-mobile-host__details:not([hidden])").waitFor();
+            return;
           }
 
           const geometry = await header.evaluate((root) => {
@@ -98,7 +143,7 @@ suite.define(() => {
               return node.getBoundingClientRect().toJSON();
             };
             return {
-              nav: centerY(".chat-pane__nav-toggle svg"),
+              nav: centerY(".chat-details-toggle svg"),
               projectIcon: centerY(".workspace-icon"),
               projectText: centerY(".chat-pane__workspace-chip > .oc-menu-item__label > span"),
               menu: centerY(".chat-header-session-menu__trigger svg"),
@@ -127,24 +172,15 @@ suite.define(() => {
             geometry.projectText,
             1,
           );
-          if (viewport.label === "desktop") {
-            for (const center of [
-              geometry.projectIcon,
-              geometry.projectText,
-              geometry.parentText,
-              geometry.sessionText,
-            ]) {
-              // Text and artwork carry more visible weight below their geometric
-              // boxes than Lucide actions, so the identity trail needs a 1px
-              // optical lift to share the topbar's perceived horizontal axis.
-              expect(geometry.nav - center, JSON.stringify(geometry)).toBeCloseTo(1, 1);
-            }
-            expect(geometry.separatorDisplays).toEqual(["block", "block"]);
-          } else {
-            expect(geometry.projectRow.bottom - geometry.sessionTrail.top).toBeLessThanOrEqual(0.1);
-            expect(geometry.parentText).toBeCloseTo(geometry.sessionText, 1);
-            expect(geometry.separatorDisplays).toEqual(["none", "none"]);
+          for (const center of [
+            geometry.projectIcon,
+            geometry.projectText,
+            geometry.parentText,
+            geometry.sessionText,
+          ]) {
+            expect(geometry.nav - center, JSON.stringify(geometry)).toBeCloseTo(0, 1);
           }
+          expect(geometry.separatorDisplays).toEqual(["block", "block"]);
           expect(await header.locator(".chat-pane__crumb-sep").count()).toBe(2);
           const parent = header.locator(".chat-pane__parent-session");
           const nestedTrail = await header.evaluate((root) => {
@@ -199,7 +235,7 @@ suite.define(() => {
         const search = page.locator(".agent-chat__search-bar input");
         await search.waitFor();
         const [headerBox, searchBox] = await Promise.all([
-          page.locator(".chat-pane__header").first().boundingBox(),
+          page.locator(".agent-chat__header--mobile").filter({ visible: true }).boundingBox(),
           search.boundingBox(),
         ]);
         expect(headerBox).not.toBeNull();
@@ -260,7 +296,7 @@ suite.define(() => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 520, width: 800 },
+      viewport: { height: 520, width: 1000 },
     });
     const page = await context.newPage();
     const favicon = await readFile(path.resolve(process.cwd(), "ui/public/favicon.svg"));
@@ -294,7 +330,11 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-      const icon = page.locator(".chat-pane__header openclaw-workspace-icon").first();
+      const icon = page
+        .locator(
+          "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__header openclaw-workspace-icon",
+        )
+        .filter({ visible: true });
       await icon.waitFor();
       await icon.locator("svg").waitFor();
       await icon.evaluate((element) => element.setAttribute("data-recovery-host", "mounted"));

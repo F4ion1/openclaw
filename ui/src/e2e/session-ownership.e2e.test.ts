@@ -6,6 +6,7 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails, openChatDetailsPeople } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
@@ -186,7 +187,14 @@ suite.define(() => {
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
+    for (const sessionKey of ["agent:main:ada", "agent:main:bob"]) {
+      await expectBrowser(
+        currentPage.locator('[data-session-key="' + sessionKey + '"] openclaw-session-owner-chip'),
+      ).toHaveCount(1);
+    }
+    const people = await openChatDetailsPeople(currentPage);
+    await expectBrowser(people.getByRole("link", { name: "Ada Owner", exact: true })).toBeVisible();
+    await closeChatDetails(currentPage);
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
     await ownerMenu.locator("#sidebar-sessions-group").click();
@@ -858,7 +866,7 @@ suite.define(() => {
     expect(await draftToggle.isChecked()).toBe(false);
   });
 
-  it("keeps the icon-only Sharing control centered and both toolbar controls actionable", async () => {
+  it("aligns the sharing and Details icons in the session toolbar", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -879,22 +887,22 @@ suite.define(() => {
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     const share = currentPage.locator(".chat-pane__sharing-trigger");
-    const layout = currentPage.locator(".chat-pane__layout-trigger");
+    const details = currentPage.locator(".chat-details-toggle");
     await share.waitFor();
-    await layout.waitFor();
+    await details.waitFor();
     const measure = (trigger: typeof share) =>
       trigger.evaluate((button) => {
         const bounds = button.getBoundingClientRect();
         const icon = button.querySelector("svg")!.getBoundingClientRect();
         return {
-          height: bounds.height,
+          center: icon.top + icon.height / 2,
           iconOffset: icon.top + icon.height / 2 - (bounds.top + bounds.height / 2),
         };
       });
-    const shareMetrics = await measure(share);
-    expect(shareMetrics.height).toBe(28);
-    expect(shareMetrics.iconOffset).toBeCloseTo(0, 1);
+    const [shareMetrics, detailsMetrics] = await Promise.all([measure(share), measure(details)]);
+    expect(shareMetrics.center).toBeCloseTo(detailsMetrics.center, 1);
+    expect(shareMetrics.iconOffset).toBeCloseTo(detailsMetrics.iconOffset, 1);
     await share.click({ trial: true });
-    await layout.click({ trial: true });
+    await details.click({ trial: true });
   });
 });

@@ -188,6 +188,7 @@ function PendingSessionCreateContent(
         connected: snapshot.phase === "connected",
         canSend: false,
         sessionAdmitted: false,
+        mobileComposer: props.mergedChrome,
         disabledReason: null,
         sending: submitting,
         messages: [],
@@ -219,7 +220,13 @@ function PendingSessionCreateContent(
                   keyed
                   fallback={<ChatComposer {...view().composer} />}
                 >
-                  {(composer) => <CreationComposer composer={composer} onOpenImage={openImage} />}
+                  {(composer) => (
+                    <CreationComposer
+                      composer={composer}
+                      mobileComposer={props.mergedChrome}
+                      onOpenImage={openImage}
+                    />
+                  )}
                 </Show>
               </div>
             </div>
