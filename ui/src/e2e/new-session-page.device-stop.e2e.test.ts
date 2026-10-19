@@ -123,11 +123,14 @@ suite.define(() => {
           surface: dialog.locator("dialog"),
           content: [dialog.getByRole("button", { name: "Cancel", exact: true })],
         });
-        // Both baseline captures must exist before the labeling regression fails.
         expect(menuText).toBe("Stop device worker…");
+        expect(
+          await dialog.getByRole("heading", { name: "Stop worker?", exact: true }).textContent(),
+        ).toBe("Stop worker?");
         expect(await dialog.textContent()).toContain(
-          'Stop the device worker for "Device startup"?',
+          "This will save workspace changes and stop this session’s worker.",
         );
+        expect(await dialog.textContent()).toContain("Send a new message to continue.");
         await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
         expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
@@ -138,7 +141,7 @@ suite.define(() => {
         await (
           await waitForConfirmModal(page)
         )
-          .getByRole("button", { name: "Stop device worker", exact: true })
+          .getByRole("button", { name: "Stop worker", exact: true })
           .click();
         const reclaim = await gateway.waitForRequest("sessions.reclaim");
         expect(reclaim.params).toEqual({ key: sessionKey, agentId: "main" });
