@@ -21,6 +21,10 @@ export class InvocationFrame implements PluginExecutionFrame {
     this.sourceCaptureStorage = scopes.sourceCaptureStorage;
   }
 
+  get runtimePluginId(): string | undefined {
+    return undefined;
+  }
+
   withScopes(scopes: PluginExecutionScopes): InvocationFrame {
     return new InvocationFrame(scopes);
   }
@@ -47,12 +51,9 @@ const pluginExecutionContext = resolveGlobalSingleton(
         },
         run<T>(invocation: PluginInstanceInvocation, run: () => T): T {
           const current = frames.getStore();
-          return frames.run(
-            current?.invocation === invocation
-              ? current
-              : createPluginExecutionFrame({ ...current, invocation }, current),
-            run,
-          );
+          return current?.invocation === invocation
+            ? run()
+            : frames.run(createPluginExecutionFrame({ ...current, invocation }, current), run);
         },
         // Cache-owned retirement drops self-call admission, never the Gateway caller.
         exit<T>(run: () => T): T {
@@ -66,7 +67,8 @@ const pluginExecutionContext = resolveGlobalSingleton(
         return frames.getStore();
       },
       runFrame<T>(this: void, frame: PluginExecutionFrame, run: () => T): T {
-        return frames.run(frame, run);
+        // Every run copies the whole async context; re-entering the current frame is a no-op.
+        return frames.getStore() === frame ? run() : frames.run(frame, run);
       },
     };
   },

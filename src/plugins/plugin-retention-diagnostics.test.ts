@@ -149,7 +149,7 @@ describe("plugin retained reference diagnostics", () => {
     await instance.waitForRetainedWork(new AbortController().signal);
   });
 
-  it("preserves attribution through runtime frames and never changes replacement admission", async () => {
+  it("attributes calls through runtime frames without extending their lifetime", async () => {
     const instance = new PluginInstance("fixture");
     const gate = createDeferredCore();
     const run = withPluginRetentionOwner({ runId: "active-run" }, () =>
@@ -161,12 +161,8 @@ describe("plugin retained reference diagnostics", () => {
       kind: "call",
       owner: { runId: "active-run" },
     });
-    const release = instance.reserveReplacement();
-    expect(instance.retentionSnapshot().replacementPending).toBe(true);
-    expect(() => instance.retainWork()).toThrow("replacement is in progress");
     gate.resolve();
     await run;
-    release();
     expect(instance.retentionSnapshot().total).toBe(0);
   });
 });

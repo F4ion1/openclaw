@@ -5,7 +5,6 @@ import type { PluginInvocationInstance, PluginRetentionOwner } from "./plugin-in
 export type PluginInstanceInvocation = {
   instance: PluginInvocationInstance;
   token: object;
-  /** The invocation this one was entered from, so drain dependencies survive nested calls. */
   readonly parent?: PluginInstanceInvocation;
 };
 
@@ -24,5 +23,7 @@ export type PluginExecutionScopes = {
 
 /** Runtime owners preserve their context when these independent scopes change. */
 export interface PluginExecutionFrame extends PluginExecutionScopes {
+  /** Runtime provenance for diagnostics, never authorization. */
+  readonly runtimePluginId?: string | undefined;
   withScopes(scopes: PluginExecutionScopes): PluginExecutionFrame;
 }

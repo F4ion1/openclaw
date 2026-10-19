@@ -90,7 +90,6 @@ export class PluginReferenceDiagnostics {
     tokenSets: Iterable<object>[],
     options: { limit?: number; includeOwners?: boolean },
   ): PluginRetentionSnapshot {
-    const tokens = new Set(tokenSets.flatMap((set) => [...set]));
     const rows: PluginRetentionSnapshot["references"] = [];
     const requested = options.limit ?? 64;
     const limit = Number.isFinite(requested)
@@ -98,18 +97,21 @@ export class PluginReferenceDiagnostics {
       : 64;
     const now = Date.now();
     let total = 0;
-    for (const token of tokens) {
-      const reference = this.references.get(token);
-      if (!reference) {
-        continue;
-      }
-      total++;
-      if (rows.length < limit) {
-        rows.push({
-          ...reference,
-          owner: options.includeOwners === false ? "unknown" : reference.owner,
-          ageMs: Math.max(0, now - reference.acquiredAtMs),
-        });
+    // The instance owns disjoint work, consumer, and call sets; inspect them in place.
+    for (const tokens of tokenSets) {
+      for (const token of tokens) {
+        const reference = this.references.get(token);
+        if (!reference) {
+          continue;
+        }
+        total++;
+        if (rows.length < limit) {
+          rows.push({
+            ...reference,
+            owner: options.includeOwners === false ? "unknown" : reference.owner,
+            ageMs: Math.max(0, now - reference.acquiredAtMs),
+          });
+        }
       }
     }
     return {

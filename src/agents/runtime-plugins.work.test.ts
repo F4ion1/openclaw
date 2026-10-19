@@ -46,7 +46,6 @@ it.each(["settled", "retained"] as const)(
     const observed = acquisition.catch((error: unknown) => error);
     try {
       await cleanupEntered.promise;
-      const releaseReplacement = instance.reserveReplacement();
       expect(instance.retainedWorkCount).toBe(1);
       expect(instance.retentionSnapshot().references[0]).toMatchObject({
         reason: "registry-construction",
@@ -65,7 +64,6 @@ it.each(["settled", "retained"] as const)(
       } else {
         expect(instance.retainedWorkCount).toBe(0);
       }
-      releaseReplacement();
     } finally {
       cleanup.reject(cleanupError);
       await observed;

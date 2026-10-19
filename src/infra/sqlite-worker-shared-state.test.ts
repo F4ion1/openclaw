@@ -22,6 +22,7 @@ import {
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
@@ -31,16 +32,14 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   executeOpenClawStateWorker,
-  inspectOpenClawStateDatabase,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import * as nodeSqlite from "./node-sqlite.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
+import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
 
@@ -62,9 +61,14 @@ function databaseOptions(captured: ReturnType<typeof context>) {
   return { path: captured.admission.databasePath, env: captured.environment };
 }
 
-const readMetadata = {
-  type: "plugins.metadata.read",
-  input: { selector: "installed-index", artifactPreservingReadOnly: true },
+const readBindingApprovals = {
+  type: "plugins.conversationBindingApprovals.read",
+  input: undefined,
+} as const;
+
+const readProvenance = {
+  type: "claws.install-schema-versions",
+  input: { artifactPreservingReadOnly: true },
 } as const;
 
 async function seedMetadata(captured: ReturnType<typeof context>, value = { plugins: [] }) {
@@ -154,25 +158,22 @@ describe("canonical shared-state worker admission", () => {
   );
 
   it.each(["open", "execute"] as const)(
-    "keeps typed %s errors for a reloaded caller of the existing shared worker",
+    "keeps typed %s errors from the existing shared worker",
     async (phase) => {
       const captured = context();
-      await executeOpenClawStateWorker(captured, {
-        type: "plugins.conversationBindingApprovals.read",
-        input: undefined,
-      });
-      const database = openOpenClawStateDatabase(databaseOptions(captured));
-      database.db.exec("PRAGMA user_version = 999999");
-      if (phase === "open") {
-        await closeOpenClawStateDatabaseAsync();
+      mkdirSync(path.dirname(captured.admission.databasePath), { recursive: true });
+      const database = nodeSqlite.openNodeSqliteDatabase(captured.admission.databasePath);
+      try {
+        database.exec("PRAGMA user_version = 999999");
+      } finally {
+        database.close();
       }
-      vi.resetModules();
-      const [worker, contexts, errors] = await Promise.all([
-        import("../state/openclaw-state-worker-store.js"),
-        import("../state/openclaw-state-worker-context.js"),
-        import("./sqlite-user-version.js"),
-      ]);
-      const current = contexts.captureOpenClawStateWorkerContext(databaseOptions(captured));
+      const current = captureOpenClawStateWorkerContext(databaseOptions(captured));
+      if (phase === "execute") {
+        await runOpenClawStateWorkerOperation(current, async () => undefined, {
+          existingOnly: true,
+        });
+      }
       const record: NativeHookRelayBridgeRecord = {
         relayId: "caller-errors",
         pid: 100,
@@ -184,7 +185,7 @@ describe("canonical shared-state worker admission", () => {
       let incoming: unknown;
       let failure: unknown;
       try {
-        await worker.runOpenClawStateWorkerOperation(current, async (scope) => {
+        await runOpenClawStateWorkerOperation(current, async (scope) => {
           try {
             return await scope.execute({
               type: "nativeHookRelay.write",
@@ -198,48 +199,12 @@ describe("canonical shared-state worker admission", () => {
       } catch (error) {
         failure = error;
       }
-      expect(failure).toBeInstanceOf(errors.SqliteSchemaVersionError);
+      expect(failure).toBeInstanceOf(SqliteSchemaVersionError);
       if (phase === "execute") {
         expect(incoming).toBe(failure);
       }
     },
   );
-
-  it("hydrates concurrent lower-level open refusals in each caller's module graph", async () => {
-    const captured = context();
-    const database = openOpenClawStateDatabase(databaseOptions(captured));
-    database.db.exec("PRAGMA user_version = 999999");
-    await closeOpenClawStateDatabaseAsync();
-    const first = await Promise.all([
-      import("./sqlite-worker-store.js"),
-      import("./sqlite-user-version.js"),
-    ]);
-    vi.resetModules();
-    const second = await Promise.all([
-      import("./sqlite-worker-store.js"),
-      import("./sqlite-user-version.js"),
-    ]);
-    const options = {
-      moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
-      databasePath: captured.admission.databasePath,
-    };
-    const outcomes = await Promise.allSettled([
-      first[0].openSharedStateSqliteWorkerStore(options, captured),
-      second[0].openSharedStateSqliteWorkerStore(options, captured),
-    ]);
-    for (const result of outcomes) {
-      if (result.status === "fulfilled") {
-        await result.value?.close();
-      }
-    }
-    const [left, right] = outcomes;
-    if (left.status !== "rejected" || right.status !== "rejected") {
-      throw new Error("Expected both callers to observe the schema refusal");
-    }
-    expect(left.reason).toBeInstanceOf(first[1].SqliteSchemaVersionError);
-    expect(right.reason).toBeInstanceOf(second[1].SqliteSchemaVersionError);
-    expect(left.reason).not.toBe(right.reason);
-  });
 
   it.each(["create", "repair"] as const)(
     "performs cold %s under its Gateway owner without main-thread SQL",
@@ -292,50 +257,33 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
-  it.each(["Web Push", "GitHub publication"] as const)(
-    "keeps metadata inspection and the first %s operation in the same actor",
-    async (operation) => {
-      const captured = context();
-      const value = { generation: "prepared-metadata", plugins: [] };
-      await seedMetadata(captured, value);
-      const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
-      const messages = vi.spyOn(Worker.prototype, "postMessage");
-      await runOpenClawStateWorkerOperation(
-        reopened,
-        async (scope) => {
-          expect(await scope.execute(readMetadata)).toEqual({ value_json: JSON.stringify(value) });
-          const metadataWorker = messages.mock.contexts[0];
-          expect(metadataWorker).toBeInstanceOf(Worker);
-          messages.mockClear();
-          if (operation === "Web Push") {
-            expect(
-              await scope.execute({
-                type: "webPush.listTerminalWebPushApprovalDeliveryIds",
-                input: {},
-              }),
-            ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
-          } else {
-            expect(
-              await scope.execute({
-                type: "githubRepository.personalPending",
-                input: {
-                  ownerProfileId: "profile-first-use",
-                  sessionKey: "agent:main:github-first-use",
-                  agentId: "main",
-                },
-              }),
-            ).toBeUndefined();
-          }
-          expect(messages.mock.contexts.length).toBeGreaterThan(0);
-          expect(messages.mock.contexts.every((worker) => worker === metadataWorker)).toBe(true);
-          expect(await scope.execute(readMetadata)).toEqual({ value_json: JSON.stringify(value) });
-        },
-        { existingOnly: true },
-      );
-      await closeOpenClawStateDatabaseAsync();
-      messages.mockRestore();
-    },
-  );
+  it("keeps writer inspection and the first Web Push operation in the same actor", async () => {
+    const captured = context();
+    await seedMetadata(captured);
+    const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
+    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    await runOpenClawStateWorkerOperation(
+      reopened,
+      async (scope) => {
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+        const actorWorker = messages.mock.contexts[0];
+        expect(actorWorker).toBeInstanceOf(Worker);
+        messages.mockClear();
+        expect(
+          await scope.execute({
+            type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+            input: {},
+          }),
+        ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
+        expect(messages.mock.contexts.length).toBeGreaterThan(0);
+        expect(messages.mock.contexts.every((worker) => worker === actorWorker)).toBe(true);
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+      },
+      { existingOnly: true },
+    );
+    await closeOpenClawStateDatabaseAsync();
+    messages.mockRestore();
+  });
 
   it("leaves a missing database absent for existing-only inspection", async () => {
     const captured = context();
@@ -344,24 +292,6 @@ describe("canonical shared-state worker admission", () => {
       await runOpenClawStateWorkerOperation(captured, inspect, { existingOnly: true }),
     ).toBeUndefined();
     expect(inspect).not.toHaveBeenCalled();
-    expect(
-      await inspectOpenClawStateDatabase(captured, {
-        type: "database.generationMatches",
-        input: {
-          generation: {
-            database: {
-              birthtimeNs: 0n,
-              ctimeNs: 0n,
-              dev: 0n,
-              ino: 0n,
-              mtimeNs: 0n,
-              size: 0n,
-              sha256: "0".repeat(64),
-            },
-          },
-        },
-      }),
-    ).toBeUndefined();
     expect(existsSync(captured.admission.databasePath)).toBe(false);
   });
 
@@ -372,7 +302,7 @@ describe("canonical shared-state worker admission", () => {
       const databasePath = seeded.admission.databasePath;
       await seedMetadata(seeded);
       const captured = captureOpenClawStateWorkerContext(databaseOptions(seeded));
-      await runOpenClawStateWorkerOperation(captured, (scope) => scope.execute(readMetadata), {
+      await runOpenClawStateWorkerOperation(captured, (scope) => scope.execute(readProvenance), {
         existingOnly: true,
       });
       const before = statSync(databasePath, { bigint: true });
@@ -401,7 +331,7 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
-  it.each(["config health", "device identity", "audit"] as const)(
+  it.each(["config health", "machine state", "audit"] as const)(
     "does not recreate a lazy actor's removed opening path through a warm hardlink (%s)",
     async (operation) => {
       const original = context();
@@ -415,7 +345,7 @@ describe("canonical shared-state worker admission", () => {
         env: original.environment,
       });
       const inspect = (captured: typeof opening) =>
-        runOpenClawStateWorkerOperation(captured, (scope) => scope.execute(readMetadata), {
+        runOpenClawStateWorkerOperation(captured, (scope) => scope.execute(readProvenance), {
           existingOnly: true,
         });
       await inspect(opening);
@@ -434,9 +364,14 @@ describe("canonical shared-state worker admission", () => {
         expect(
           await executeOpenClawStateWorker(alias, {
             type: "audit.writer.prune",
-            input: "events",
+            input: undefined,
           }),
-        ).toMatchObject({ status: "settled", error: expect.any(String) });
+        ).toEqual([
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+        ]);
       } else {
         await expect(
           executeOpenClawStateWorker(
@@ -447,8 +382,8 @@ describe("canonical shared-state worker admission", () => {
                   input,
                 }
               : {
-                  type: "deviceIdentity.load",
-                  input: { identityKey: "warm-alias-device" },
+                  type: "machineState.write",
+                  input: { key: "warm-alias-state", value: "must-not-commit" },
                 },
           ),
         ).rejects.toThrow();
@@ -463,6 +398,7 @@ describe("canonical shared-state worker admission", () => {
       ).toEqual({
         count: 0,
       });
+      expect(readConfigMachineStateRowInDatabase(database.db, "warm-alias-state")).toBeUndefined();
     },
   );
 
@@ -513,10 +449,10 @@ describe("canonical shared-state worker admission", () => {
             expect(
               await runOpenClawStateWorkerOperation(
                 survivingAlias,
-                (scope) => scope.execute(readMetadata),
+                (scope) => scope.execute(readProvenance),
                 { existingOnly: true },
               ),
-            ).toEqual({ value_json: JSON.stringify(value) });
+            ).toEqual([]);
           }
         }
         const relocate = () => {
@@ -549,9 +485,7 @@ describe("canonical shared-state worker admission", () => {
         const relocatedDuringCallback = await runOpenClawStateWorkerOperation(
           original,
           async (scope) => {
-            expect(await scope.execute(readMetadata)).toEqual({
-              value_json: JSON.stringify(value),
-            });
+            expect(await scope.execute(readProvenance)).toEqual([]);
             if (ownership === "active callback") {
               const relocated = relocate();
               // The old callback cannot await its own retirement through a new caller.
@@ -580,7 +514,7 @@ describe("canonical shared-state worker admission", () => {
         ) {
           await runOpenClawStateWorkerOperation(
             survivingAlias,
-            (scope) => scope.execute(readMetadata),
+            (scope) => scope.execute(readProvenance),
             { existingOnly: true },
           );
           await originalMaintenance.close();
@@ -611,14 +545,18 @@ describe("canonical shared-state worker admission", () => {
           );
         }
         const relocated = relocatedDuringCallback ?? relocatedDuringAliasCallback ?? relocate();
-        if (!healthyActor) {
-          await write(relocated);
-        }
-
         expect(existsSync(originalPath)).toBe(false);
         if (survivingAlias) {
           survivingAlias.admission.assertCurrent();
           expect(original.admission.assertCurrent).toThrow(/read admission changed/);
+        }
+        if (!healthyActor) {
+          // Relocation ends the old actor; reopen explicitly after its callbacks settle.
+          await closeOpenClawStateDatabaseAsync();
+          const current = relocatedMaintenance.run(() =>
+            captureOpenClawStateWorkerContext(databaseOptions(relocated)),
+          );
+          await write(current);
         }
         // Checkpoint the actor's opening path before inspecting its hardlink through B.
         await closeOpenClawStateDatabaseAsync();

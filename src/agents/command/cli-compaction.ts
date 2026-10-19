@@ -1,5 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -7,6 +12,7 @@ import { resolveContextEngine } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
@@ -22,7 +28,7 @@ import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
 } from "../embedded-agent-runner/compact-reasons.js";
-import type { QueuedCompactionHostOptions } from "../embedded-agent-runner/compact.queued-execution.js";
+import type { QueuedCompactionHostOptions } from "../embedded-agent-runner/compact.types.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -47,7 +53,7 @@ import {
   buildCliCompactionRuntimeContext,
   type CliCompactionContext,
 } from "./cli-compaction-context.js";
-import { normalizeSessionTokenCount, recordCliCompactionInStore } from "./session-store.js";
+import { recordCliCompactionInStore } from "./session-store.js";
 
 const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON = "codex app-server owns automatic compaction";
 
@@ -99,7 +105,7 @@ async function compactCliTranscript(
     authProfileId?: string;
     bestEffortMaintenance?: boolean;
     expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"];
-    assertActive: () => void;
+    assertActive: SessionSourceAssertion;
     abortSignal?: AbortSignal;
     onCommitted?: QueuedCompactionHostOptions["onCommitted"];
   },
@@ -235,7 +241,7 @@ async function compactNativeHarnessCliTranscript(
     contextEngine: ContextEngine;
     pluginGeneration?: PreparedModelRuntimePluginGeneration;
     abortSignal?: AbortSignal;
-    assertActive: () => void;
+    assertActive: SessionSourceAssertion;
     sourceAuthority: QueuedCompactionHostOptions["sourceAuthority"];
   },
 ): Promise<NativeHarnessCliCompactionOutcome> {
@@ -359,7 +365,7 @@ export async function runCliTurnCompactionLifecycle(
   host: QueuedCompactionHostOptions,
 ): Promise<SessionEntry | undefined> {
   const storePath = input.storePath;
-  const contextTokenBudget = normalizeSessionTokenCount(input.sessionEntry?.contextTokens);
+  const contextTokenBudget = floorPositiveFiniteNumber(input.sessionEntry?.contextTokens);
   if (!storePath || !contextTokenBudget) {
     return input.sessionEntry;
   }
@@ -376,24 +382,28 @@ export async function runCliTurnCompactionLifecycle(
         ? AbortSignal.any([input.abortSignal, sourceSignal])
         : (input.abortSignal ?? sourceSignal);
     const params = { ...input, abortSignal };
-    const capturedEntry = loadSessionEntryReadOnly({
-      agentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
-      storePath,
-      readConsistency: "latest",
-    });
+    const assertActive = composeSessionSourceAssertion(
+      [assertSourceActive, operatorAuthority?.assertCurrent, host.assertActive],
+      (assertSources) => {
+        params.abortSignal?.throwIfAborted();
+        assertSources();
+      },
+    );
+    assertActive();
+    const capturedEntry = await readSessionEntryReadOnlyInWorker(
+      {
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        storePath,
+        readConsistency: "latest",
+      },
+      assertActive,
+    );
     const expectedEntry = {
       sessionId: params.sessionId,
       lifecycleRevision: capturedEntry?.lifecycleRevision,
       activeWriterRunId: capturedEntry?.activeWriterRunId,
     };
-    const assertActive = () => {
-      params.abortSignal?.throwIfAborted();
-      assertSourceActive();
-      operatorAuthority?.assertCurrent();
-      host.assertActive?.();
-    };
-    assertActive();
     const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
       if (params.sessionStore) {
         params.sessionStore[params.sessionKey] = accepted.entry;
@@ -409,9 +419,17 @@ export async function runCliTurnCompactionLifecycle(
     assertActive();
     const sessionFile = params.sessionKey;
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      sessionId: params.sessionId,
       cwd: params.cwd ?? params.workspaceDir,
       agentDir: params.agentDir,
       cfg: params.cfg,
+      pluginMetadataSnapshot:
+        params.pluginGeneration?.pluginMetadataSnapshot ??
+        getCurrentPluginMetadataSnapshot({
+          config: params.cfg,
+          env: process.env,
+          workspaceDir: params.workspaceDir,
+        }),
       contextTokenBudget,
     });
     assertActive();
@@ -427,7 +445,7 @@ export async function runCliTurnCompactionLifecycle(
     });
     const currentTokenCount = Math.max(
       preemptiveCompaction.estimatedPromptTokens,
-      normalizeSessionTokenCount(resolveFreshSessionTotalTokens(params.sessionEntry)) ?? 0,
+      floorPositiveFiniteNumber(resolveFreshSessionTotalTokens(params.sessionEntry)) ?? 0,
     );
     if (
       !preemptiveCompaction.shouldCompact &&

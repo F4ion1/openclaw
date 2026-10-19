@@ -7,12 +7,14 @@ import { isProgressCardRefreshInputProvenance } from "../../sessions/input-prove
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PreparedSkillLibrarySession } from "../../skills/library/selection.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
+import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
@@ -39,13 +41,13 @@ type PersistedChatSendMedia = Awaited<
 
 function resolveChatSendManagedMedia(
   entries: PersistedChatSendMedia,
-  suppressInlineHydration = false,
+  suppressPromptHydration = false,
 ): MediaFact[] {
   return entries.map((entry) => ({
     path: entry.path,
     contentType: entry.fact.contentType ?? "application/octet-stream",
     ...(entry.fact.fileName ? { fileName: entry.fact.fileName } : {}),
-    ...(suppressInlineHydration && entry.imageKind === "inline"
+    ...(suppressPromptHydration && (entry.imageKind === "inline" || entry.imageKind === "offloaded")
       ? { hydrationSuppressed: true }
       : {}),
   }));
@@ -149,15 +151,18 @@ export function prepareChatSendUserTurn(params: {
       };
     }),
   );
-  const pluginBoundMediaPromise =
-    attachments.parsedImages.length > 0
-      ? persistedMediaForTranscriptPromise.then((result) => {
-          const entries = attachments.explicitOriginTargetsPlugin
-            ? result.entries
-            : result.entries.filter((entry) => entry.imageKind === "inline");
-          return resolveChatSendManagedMedia(entries, !attachments.explicitOriginTargetsPlugin);
-        })
-      : Promise.resolve([]);
+  const pluginBoundMediaPromise = persistedMediaForTranscriptPromise.then((result) =>
+    resolveChatSendManagedMedia(
+      result.entries.filter(
+        (entry) =>
+          attachments.explicitOriginTargetsPlugin ||
+          entry.imageKind === "inline" ||
+          (entry.imageKind === "offloaded" &&
+            !attachments.mediaPathOffloads.some((fact) => fact.contentType?.startsWith("image/"))),
+      ),
+      !attachments.explicitOriginTargetsPlugin,
+    ),
+  );
   void pluginBoundMediaPromise.catch(() => undefined);
   // Generated media hints belong to the prompt and reset payload, not command arguments.
   const commandBody = request.inboundMessage;
@@ -231,13 +236,17 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
+  const recoveredRequester = readChatInputRecoveryAdmission(session.clientRunId)?.requesterProfile;
   const requester = client?.authenticatedUserProfile;
+  const externalInput =
+    !request.systemInputProvenance || request.systemInputProvenance.kind === "external_user";
   if (
+    client &&
     requester &&
-    (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
+    (recoveredRequester || client.authenticatedUserId || client.internal?.authenticatedOperator) &&
     isBrowserOperatorUiClient(request.clientInfo) &&
-    !isSyntheticGatewayCaller(client) &&
-    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
+    (recoveredRequester || !isSyntheticGatewayCaller(client)) &&
+    externalInput
   ) {
     const authenticatedUserId = client.authenticatedUserId;
     const { profileId, displayName } = requester;
@@ -249,6 +258,9 @@ export function prepareChatSendUserTurn(params: {
           admission.assertWorkAdmissionCurrent?.();
         } catch {
           return false;
+        }
+        if (recoveredRequester) {
+          return recoveredRequester.id === profileId && recoveredRequester.isCurrent();
         }
         return (
           !client.invalidated &&
@@ -272,17 +284,22 @@ export function prepareChatSendUserTurn(params: {
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloads.some((fact) =>
     fact.contentType?.startsWith("image/"),
   );
-  const participant = resolveGatewayInputParticipant(client, request.systemInputProvenance);
+  // Only this exact replay admission can attribute a synthetic caller to a person.
+  const participant =
+    recoveredRequester && externalInput && recoveredRequester.isCurrent()
+      ? { type: "profile" as const, id: recoveredRequester.id }
+      : resolveGatewayInputParticipant(client, request.systemInputProvenance);
   if (participant) {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
   return {
-    prepareSessionCreation: async () => {
+    prepareSessionCreation: async (library?: PreparedSkillLibrarySession) => {
       if (!request.systemInputProvenance) {
         const prepared = await prepareSkillLibrarySessionCreation(
           client,
           params.getConfig ?? session.cfg ?? {},
           creation,
+          library,
         );
         admission.assertWorkAdmissionCurrent?.();
         ctx.SessionCreation = { ...prepared, ...(sandbox ? { sandbox } : {}) };

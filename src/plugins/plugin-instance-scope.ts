@@ -13,7 +13,7 @@ import type {
   PluginRetentionOwner,
   PluginWorkRelease,
 } from "./plugin-instance.types.js";
-import type { PluginRecord, PluginRegistry, PluginRegistryGatewayOwner } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
@@ -27,7 +27,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   adopt<T>(value: T): T;
   admitFactory(
     factory: (...args: never[]) => unknown,
-    resultCallbacks?: readonly PropertyKey[],
+    resultCallbacks?: "tool" | readonly PropertyKey[],
   ): void;
   retainWork(reason?: PluginRetentionReason): PluginWorkRelease;
   retentionSnapshot(options?: { limit?: number; includeOwners?: boolean }): PluginRetentionSnapshot;
@@ -45,7 +45,11 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     kind?: "work" | "custody",
     diagnostics?: { reason?: PluginRetentionReason; owner?: PluginRetentionOwner },
   ): PluginInstanceConsumer;
-  runInRegistry<T>(registry: PluginRegistry, run: () => T, options?: { joinDisposal?: boolean }): T;
+  runInRegistry<T>(
+    registry: PluginRegistry | undefined,
+    run: () => T,
+    options?: { joinDisposal?: boolean },
+  ): T;
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T;
   drain(options?: {
     includeConsumers?: boolean;
@@ -60,15 +64,12 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
-  /** Retained consumers in this context are joined by a pending reload drain. */
   readonly holdsPendingReplacement?: boolean;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 
 export type PluginInstanceOwner = {
   record: PluginRecord;
-  /** Recovery follows the live Gateway without retaining a disposed registry. */
-  retiredGatewayOwner?: WeakRef<PluginRegistryGatewayOwner>;
   instance?: PluginInstanceHandle;
 } & (
   | { revoked: false; registry: PluginRegistry }
@@ -88,14 +89,13 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
 
-/** Current work that a pending reload drain is joining, through nested calls or retained scopes. */
+/** Compatibility query for callers holding a published plugin invocation context. */
 export function currentPluginWorkHoldsPendingReplacement(): boolean {
-  for (let call = pluginInstanceInvocation.getStore(); call; call = call.parent) {
-    if (call.instance.holdsPendingReplacement(call.token)) {
-      return true;
-    }
-  }
-  return pluginInvocationContext.getStore()?.holdsPendingReplacement === true;
+  const call = pluginInstanceInvocation.getStore();
+  return (
+    (call?.instance.holdsPendingReplacement(call.token) ?? false) ||
+    pluginInvocationContext.getStore()?.holdsPendingReplacement === true
+  );
 }
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {
@@ -191,27 +191,4 @@ export function setPluginOriginalValue(
 export function runPluginStreamConsumer<T>(stream: object, consume: () => T): T {
   const instance = getPluginValueInstance(stream);
   return instance ? instance.runConsumer(consume) : consume();
-}
-
-/** Associate identity-sensitive data with its instance without replacing values with views. */
-export function adoptPluginInstanceValue<T>(value: T, instance: PluginInstanceHandle): T {
-  const seen = new Set<object>();
-  const visit = (candidate: unknown) => {
-    if (
-      !candidate ||
-      (typeof candidate !== "object" && typeof candidate !== "function") ||
-      seen.has(candidate)
-    ) {
-      return;
-    }
-    seen.add(candidate);
-    pluginInstanceState.values.set(candidate, instance);
-    for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
-      if ("value" in descriptor) {
-        visit(descriptor.value);
-      }
-    }
-  };
-  visit(value);
-  return value;
 }

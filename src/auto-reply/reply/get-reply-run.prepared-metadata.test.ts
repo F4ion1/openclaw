@@ -6,6 +6,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-p
 import { getPluginExecutionFrame } from "../../plugins/plugin-instance-invocation.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 
 const mocks = vi.hoisted(() => ({
@@ -83,6 +84,19 @@ it("keeps the admitted Gateway generation active through a different reply works
     expectSelectedScope();
     return { text: "ok" };
   });
+  const preparedInput = {
+    cfg: config,
+    sessionCtx: {},
+    ctx: {},
+    agentId: "main",
+    sessionKey: "fixture-session",
+    workspaceDir,
+    provider: "selected",
+    model: "model",
+  } satisfies Pick<
+    RunPreparedReplyParams,
+    "cfg" | "sessionCtx" | "ctx" | "agentId" | "sessionKey" | "workspaceDir" | "provider" | "model"
+  >;
 
   const run = bindPreparedReplyDispatchRuntime(
     {
@@ -92,13 +106,7 @@ it("keeps the admitted Gateway generation active through a different reply works
       config,
       pluginGeneration,
     } as never,
-    async () =>
-      await runPreparedReply({
-        provider: "selected",
-        model: "model",
-        agentId: "main",
-        sessionKey: "fixture-session",
-      } as never),
+    async () => await runPreparedReply(preparedInput as RunPreparedReplyParams),
   );
 
   await expect(run()).resolves.toEqual({ text: "ok" });
