@@ -15,7 +15,8 @@ import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
-import { ChatPaneHeader, type ChatPaneHeaderProps } from "./components/chat-pane-header.tsx";
+import { ChatPaneHeader } from "./components/chat-pane-header.tsx";
+import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 registerNewSessionSetupEnglish();

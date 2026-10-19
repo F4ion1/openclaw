@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
@@ -35,7 +36,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await openChatSidePanelType(page, "Files");
-      const rail = page.locator(".chat-workspace-rail");
+      const rail = page.locator(".workspace-desktop");
       await rail.getByText("checklist.md", { exact: true }).waitFor();
       await gateway.deferNext("sessions.files.list");
       await gateway.emitChatFinal({ runId: "files-revision", text: "Checklist updated." });
@@ -48,19 +49,20 @@ suite.define(() => {
       });
       const error = rail.getByText("Session workspace changed during file read", { exact: true });
       await error.waitFor();
-      await page.getByRole("button", { name: "Close Files" }).click();
-      await rail.waitFor({ state: "detached" });
+      await selectChatLayoutAction(page, "Collapse session workspace");
+      await rail.waitFor({ state: "hidden" });
       await openChatSidePanelType(page, "Files");
       await error.waitFor();
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
       const retry = rail.getByRole("button", { name: "Retry", exact: true });
-      await retry.waitFor();
       if (proof) {
-        const frame = await takeControlUiScreenshotFrame(page, rail, [error, retry], {
+        const frame = await takeControlUiScreenshotFrame(page, rail, [error], {
           animations: "disabled",
         });
         await writeFile(path.join(proof, "retry.png"), frame.png);
+        await page.screenshot({ path: path.join(proof, "retry-context.png") });
       }
+      await retry.waitFor();
       await gateway.deferNext("sessions.files.list");
       await retry.click();
       await expect
@@ -72,7 +74,7 @@ suite.define(() => {
       });
       const denied = rail.getByRole("alert");
       await expect.poll(() => denied.textContent()).toBe("Session files are unavailable");
-      expect(await rail.locator(".chat-workspace-rail__file-name").count()).toBe(0);
+      expect(await rail.locator(".workspace-desktop__row").count()).toBe(0);
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
       await retry.click();
       await rail.getByText("checklist.md", { exact: true }).waitFor();
@@ -165,31 +167,30 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
-      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
+      expect(await page.locator(".workspace-desktop:visible").count()).toBe(0);
 
       await openChatSidePanelType(page, "Files");
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
+      await page.locator(".workspace-desktop__row", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
-      await page.locator(".chat-workspace-rail__group-summary", { hasText: "Artifacts" }).click();
       await page
-        .locator(".chat-workspace-rail__file-name", { hasText: "preview.png" })
+        .locator(".workspace-desktop__row", { hasText: "preview.png" })
         .waitFor({ timeout: 10_000 });
       await page.getByText("Project files").waitFor({ timeout: 10_000 });
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "package.json" }).waitFor({
+      await page.locator(".workspace-desktop__row", { hasText: "package.json" }).waitFor({
         timeout: 10_000,
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
       expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
       expect(
-        await page.locator(".chat-workspace-rail").evaluate((element) => {
+        await page.locator(".workspace-desktop").evaluate((element) => {
           return window.innerWidth - element.getBoundingClientRect().right;
         }),
       ).toBe(0);
 
-      await page.getByRole("button", { name: "Close Files" }).click();
-      await page.locator(".chat-workspace-rail").waitFor({ state: "detached" });
-      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
+      await selectChatLayoutAction(page, "Collapse session workspace");
+      await page.locator(".workspace-desktop").waitFor({ state: "hidden" });
+      expect(await page.locator(".workspace-desktop:visible").count()).toBe(0);
       await gateway.setMethodResponse("sessions.files.list", {
         files: [
           {
@@ -210,7 +211,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
         .toBe(2);
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AFTER_RUN.md" }).waitFor({
+      await page.locator(".workspace-desktop__row", { hasText: "AFTER_RUN.md" }).waitFor({
         timeout: 10_000,
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
@@ -222,7 +223,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
         .toBe(3);
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AFTER_RUN.md" }).waitFor({
+      await page.locator(".workspace-desktop__row", { hasText: "AFTER_RUN.md" }).waitFor({
         timeout: 10_000,
       });
       await page.locator(".tabstrip-tab").filter({ hasText: "Review" }).click();
@@ -247,12 +248,12 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
         .toBe(4);
       await page
-        .locator(".chat-workspace-rail__file-name", { hasText: "AFTER_REVIEW.md" })
+        .locator(".workspace-desktop__row", { hasText: "AFTER_REVIEW.md" })
         .waitFor({ timeout: 10_000 });
 
       await page.setViewportSize({ height: 900, width: 640 });
-      await page.locator(".sidebar-region--narrow").waitFor();
-      const workspaceRail = page.locator(".chat-workspace-rail");
+      const workspaceRail = page.locator(".chat-workspace-mobile");
+      await workspaceRail.waitFor();
       await expect
         .poll(async () => {
           const box = await workspaceRail.boundingBox();
@@ -276,7 +277,7 @@ suite.define(() => {
     const browserEntries = Array.from({ length: 60 }, (_, index) => ({
       kind: "file" as const,
       name: `file-${String(index + 1).padStart(2, "0")}.ts`,
-      path: `src/file-${String(index + 1).padStart(2, "0")}.ts`,
+      path: `file-${String(index + 1).padStart(2, "0")}.ts`,
       size: 2048 + index,
     }));
     const gateway = await installMockGateway(page, {
@@ -318,16 +319,15 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await openChatSidePanelType(page, "Files");
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
+      await page.locator(".workspace-desktop__row", { hasText: "file-60.ts" }).waitFor({
         timeout: 10_000,
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
 
-      const rail = page.locator(".chat-workspace-rail");
-      const scroll = rail.locator(".chat-workspace-rail__scroll");
-      const browserGroup = rail.locator(".chat-workspace-rail__group", {
-        hasText: "Project files",
-      });
+      const rail = page.locator(".workspace-desktop");
+      const scroll = rail.locator(".workspace-desktop__project-scroll");
+      const toolbar = rail.locator(".workspace-desktop__toolbar");
+      const before = await toolbar.boundingBox();
       await expect
         .poll(() =>
           scroll.evaluate((element) => ({
@@ -336,48 +336,39 @@ suite.define(() => {
           })),
         )
         .toEqual({ overflows: true, overflowY: "auto" });
-      expect(await browserGroup.evaluate((element) => getComputedStyle(element).overflowY)).toBe(
-        "visible",
-      );
-      expect(
-        await rail
-          .locator(".chat-workspace-rail__group")
-          .evaluateAll((groups) =>
-            groups.some((group) => ["auto", "scroll"].includes(getComputedStyle(group).overflowY)),
-          ),
-      ).toBe(false);
+      await scroll.hover();
+      await page.mouse.wheel(0, 600);
+      await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
       await scroll.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
-      const railBox = await rail.boundingBox();
-      const search = rail.locator('input[type="search"]');
-      const searchBox = await search.boundingBox();
-      expect(railBox).not.toBeNull();
-      expect(searchBox).not.toBeNull();
-      expect(searchBox!.y).toBeGreaterThanOrEqual(railBox!.y);
-      expect(searchBox!.y + searchBox!.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
-
-      await rail.getByRole("button", { name: "3 read", exact: true }).click();
-      const groups = rail.locator(".chat-workspace-rail__group");
-      await expect.poll(() => groups.count()).toBe(1);
-      expect(await groups.locator("summary").textContent()).toContain("Read");
-      expect(await groups.locator(".chat-workspace-rail__file:visible").count()).toBe(3);
+      const after = await toolbar.boundingBox();
+      expect(before).not.toBeNull();
+      expect(after).toEqual(before);
+      await rail.getByRole("button", { name: "Filter files: All", exact: true }).click();
+      await rail.getByRole("menuitemradio", { name: "Read", exact: true }).click();
+      await expect
+        .poll(() => rail.locator(".workspace-desktop__row:visible").allTextContents())
+        .toEqual(["read-file-1.ts", "read-file-2.ts", "notes.md"]);
+      await rail.getByRole("button", { name: "Filter files: Read", exact: true }).click();
       expect(
         await rail
-          .getByRole("button", { name: "3 read", exact: true })
-          .getAttribute("aria-pressed"),
+          .getByRole("menuitemradio", { name: "Read", exact: true })
+          .getAttribute("aria-checked"),
       ).toBe("true");
+      await page.keyboard.press("Escape");
 
-      await search.fill("read-file");
+      await rail.getByRole("button", { name: "Search files", exact: true }).click();
+      await rail.getByRole("searchbox", { name: "Search files", exact: true }).fill("read-file");
+      const results = rail.locator(".workspace-desktop__results .workspace-desktop__row:visible");
       await expect
-        .poll(() => groups.locator(".chat-workspace-rail__file-name:visible").allTextContents())
+        .poll(() => results.locator(".workspace-desktop__filename").allTextContents())
         .toEqual(["read-file-1.ts", "read-file-2.ts"]);
       expect(
-        await groups
-          .locator(".chat-workspace-rail__file-open:visible")
-          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
+        await results.evaluateAll((buttons) =>
+          buttons.map((button) => button.getAttribute("aria-label")),
+        ),
       ).toEqual(["src/read-file-1.ts", "src/read-file-2.ts"]);
-      expect(await groups.count()).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);
     }
