@@ -140,8 +140,8 @@ export function ChatComposer(props: ChatComposerProps) {
       prediction.sync();
     },
   );
-  const humanMentionRegistration = createMemo(() => currentProps.registerHumanMentionAccess);
-  createEffect(humanMentionRegistration, (register) => {
+  onSettled(() => {
+    const register = currentProps.registerHumanMentionAccess;
     if (!register) {
       return undefined;
     }
