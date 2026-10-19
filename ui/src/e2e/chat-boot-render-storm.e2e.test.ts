@@ -313,14 +313,16 @@ suite.define(() => {
         await pane.getByRole("button", { name: "Session sharing", exact: true }).click();
         await pane
           .locator(".chat-pane__sharing-menu")
-          .getByText("Members", { exact: true })
+          .getByText("Message permissions", { exact: true })
           .waitFor();
         const sharing = pane.locator(".chat-pane__sharing-menu");
-        const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
+        const searchToggle = sharing.getByRole("button", { name: "Search people…", exact: true });
+        await searchToggle.click();
+        const search = sharing.getByRole("searchbox", { name: "Search people…", exact: true });
         await search.fill("Person 109");
         await nextFrame(page);
         await page.keyboard.press("ArrowDown");
-        expect(await sharing.locator(".chat-pane__sharing-member").count()).toBe(1);
+        expect(await sharing.locator(".chat-pane__sharing-person").count()).toBe(1);
         expect(
           await sharing
             .locator('[data-value="member:person-109"]')
@@ -329,7 +331,10 @@ suite.define(() => {
         await page.keyboard.press("ArrowUp");
         expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
         await page.keyboard.press("Escape");
-        expect(await search.inputValue()).toBe("");
+        expect(await sharing.locator('input[type="search"]').inputValue()).toBe("");
+        expect(await searchToggle.evaluate((element) => element === document.activeElement)).toBe(
+          true,
+        );
         await page.screenshot({ path: path.join(suite.artifactDir, "chat-boot-sharing-open.png") });
         await page.keyboard.press("Escape");
         expect(

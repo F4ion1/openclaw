@@ -6,7 +6,7 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   collaborativeSessionsList,
@@ -590,9 +590,11 @@ suite.define(() => {
     await expect
       .poll(() => panel.evaluate((element) => element.matches(":popover-open")))
       .toBe(true);
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(3);
-    await currentPage.getByText("Publish draft", { exact: true }).click();
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-permissions")).toHaveCount(0);
+    await dropdown.getByRole("menuitem", { name: "Session access" }).click();
+    await dropdown.getByRole("menuitemradio", { name: "Shared", exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
+    await currentPage.getByRole("button", { name: "Session sharing" }).click();
     await expect
       .poll(() => panel.evaluate((element) => element.matches(":popover-open")))
       .toBe(false);
@@ -649,22 +651,21 @@ suite.define(() => {
     await currentPage.getByRole("button", { name: "Session sharing", exact: true }).click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
-    const publish = dropdown.locator('button[value="visibility:shared"]');
-    const member = dropdown.locator('button[value="member:profile-bob"]');
-    await expectBrowser(publish).toBeVisible();
-    await expectBrowser(publish).toBeDisabled();
+    const member = dropdown.getByRole("menuitemcheckbox", { name: "Bob", exact: true });
     await expectBrowser(member).toBeVisible();
     await expectBrowser(member).toBeDisabled();
-    await dropdown.evaluate((element) => {
-      element.querySelector<HTMLButtonElement>('button[value="visibility:shared"]')?.click();
-      element.querySelector<HTMLButtonElement>('button[value="member:profile-bob"]')?.click();
-    });
+    await member.evaluate((element) => (element as HTMLButtonElement).click());
+    await dropdown.getByRole("menuitem", { name: "Session access" }).click();
+    const publish = dropdown.getByRole("menuitemradio", { name: "Shared", exact: true });
+    await expectBrowser(publish).toBeVisible();
+    await expectBrowser(publish).toBeDisabled();
+    await publish.evaluate((element) => (element as HTMLButtonElement).click());
 
     expect(await gateway.getRequests("session.visibility.set")).toHaveLength(0);
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
-  it("scrolls the complete sharing directory through one compact menu", async () => {
+  it("scrolls the complete sharing directory while keeping access controls visible", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1280 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -730,137 +731,94 @@ suite.define(() => {
     await currentPage.locator(".chat-pane__sharing-trigger").click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
-    await dropdown.locator('button[value="member:profile-member-0"]').waitFor();
-    await dropdown.evaluate(async (element) => {
-      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
-      const animations = [...element.getAnimations(), ...(menu?.getAnimations() ?? [])];
-      await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
+    const roster = dropdown.locator(".chat-pane__sharing-roster");
+    const people = roster.locator(".chat-pane__sharing-person");
+    await expectBrowser(people).toHaveCount(32);
+    const longNameItem = dropdown.getByRole("menuitemcheckbox", {
+      name: longMemberLabel,
+      exact: true,
     });
-    const longNameItem = dropdown.locator('button[value="member:profile-long-name"]');
-    const longIdItem = dropdown.locator(`button[value="member:${longMemberId}"]`);
-
+    const longIdItem = dropdown.getByRole("menuitemcheckbox", {
+      name: longMemberId,
+      exact: true,
+    });
     await longIdItem.scrollIntoViewIfNeeded();
-    const selectedIndicator = longIdItem.locator(".session-menu__check");
+    await expectBrowser(longIdItem).toBeChecked();
+    const selectedIndicator = longIdItem.locator(".chat-pane__sharing-member-check");
     await expectBrowser(selectedIndicator).toBeVisible();
-    const selectedIndicatorContained = await longIdItem.evaluate((item) => {
-      const indicator = item.querySelector<HTMLElement>(".session-menu__check");
-      const itemRect = item.getBoundingClientRect();
-      const indicatorRect = indicator?.getBoundingClientRect();
-      return Boolean(
-        indicatorRect &&
-        indicatorRect.left >= itemRect.left &&
-        indicatorRect.right <= itemRect.right,
-      );
-    });
-    expect(selectedIndicatorContained).toBe(true);
+    await expectBrowser(selectedIndicator).toHaveAttribute("aria-label", "Member");
+    expect(
+      await longIdItem.evaluate((item) => {
+        const indicator = item.querySelector<HTMLElement>(".chat-pane__sharing-member-check")!;
+        const itemRect = item.getBoundingClientRect();
+        const indicatorRect = indicator.getBoundingClientRect();
+        return indicatorRect.left >= itemRect.left && indicatorRect.right <= itemRect.right;
+      }),
+    ).toBe(true);
 
-    const beforeScroll = await dropdown.evaluate((element) => {
-      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
-      if (menu) {
-        menu.scrollTop = 0;
-      }
-      const visibilityTitle = element.querySelector<HTMLElement>(
-        ".chat-pane__sharing-visibility-title",
-      );
-      const visibilityItems = [
-        ...element.querySelectorAll<HTMLElement>(".chat-pane__sharing-visibility-item"),
-      ];
-      const membersTitle = element.querySelector<HTMLElement>(".chat-pane__sharing-members-title");
-      const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
-      const longLabels = [
-        ...element.querySelectorAll<HTMLElement>(".chat-pane__sharing-member-label"),
-      ].slice(0, 2);
-      const menuRect = menu?.getBoundingClientRect();
-      const previousVisibilityRect = visibilityItems.at(-2)?.getBoundingClientRect();
-      const lastVisibilityRect = visibilityItems.at(-1)?.getBoundingClientRect();
-      const membersTitleRect = membersTitle?.getBoundingClientRect();
-      return {
-        menuHeight: menu?.getBoundingClientRect().height ?? 0,
-        menuTop: menu?.getBoundingClientRect().top ?? 0,
-        scrollHeight: menu?.scrollHeight ?? 0,
-        clientHeight: menu?.clientHeight ?? 0,
-        scrollWidth: menu?.scrollWidth ?? 0,
-        clientWidth: menu?.clientWidth ?? 0,
-        longLabelsContained: longLabels.every((label) => {
-          const rect = label.getBoundingClientRect();
-          return menuRect ? rect.left >= menuRect.left && rect.right <= menuRect.right : false;
-        }),
-        longLabelsOverflow: longLabels.every((label) => label.scrollWidth > label.clientWidth),
-        firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
-        groupGap:
-          membersTitleRect && lastVisibilityRect
-            ? membersTitleRect.top - lastVisibilityRect.bottom
-            : 0,
-        rowGap:
-          previousVisibilityRect && lastVisibilityRect
-            ? lastVisibilityRect.top - previousVisibilityRect.bottom
-            : 0,
-        membersTitleInset: Number.parseFloat(
-          membersTitle ? getComputedStyle(membersTitle).paddingInlineStart : "0",
-        ),
-        firstMemberInset: Number.parseFloat(
-          firstMember ? getComputedStyle(firstMember).paddingInlineStart : "0",
-        ),
-        visibilityTitlePosition: visibilityTitle ? getComputedStyle(visibilityTitle).position : "",
-        membersTitlePosition: membersTitle ? getComputedStyle(membersTitle).position : "",
-        nestedScrollers: [...(menu?.children ?? [])].filter((child) => {
-          const node = child as HTMLElement;
-          return (
-            node.scrollHeight > node.clientHeight &&
-            ["auto", "scroll"].includes(getComputedStyle(node).overflowY)
-          );
-        }).length,
-      };
-    });
-    const afterScroll = await dropdown.evaluate(async (element) => {
-      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
-      const visibilityTitle = element.querySelector<HTMLElement>(
-        ".chat-pane__sharing-visibility-title",
-      );
-      const membersTitle = element.querySelector<HTMLElement>(".chat-pane__sharing-members-title");
-      const firstMember = element.querySelector<HTMLElement>(".chat-pane__sharing-member");
-      if (menu) {
-        menu.scrollTop = menu.scrollHeight;
-      }
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
+    for (const item of [longNameItem, longIdItem]) {
+      const label = item.locator(".chat-pane__sharing-member-label");
+      const geometry = await label.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const menu = element.closest(".chat-pane__sharing-panel")!.getBoundingClientRect();
+        return {
+          contained: rect.left >= menu.left && rect.right <= menu.right,
+          overflow: element.scrollWidth > element.clientWidth,
+          ellipsis: getComputedStyle(element).textOverflow,
+        };
       });
-      return {
-        scrollTop: menu?.scrollTop ?? 0,
-        visibilityTitleBottom: visibilityTitle?.getBoundingClientRect().bottom ?? 0,
-        membersTitleTop: membersTitle?.getBoundingClientRect().top ?? 0,
-        firstMemberTop: firstMember?.getBoundingClientRect().top ?? 0,
-      };
-    });
+      expect(geometry).toEqual({ contained: true, overflow: true, ellipsis: "ellipsis" });
+    }
 
-    expect(beforeScroll.menuHeight).toBeLessThanOrEqual(421);
+    await roster.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    const readGeometry = () =>
+      dropdown.evaluate((element) => {
+        const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel")!;
+        const list = element.querySelector<HTMLElement>(".chat-pane__sharing-roster")!;
+        const rows = list.querySelectorAll<HTMLElement>(".chat-pane__sharing-person");
+        const menuRect = menu.getBoundingClientRect();
+        const listRect = list.getBoundingClientRect();
+        return {
+          menuTop: menuRect.top,
+          menuBottom: menuRect.bottom,
+          viewportHeight: innerHeight,
+          menuScrollTop: menu.scrollTop,
+          scrollTop: list.scrollTop,
+          scrollHeight: list.scrollHeight,
+          clientHeight: list.clientHeight,
+          scrollWidth: list.scrollWidth,
+          clientWidth: list.clientWidth,
+          firstTop: rows[0]!.getBoundingClientRect().top,
+          lastBottom: rows[rows.length - 1]!.getBoundingClientRect().bottom,
+          listBottom: listRect.bottom,
+          accessTop: element
+            .querySelector<HTMLElement>('[data-value="access"]')!
+            .getBoundingClientRect().top,
+          permissionsTop: element
+            .querySelector<HTMLElement>(
+              ".chat-pane__sharing-permissions .chat-pane__sharing-section-label",
+            )!
+            .getBoundingClientRect().top,
+        };
+      });
+    const beforeScroll = await readGeometry();
+    await people.last().scrollIntoViewIfNeeded();
+    const afterScroll = await readGeometry();
+    expect(beforeScroll.menuTop).toBeGreaterThanOrEqual(0);
+    expect(beforeScroll.menuBottom).toBeLessThanOrEqual(beforeScroll.viewportHeight);
     expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
     expect(beforeScroll.scrollWidth).toBe(beforeScroll.clientWidth);
-    expect(beforeScroll.longLabelsContained).toBe(true);
-    expect(beforeScroll.longLabelsOverflow).toBe(true);
-    expect(beforeScroll.membersTitleInset).toBe(beforeScroll.firstMemberInset);
-    expect(beforeScroll.groupGap).toBeGreaterThanOrEqual(8);
-    expect(beforeScroll.groupGap).toBeGreaterThan(beforeScroll.rowGap + 6);
-    expect(beforeScroll.visibilityTitlePosition).not.toBe("sticky");
-    expect(beforeScroll.membersTitlePosition).not.toBe("sticky");
-    expect(beforeScroll.nestedScrollers).toBe(0);
     expect(afterScroll.scrollTop).toBeGreaterThan(0);
-    expect(afterScroll.visibilityTitleBottom).toBeLessThan(beforeScroll.menuTop);
-    expect(afterScroll.membersTitleTop).toBeLessThan(beforeScroll.menuTop);
-    expect(afterScroll.firstMemberTop).toBeLessThan(beforeScroll.firstMemberTop);
-    await expectBrowser(
-      dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(30);
-    await expect
-      .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
-      .toBe(longMemberLabel);
-    await expect
-      .poll(() => tooltipTitleText(longIdItem.locator(".chat-pane__sharing-member-label")))
-      .toBe(longMemberId);
-    await expectBrowser(selectedIndicator).toHaveCount(1);
-    expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
+    expect(afterScroll.firstTop).toBeLessThan(beforeScroll.firstTop);
+    expect(afterScroll.lastBottom).toBeLessThanOrEqual(afterScroll.listBottom + 1);
+    expect(afterScroll.menuScrollTop).toBe(0);
+    expect(afterScroll.accessTop).toBeCloseTo(beforeScroll.accessTop, 1);
+    expect(afterScroll.permissionsTop).toBeCloseTo(beforeScroll.permissionsTop, 1);
+    await expectBrowser(roster.locator("openclaw-session-owner-chip")).toHaveCount(30);
     // All identities share one list; owner-chip presentation remains human-only.
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
+    await expectBrowser(roster.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
     await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
     await expectBrowser(
       dropdown.getByRole("button", { name: "Previous", exact: true }),
