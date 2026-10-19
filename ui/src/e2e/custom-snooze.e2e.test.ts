@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionUrl,
@@ -44,10 +45,7 @@ suite.define(() => {
           await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
           if (width === 390) {
-            await page
-              .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-              .first()
-              .click();
+            await navigationDrawerToggle(page).click();
             await waitForMobileSidebarDrawerOpen(page);
           }
           const capture = async (name: string) => {
