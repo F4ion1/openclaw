@@ -233,9 +233,10 @@ suite.define(() => {
       });
       await artifactRow.waitFor({ state: "visible", timeout: 10_000 });
       await artifactRow.click();
-      const sidebarTrigger = page.getByRole("button", {
-        name: "Open image openclaw-banner.png",
-      });
+      // The rail exposes the same action; exercise the image itself and its return-focus target.
+      const sidebarTrigger = page
+        .getByRole("button", { name: "Open image openclaw-banner.png" })
+        .filter({ has: page.getByRole("img", { name: "openclaw-banner.png", exact: true }) });
       await sidebarTrigger.waitFor({ state: "visible", timeout: 10_000 });
 
       if (captureUiProofEnabled) {
