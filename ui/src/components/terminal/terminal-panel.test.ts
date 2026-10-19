@@ -42,7 +42,9 @@ async function startPanelWithPendingOpen(sessionKey?: string, hosted = false) {
     request: <T>(method: string, params?: unknown) => {
       requests.push({ method, params });
       return (
-        method === "terminal.open" ? open.promise : Promise.resolve({ ok: true })
+        method === "terminal.open"
+          ? open.promise
+          : Promise.resolve(method === "terminal.list" ? { sessions: [] } : { ok: true })
       ) as Promise<T>;
     },
     addEventListener: () => () => {},
@@ -159,7 +161,13 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T;
+        return (
+          method === "terminal.open"
+            ? terminalOpenResult("session-1")
+            : method === "terminal.list"
+              ? { sessions: [] }
+              : { ok: true }
+        ) as T;
       },
       addEventListener: () => () => {},
     };
@@ -172,10 +180,12 @@ describe("OpenClawTerminalPanel", () => {
     panel.toggle();
 
     await waitForFast(() => {
-      expect(requests[0]).toEqual({
-        method: "terminal.open",
-        params: { agentId: "ops", cols: 100, rows: 30 },
-      });
+      expect(requests.filter(({ method }) => method === "terminal.open")).toEqual([
+        {
+          method: "terminal.open",
+          params: { agentId: "ops", cols: 100, rows: 30 },
+        },
+      ]);
     });
     expect(createOptions?.terminalOptions?.fontSize).toBe(11);
     expect(createOptions?.terminalOptions?.fontFamily).toContain("OpenClaw Nerd Symbols");
@@ -252,7 +262,13 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T;
+        return (
+          method === "terminal.open"
+            ? terminalOpenResult("session-1")
+            : method === "terminal.list"
+              ? { sessions: [] }
+              : { ok: true }
+        ) as T;
       },
       addEventListener: (nextListener) => {
         listener = nextListener;
@@ -346,7 +362,9 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() =>
       expect(requests.filter(({ method }) => method === "terminal.input")).toHaveLength(2),
     );
-    expect(requests.slice(1)).toEqual([
+    expect(
+      requests.filter(({ method }) => method === "terminal.resize" || method === "terminal.input"),
+    ).toEqual([
       {
         method: "terminal.resize",
         params: { sessionId: "session-1", cols: 100, rows: 30 },
@@ -463,7 +481,8 @@ describe("OpenClawTerminalPanel", () => {
       expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
     });
     expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
-    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(2);
+    // Restoration and attach reconciliation are independent of dock catalog discovery.
+    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(3);
     expect(requests.some((entry) => entry.method === "terminal.open")).toBe(false);
     expect(controller.write).not.toHaveBeenCalled();
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
@@ -503,7 +522,8 @@ describe("OpenClawTerminalPanel", () => {
       );
     });
     expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(0);
-    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(2);
+    // Restoration and attach reconciliation are independent of dock catalog discovery.
+    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(3);
     expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
     expect(panel.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
     expect(controller.write).not.toHaveBeenCalled();
@@ -515,6 +535,7 @@ describe("OpenClawTerminalPanel", () => {
   it("shows a session picker list failure without retiring the active terminal", async () => {
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
     let listCalls = 0;
+    let failNextList = false;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
       request: async <T>(method: string) => {
@@ -522,11 +543,13 @@ describe("OpenClawTerminalPanel", () => {
           return terminalOpenResult("current-1") as T;
         }
         if (method === "terminal.list") {
-          if (++listCalls === 1) {
+          listCalls += 1;
+          if (failNextList) {
+            failNextList = false;
             throw new Error("synthetic terminal list unavailable");
           }
           return {
-            sessions: [{ ...terminalOpenResult("current-1"), attached: true, createdAtMs: 1 }],
+            sessions: [{ ...terminalOpenResult("detached-1"), attached: false, createdAtMs: 1 }],
           } as T;
         }
         return Promise.resolve({ ok: true }) as Promise<T>;
@@ -541,6 +564,8 @@ describe("OpenClawTerminalPanel", () => {
       ),
     );
 
+    await waitForFast(() => expect(listCalls).toBe(1));
+    failNextList = true;
     panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!.click();
     await waitForFast(() =>
       expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
@@ -555,10 +580,11 @@ describe("OpenClawTerminalPanel", () => {
     expect(document.activeElement).toBe(trigger);
     trigger.click();
     await waitForFast(() =>
-      expect(panel.querySelector(".tp-session__agent")?.textContent).toBe("ops"),
+      expect(panel.querySelector(".tp-session__cwd")?.textContent).toContain("ops"),
     );
     expect(panel.querySelector('[role="alert"]')).toBeNull();
-    expect(listCalls).toBe(2);
+    // Returning focus after the failure also discovers the dock catalog.
+    expect(listCalls).toBe(4);
   });
 
   it.each(["resolve", "reject"] as const)(
@@ -580,7 +606,13 @@ describe("OpenClawTerminalPanel", () => {
           }
           if (method === "terminal.list") {
             listCount += 1;
-            return (listCount === 1 ? firstList.promise : secondList.promise) as Promise<T>;
+            return (
+              listCount === 1
+                ? Promise.resolve({ sessions: [] })
+                : listCount === 2
+                  ? firstList.promise
+                  : secondList.promise
+            ) as Promise<T>;
           }
           return Promise.resolve({}) as Promise<T>;
         },
@@ -590,10 +622,11 @@ describe("OpenClawTerminalPanel", () => {
       panel.toggle();
       await waitForFast(() => expect(panel.querySelector(".tp-actions")).not.toBeNull());
 
-      (panel.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement).click();
       await waitForFast(() => expect(listCount).toBe(1));
-      (panel.querySelector(".tp-session-refresh") as HTMLButtonElement).click();
+      (panel.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement).click();
       await waitForFast(() => expect(listCount).toBe(2));
+      (panel.querySelector(".tp-session-refresh") as HTMLButtonElement).click();
+      await waitForFast(() => expect(listCount).toBe(3));
 
       secondList.resolve({
         sessions: [
@@ -683,7 +716,13 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T;
+        return (
+          method === "terminal.open"
+            ? terminalOpenResult("session-1")
+            : method === "terminal.list"
+              ? { sessions: [] }
+              : { ok: true }
+        ) as T;
       },
       addEventListener: () => () => {},
     };
@@ -704,6 +743,9 @@ describe("OpenClawTerminalPanel", () => {
         params: { agentId: "research", cols: 100, rows: 30, catalog },
       }),
     );
+    await page.updateComplete;
+    expect(page.querySelector(".tp-session-menu")).toBeNull();
+    expect(page.querySelector(".tp-viewport")?.getAttribute("aria-hidden")).toBe("false");
     firstBoot.resolve(createTerminalController());
     await waitForFast(() =>
       expect(requests.filter(({ method }) => method === "terminal.open")).toHaveLength(2),
@@ -717,7 +759,13 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
-        return (method === "terminal.open" ? terminalOpenResult("session-1") : { ok: true }) as T;
+        return (
+          method === "terminal.open"
+            ? terminalOpenResult("session-1")
+            : method === "terminal.list"
+              ? { sessions: [] }
+              : { ok: true }
+        ) as T;
       },
       addEventListener: () => () => {},
     };
@@ -759,7 +807,13 @@ describe("OpenClawTerminalPanel", () => {
       forceReconnect: () => {},
       request: async <T>(method: string) => {
         oldRequests.push(method);
-        return (method === "terminal.open" ? terminalOpenResult("old-session") : { ok: true }) as T;
+        return (
+          method === "terminal.open"
+            ? terminalOpenResult("old-session")
+            : method === "terminal.list"
+              ? { sessions: [] }
+              : { ok: true }
+        ) as T;
       },
       addEventListener: () => oldUnsubscribe,
     };
@@ -790,7 +844,7 @@ describe("OpenClawTerminalPanel", () => {
       expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
     });
     expect(oldRequests.filter((method) => method === "terminal.open")).toHaveLength(1);
-    expect(newRequests).toEqual(["terminal.list"]);
+    expect(newRequests).toEqual(["terminal.list", "terminal.list"]);
     expect(oldUnsubscribe).toHaveBeenCalledOnce();
     expect(controllers[0].dispose).toHaveBeenCalledOnce();
     expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(2);
