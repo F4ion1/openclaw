@@ -18,7 +18,6 @@ import {
 } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readWorkflow, runGit, type WorkflowStep } from "./ci-workflow.test-support.js";
-import { prepareGeneratedPublisherFixture } from "./generated-publisher.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const locales = CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale);
@@ -35,10 +34,21 @@ const current = new Map([
 ]);
 const workflow = readWorkflow(".github/workflows/control-ui-locale-refresh.yml");
 
-function put(root: string, file: string, value: string) {
+function put(root: string, file: string, value: unknown) {
   mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-  writeFileSync(path.join(root, file), value);
+  writeFileSync(path.join(root, file), typeof value === "string" ? value : JSON.stringify(value));
 }
+const read = (root: string, file: string) => readFileSync(path.join(root, file), "utf8");
+const metadata = (locale: string, overrides = {}) => ({
+  locale,
+  fallbackKeys: [],
+  generatedAt: "before",
+  sourceHash: "before",
+  totalKeys: 0,
+  translatedKeys: 0,
+  workflow: 1,
+  ...overrides,
+});
 
 function commit(root: string, message: string) {
   runGit(root, ["add", "."]);
@@ -56,7 +66,7 @@ function plan(root: string, assets: string, locale: string, sourceFlat = origina
     existingFlat: flattenTranslations(materializeControlUiLocaleCatalog(sourceFlat, memory)),
     force,
     hashText: hashControlUiTranslationText,
-    previousMeta: JSON.parse(readFileSync(path.join(root, assets, locale + ".meta.json"), "utf8")),
+    previousMeta: JSON.parse(read(root, `${assets}/${locale}.meta.json`)),
     sourceFlat,
     sourceHash: JSON.stringify([...sourceFlat]),
     sourcePath: "ui/src/i18n/locales/en.ts",
@@ -88,33 +98,23 @@ function translate(root: string, assets: string, locale: string, sourceFlat = or
   return planned.pending.map(({ key }) => key);
 }
 
-async function createFixture(publisher = false) {
+async function createFixture() {
   const directory = tempDirs.make("locale-artifacts-");
-  const parent = tempDirs.make("locale-reconciliation-");
-  const publication = publisher
-    ? prepareGeneratedPublisherFixture(parent, null, { noGeneratedChange: true, autoMerge: true })
-    : undefined;
-  const root = publication?.worktree ?? parent;
-  if (!publication) {
-    runGit(root, ["init", "--quiet", "--initial-branch=main"]);
-  }
+  const root = tempDirs.make("locale-reconciliation-");
+  runGit(root, ["init", "--quiet", "--initial-branch=main"]);
   runGit(root, ["config", "user.name", "Locale Fixture"]);
   runGit(root, ["config", "user.email", "locale@example.invalid"]);
-  put(root, "package.json", JSON.stringify({ type: "module" }));
-  put(root, "extensions/example/openclaw.plugin.json", '{"id":"example"}');
-  put(
-    root,
-    "extensions/example/package.json",
-    JSON.stringify({
-      name: "@openclaw/example",
-      type: "module",
-      openclaw: {
-        controlUi: "./browser/index.ts",
-        build: { bundledDist: false },
-        release: { publishToNpm: true },
-      },
-    }),
-  );
+  put(root, "package.json", { type: "module" });
+  put(root, "extensions/example/openclaw.plugin.json", { id: "example" });
+  put(root, "extensions/example/package.json", {
+    name: "@openclaw/example",
+    type: "module",
+    openclaw: {
+      controlUi: "./browser/index.ts",
+      build: { bundledDist: false },
+      release: { publishToNpm: true },
+    },
+  });
   put(root, "extensions/example/browser/index.ts", "export {};\n");
   put(
     root,
@@ -122,24 +122,12 @@ async function createFixture(publisher = false) {
     'export default { title: "Plugin" };\n',
   );
   put(root, "scripts/control-ui-i18n.ts", "generator policy\n");
-  put(root, "source/input.txt", JSON.stringify([...original]));
+  put(root, "source/input.txt", [...original]);
   for (const locale of locales) {
     put(root, "ui/src/i18n/.i18n/glossary." + locale + ".json", "[]\n");
     for (const assets of assetRoots) {
       put(root, assets + "/" + locale + ".tm.jsonl", "");
-      put(
-        root,
-        assets + "/" + locale + ".meta.json",
-        JSON.stringify({
-          locale,
-          fallbackKeys: [],
-          generatedAt: "before",
-          sourceHash: "before",
-          totalKeys: 0,
-          translatedKeys: 0,
-          workflow: 1,
-        }),
-      );
+      put(root, assets + "/" + locale + ".meta.json", metadata(locale));
     }
   }
   // Reproduce a newly added locale, not a full 21-locale cold publication.
@@ -149,9 +137,6 @@ async function createFixture(publisher = false) {
     }
   }
   const sourceCommit = commit(root, "canonical baseline");
-  if (publication) {
-    runGit(root, ["push", "--quiet", "origin", "main"]);
-  }
   const identity = { sourceCommit, runId: "123", runAttempt: "1" };
   for (const locale of locales) {
     for (const assets of assetRoots) {
@@ -165,81 +150,14 @@ async function createFixture(publisher = false) {
     root,
     directory,
     identity,
-    publication,
     restore: () => restoreControlUiLocaleArtifacts({ root, directory, locales, identity }),
   };
 }
 
-function publish(fixture: NonNullable<Awaited<ReturnType<typeof createFixture>>["publication"]>) {
-  const action = readWorkflow(".github/actions/publish-generated-pr/action.yml");
-  const script = action.runs.steps.find(
-    (step: WorkflowStep) => step.name === "Publish generated pull request",
-  ).run;
-  const result = spawnSync("bash", ["-c", script], {
-    cwd: fixture.worktree,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...fixture.env,
-      GENERATED_PATHS: assetRoots.join("\n"),
-      INVALIDATION_PATHS: "source/input.txt",
-      CI_GIT_OWNER: path.resolve(".github/actions/git-owner/owner.py"),
-      PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
-    },
-  });
-  expect(result.status, result.stdout + result.stderr).toBe(0);
-  return fixture.inspect(result.stdout + result.stderr);
-}
-
 describe("same-run locale finalization", () => {
-  it.skipIf(process.platform === "win32").each([false, true])(
-    "reuses completed memory on fresh main and preserves terminal deferral (moves again=%s)",
-    async (movesAgain) => {
-      const f = await createFixture(true);
-      put(f.root, "source/input.txt", JSON.stringify([...current]));
-      const latest = commit(f.root, "source changed during workers");
-      runGit(f.root, ["push", "--quiet", "origin", "main"]);
-      expect(await f.restore()).toEqual({ sourceCommit: latest, invalidated: [] });
-      for (const assets of assetRoots) {
-        expect(translate(f.root, assets, "sv", current)).toEqual(["edit", "add"]);
-        const memory = readFileSync(path.join(f.root, assets, "sv.tm.jsonl"), "utf8");
-        expect(memory).toContain("Behåll");
-        expect(memory).toContain("Ny {name}");
-        expect(memory).not.toContain("Borttagen");
-      }
-      if (movesAgain) {
-        const updater = tempDirs.make("locale-newer-main-");
-        runGit(updater, ["clone", "--quiet", f.publication!.env.FAKE_ORIGIN, "."]);
-        runGit(updater, ["config", "user.name", "Locale Fixture"]);
-        runGit(updater, ["config", "user.email", "locale@example.invalid"]);
-        put(updater, "source/input.txt", "new source after catch-up");
-        commit(updater, "source moved again");
-        runGit(updater, ["push", "--quiet", "origin", "main"]);
-      }
-      const outcome = publish(f.publication!);
-      expect(outcome.branchExists).toBe(!movesAgain);
-      if (movesAgain) {
-        expect(outcome.summary).toContain(
-          "Deferred stale generated output because generator inputs changed on main.",
-        );
-        expect(outcome.mergeCalls).toBe("");
-      } else {
-        expect(outcome.mergeCalls).toContain("--auto --squash --match-head-commit");
-        expect(
-          runGit(f.root, [
-            "--git-dir",
-            f.publication!.env.FAKE_ORIGIN,
-            "show",
-            "refs/heads/automation/locale:ui/src/i18n/.i18n/sv.tm.jsonl",
-          ]),
-        ).toContain("Ny {name}");
-      }
-    },
-  );
-
   it("runs the workflow restore CLI with the bound attempt and exposes its fresh source", async () => {
     const f = await createFixture();
-    put(f.root, "source/input.txt", JSON.stringify([...current]));
+    put(f.root, "source/input.txt", [...current]);
     const fresh = commit(f.root, "fresh finalizer checkout");
     const output = path.join(f.directory, "github-output");
     const result = spawnSync(
@@ -266,10 +184,17 @@ describe("same-run locale finalization", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(readFileSync(output, "utf8")).toBe("sha=" + fresh + "\ninvalidated=[]\n");
-    expect(plan(f.root, assetRoots[0]!, "sv", current).pending.map(({ key }) => key)).toEqual([
-      "edit",
-      "add",
-    ]);
+    for (const assets of assetRoots) {
+      expect(plan(f.root, assets, "sv", current).pending.map(({ key }) => key)).toEqual([
+        "edit",
+        "add",
+      ]);
+      expect(translate(f.root, assets, "sv", current)).toEqual(["edit", "add"]);
+      const memory = read(f.root, assets + "/sv.tm.jsonl");
+      expect(memory).toContain("Behåll");
+      expect(memory).toContain("Ny {name}");
+      expect(memory).not.toContain("Borttagen");
+    }
   });
 
   it("retains completed workers when only the finalizer is retried in the same run", async () => {
@@ -300,47 +225,38 @@ describe("same-run locale finalization", () => {
       if (change === "canonical") {
         translate(f.root, assetRoots[0]!, "sv");
         const file = "ui/src/i18n/.i18n/sv.tm.jsonl";
-        put(
-          f.root,
-          file,
-          readFileSync(path.join(f.root, file), "utf8").replace("Behåll", "Korrigerad"),
-        );
+        put(f.root, file, read(f.root, file).replace("Behåll", "Korrigerad"));
       } else if (change === "metadata") {
         put(
           f.root,
           "ui/src/i18n/.i18n/sv.meta.json",
-          JSON.stringify({
-            locale: "sv",
+          metadata("sv", {
             fallbackKeys: ["keep"],
             generatedAt: "corrected",
-            sourceHash: "before",
             totalKeys: 3,
             translatedKeys: 2,
-            workflow: 1,
           }),
         );
       } else if (change === "glossary") {
-        put(
-          f.root,
-          "ui/src/i18n/.i18n/glossary.sv.json",
-          '[{"source":"Keep","target":"Korrigerad"}]',
-        );
+        put(f.root, "ui/src/i18n/.i18n/glossary.sv.json", [
+          { source: "Keep", target: "Korrigerad" },
+        ]);
       } else if (change === "policy") {
         put(f.root, "scripts/control-ui-i18n.ts", "new generator policy");
       } else {
-        put(
-          f.root,
-          "extensions/example/package.json",
-          '{"name":"@openclaw/example","openclaw":{"build":{"bundledDist":false},"release":{"publishToNpm":true}}}',
-        );
+        put(f.root, "extensions/example/package.json", {
+          name: "@openclaw/example",
+          openclaw: { build: { bundledDist: false }, release: { publishToNpm: true } },
+        });
       }
       commit(f.root, "canonical correction");
-      const before = readFileSync(path.join(f.root, assetRoots[0]!, "sv.tm.jsonl"), "utf8");
+      const memory = assetRoots[0] + "/sv.tm.jsonl";
+      const before = read(f.root, memory);
       const result = await f.restore();
       expect(result.invalidated).toEqual(
         change === "policy" || change === "ownership" ? locales : ["sv"],
       );
-      expect(readFileSync(path.join(f.root, assetRoots[0]!, "sv.tm.jsonl"), "utf8")).toBe(before);
+      expect(read(f.root, memory)).toBe(before);
       if (change === "canonical") {
         expect(plan(f.root, assetRoots[0]!, "sv").pending).toEqual([]);
       }
@@ -386,10 +302,10 @@ describe("same-run locale finalization", () => {
 
   it("refuses producer fallbacks and a checkout outside the bound source", async () => {
     const f = await createFixture();
-    const metadata = path.join(f.root, assetRoots[1]!, "sv.meta.json");
-    const parsed = JSON.parse(readFileSync(metadata, "utf8"));
+    const metadataPath = path.join(f.root, assetRoots[1]!, "sv.meta.json");
+    const parsed = JSON.parse(readFileSync(metadataPath, "utf8"));
     parsed.fallbackKeys = ["missing"];
-    writeFileSync(metadata, JSON.stringify(parsed));
+    writeFileSync(metadataPath, JSON.stringify(parsed));
     await expect(packControlUiLocaleArtifact({ ...f, locale: "sv" })).rejects.toThrow(
       "fallback-containing",
     );

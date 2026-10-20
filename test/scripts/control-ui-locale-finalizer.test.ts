@@ -1,9 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createLocaleFinalizerHarness } from "./control-ui-locale-finalizer.test-support.js";
 
-// GitHub scheduling/checkout/download and token services are local fixtures.
-// Workflow conditions/order, source scripts, provider request serialization,
-// output files, strict validation and publisher Git effects remain real.
+// Only GitHub scheduling/transport/token services are fixtures; effects remain real.
 describe.skipIf(process.platform === "win32")(
   "locale finalizer credentialed effect boundary",
   () => {
@@ -11,27 +9,33 @@ describe.skipIf(process.platform === "win32")(
     beforeAll(() => harness.prepare());
     afterAll(() => harness.cleanup());
     const expectedDelta = ["localeWorkflowProof.edit", "localeWorkflowProof.add"];
-    const translated = (
-      result: Awaited<ReturnType<typeof harness.run>>,
-      locale: string,
-      key: string,
-    ) =>
+    type Result = Awaited<ReturnType<typeof harness.run>>;
+    const translated = (result: Result, locale: string, key: string) =>
       result.memory(locale).find((entry) => entry.segment_id === "localeWorkflowProof." + key)
         ?.translated;
-    const assertValidated = (result: Awaited<ReturnType<typeof harness.run>>) => {
+    const noEffects = (result: Result) => {
+      expect([result.workerRequests, result.providerRequests, result.publicationCalls]).toEqual([
+        [],
+        [],
+        [],
+      ]);
+    };
+    const assertValidated = (result: Result) => {
       expect(result.failure).toBe("");
       expect(result.trace).toContainEqual({
         step: "Validate control UI locale refresh",
         status: 0,
       });
     };
+    const assertPinned = (result: Result) => {
+      assertValidated(result);
+      expect([result.sourceAtSetup, result.admittedSource]).toEqual([result.fresh, result.fresh]);
+    };
 
     it("re-pins main after bootstrap checkout and publishes only refreshed output", async () => {
       const result = await harness.run({ publish: true, advanceDuringCheckout: true });
-      assertValidated(result);
+      assertPinned(result);
       expect(result.publication.branchExists, result.publication.summary).toBe(true);
-      expect(result.sourceAtSetup).toBe(result.fresh);
-      expect(result.admittedSource).toBe(result.fresh);
       expect(result.workerRequests).toHaveLength(1);
       expect(result.workerRequests[0]?.ids).toEqual([
         "localeWorkflowProof.keep",
@@ -50,14 +54,11 @@ describe.skipIf(process.platform === "win32")(
       expect(translated(result, "sv", "edit")).toBe("finalizer::New locale proof {name}");
       expect(translated(result, "sv", "add")).toBe("finalizer::Latest locale proof");
       expect(translated(result, "sv", "remove")).toBeUndefined();
-      expect(
-        Object.fromEntries(
-          result
-            .publishedMemory("sv")
-            .filter((entry) => entry.segment_id.startsWith("localeWorkflowProof."))
-            .map((entry) => [entry.segment_id, entry.translated]),
-        ),
-      ).toEqual({
+      const published = result
+        .publishedMemory("sv")
+        .filter((entry) => entry.segment_id.startsWith("localeWorkflowProof."))
+        .map((entry) => [entry.segment_id, entry.translated]);
+      expect(Object.fromEntries(published)).toEqual({
         "localeWorkflowProof.keep": "worker::Keep locale proof",
         "localeWorkflowProof.edit": "finalizer::New locale proof {name}",
         "localeWorkflowProof.add": "finalizer::Latest locale proof",
@@ -73,9 +74,7 @@ describe.skipIf(process.platform === "win32")(
         advanceDuringCheckout: true,
         advanceAfterCatchup: true,
       });
-      assertValidated(result);
-      expect(result.sourceAtSetup).toBe(result.fresh);
-      expect(result.admittedSource).toBe(result.fresh);
+      assertPinned(result);
       expect(translated(result, "sv", "add")).toBe("finalizer::Latest locale proof");
       expect(result.publication.mainHead).toBe(result.later);
       expect(result.publication.branchExists).toBe(false);
@@ -101,11 +100,8 @@ describe.skipIf(process.platform === "win32")(
         expect(result.workerRequests.flatMap((request) => request.ids)).toContain(
           "localeWorkflowProof.keep",
         );
-        expect(
-          result.providerRequests
-            .flatMap((request) => request.ids)
-            .includes("localeWorkflowProof.keep"),
-        ).toBe(retranslatesKeep);
+        const providerIds = result.providerRequests.flatMap((request) => request.ids);
+        expect(providerIds.includes("localeWorkflowProof.keep")).toBe(retranslatesKeep);
         expect(translated(result, "sv", "keep")).toBe(expected);
         // A forced replay of every worker would overwrite this compatible sibling.
         expect(translated(result, "fr", "keep")).toBe("canonical::Keep locale proof");
@@ -130,9 +126,7 @@ describe.skipIf(process.platform === "win32")(
       async (provenance) => {
         const result = await harness.run({ ...provenance, publish: true });
         expect(result.states["resolve-base"]?.result).toBe("skipped");
-        expect(result.providerRequests).toEqual([]);
-        expect(result.workerRequests).toEqual([]);
-        expect(result.publicationCalls).toEqual([]);
+        noEffects(result);
         expect(result.publication.branchExists).toBe(false);
       },
     );
@@ -143,9 +137,7 @@ describe.skipIf(process.platform === "win32")(
       expect(result.states.refresh?.result).toBe("skipped");
       expect(result.states.finalize?.result).toBe("skipped");
       expect(result.failure).toContain("Repository auto-merge must be enabled");
-      expect(result.workerRequests).toEqual([]);
-      expect(result.providerRequests).toEqual([]);
-      expect(result.publicationCalls).toEqual([]);
+      noEffects(result);
     });
 
     it.each([
@@ -157,11 +149,11 @@ describe.skipIf(process.platform === "win32")(
       async (artifactFault, error) => {
         const result = await harness.run({ artifactFault, publish: true });
         expect(result.workerRequests.length).toBeGreaterThan(0);
-        expect({
-          providerRequests: result.providerRequests.length,
-          publicationCalls: result.publicationCalls.length,
-          publishedBranch: result.publication.branchExists,
-        }).toEqual({ providerRequests: 0, publicationCalls: 0, publishedBranch: false });
+        expect([
+          result.providerRequests,
+          result.publicationCalls,
+          result.publication.branchExists,
+        ]).toEqual([[], [], false]);
         expect(result.trace).toContainEqual({ step: "Restore same-run locale memory", status: 1 });
         expect(result.failure).toContain(error);
         expect(result.trace).toContainEqual({

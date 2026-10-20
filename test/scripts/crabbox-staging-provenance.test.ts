@@ -53,6 +53,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
 const bootId = "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
 const hostId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const machineId = "abcdef0123456789abcdef0123456789";
+const provenance = () => import("../../scripts/crabbox-staging-provenance.mts");
+const hardware = (value: string) => native.output.set("hardware", value);
 
 function platform(name: string) {
   const original = process;
@@ -75,7 +77,7 @@ beforeEach(() => {
   native.files.set("/etc/machine-id", machineId + "\n");
   native.files.set("/proc/sys/kernel/random/boot_id", bootId + "\n");
   native.files.set("/proc/stat", "cpu 1 2 3 4\nbtime 1700000000\nprocesses 123\n");
-  native.output.set("hardware", `"IOPlatformUUID" = "${hostId.toUpperCase()}"`);
+  hardware(`"IOPlatformUUID" = "${hostId.toUpperCase()}"`);
   native.output.set("kern.bootsessionuuid", bootId.toUpperCase() + "\n");
   native.output.set(
     "kern.boottime",
@@ -99,63 +101,52 @@ it.each([
   "captures immutable %s provenance and preserves legacy digest compatibility",
   async (os, host, namespace, digest) => {
     platform(os);
-    const { currentProcessProvenance, processDomain } =
-      await import("../../scripts/crabbox-staging-provenance.mts");
+    const { currentProcessProvenance, processDomain } = await provenance();
     const observed = currentProcessProvenance()!;
-    expect(observed).toEqual({ platform: os, hostId: host, bootId, pidNamespace: namespace });
+    const expected = { platform: os, hostId: host, bootId, pidNamespace: namespace };
+    expect(observed).toEqual(expected);
     expect(processDomain()).toBe(digest);
     expect(Reflect.set(observed, "hostId", "foreign-host")).toBe(false);
     native.files.clear();
     native.output.clear();
-    expect(currentProcessProvenance()).toEqual({
-      platform: os,
-      hostId: host,
-      bootId,
-      pidNamespace: namespace,
-    });
+    expect(currentProcessProvenance()).toEqual(expected);
   },
 );
 
 it.each([
-  ["darwin", "host-missing"],
-  ["darwin", "host-invalid"],
-  ["darwin", "host-nil"],
-  ["darwin", "boot-invalid"],
-  ["darwin", "command-failure"],
-  ["linux", "host-missing"],
-  ["linux", "host-invalid"],
-  ["linux", "host-oversized"],
-  ["linux", "boot-invalid"],
-  ["linux", "namespace-invalid"],
-  ["win32", "unsupported"],
-])("fails closed for %s %s provenance", async (os, defect) => {
+  ["darwin", "host-missing", () => hardware("no platform identity")],
+  ["darwin", "host-invalid", () => hardware('"IOPlatformUUID" = "not-a-uuid"')],
+  [
+    "darwin",
+    "host-nil",
+    () => hardware('"IOPlatformUUID" = "00000000-0000-0000-0000-000000000000"'),
+  ],
+  ["darwin", "boot-invalid", () => native.output.set("kern.bootsessionuuid", "not-a-boot-id")],
+  ["darwin", "command-failure", () => native.output.delete("kern.bootsessionuuid")],
+  ["linux", "host-missing", () => native.files.delete("/etc/machine-id")],
+  ["linux", "host-invalid", () => native.files.set("/etc/machine-id", "0".repeat(32))],
+  [
+    "linux",
+    "host-oversized",
+    () => native.files.set("/etc/machine-id", machineId + " ".repeat(200)),
+  ],
+  [
+    "linux",
+    "boot-invalid",
+    () => native.files.set("/proc/sys/kernel/random/boot_id", "not-a-boot-id"),
+  ],
+  [
+    "linux",
+    "namespace-invalid",
+    () => {
+      native.namespace = "pid:[unknown]";
+    },
+  ],
+  ["win32", "unsupported", () => {}],
+] as const)("fails closed for %s %s provenance", async (os, _defect, corrupt) => {
   platform(os);
-  if (defect === "host-missing") {
-    native.output.set("hardware", "no platform identity");
-    native.files.delete("/etc/machine-id");
-  }
-  if (defect === "host-invalid") {
-    native.output.set("hardware", '"IOPlatformUUID" = "not-a-uuid"');
-    native.files.set("/etc/machine-id", "0".repeat(32));
-  }
-  if (defect === "host-nil") {
-    native.output.set("hardware", '"IOPlatformUUID" = "00000000-0000-0000-0000-000000000000"');
-  }
-  if (defect === "host-oversized") {
-    native.files.set("/etc/machine-id", machineId + " ".repeat(200));
-  }
-  if (defect === "boot-invalid") {
-    native.output.set("kern.bootsessionuuid", "not-a-boot-id");
-    native.files.set("/proc/sys/kernel/random/boot_id", "not-a-boot-id");
-  }
-  if (defect === "command-failure") {
-    native.output.delete("kern.bootsessionuuid");
-  }
-  if (defect === "namespace-invalid") {
-    native.namespace = "pid:[unknown]";
-  }
-  const { currentProcessProvenance, processDomain } =
-    await import("../../scripts/crabbox-staging-provenance.mts");
+  corrupt();
+  const { currentProcessProvenance, processDomain } = await provenance();
   expect(currentProcessProvenance()).toBeUndefined();
   expect(processDomain()).toBeUndefined();
 });
@@ -165,7 +156,7 @@ it.each([
   { os: "linux", time: 1700000000000000000n },
 ])("reads the $os absolute boot time without losing timestamp precision", async ({ os, time }) => {
   platform(os);
-  const { currentBootTimeNs } = await import("../../scripts/crabbox-staging-provenance.mts");
+  const { currentBootTimeNs } = await provenance();
   expect(currentBootTimeNs()).toBe(time);
 });
 
@@ -180,6 +171,6 @@ it.each([
   platform(os);
   native.output.set("kern.boottime", output);
   native.files.set("/proc/stat", output);
-  const { currentBootTimeNs } = await import("../../scripts/crabbox-staging-provenance.mts");
+  const { currentBootTimeNs } = await provenance();
   expect(currentBootTimeNs()).toBeUndefined();
 });
