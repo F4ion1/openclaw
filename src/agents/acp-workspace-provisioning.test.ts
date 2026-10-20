@@ -1,16 +1,13 @@
-// Turn-level provisioning resolution regressions (#92015).
-// Covers invocation-scoped cwd decisions: mixed bindings on one agent and
-// workspace-equal cwds keep standard bootstrap behavior.
-import { describe, beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { resolveAcpAgentWorkspaceProvisioningForTurn } from "./acp-workspace-provisioning.js";
+import { resolveAcpAgentWorkspaceProvisioningForTurn as resolve } from "./acp-workspace-provisioning.js";
 
-const identityBindings: ChannelConfiguredBindingProvider = {
+const bindings: ChannelConfiguredBindingProvider = {
   compileConfiguredBinding: ({ conversationId }) => {
     const normalized = conversationId.trim();
     return normalized ? { conversationId: normalized } : null;
@@ -18,39 +15,23 @@ const identityBindings: ChannelConfiguredBindingProvider = {
   matchInboundConversation: ({ compiledBinding, conversationId }) =>
     compiledBinding.conversationId === conversationId ? { conversationId, matchPriority: 2 } : null,
 };
-
 beforeEach(() => {
   setActivePluginRegistry(
     createTestRegistry([
       {
         pluginId: "discord",
-        plugin: { ...createChannelTestPluginBase({ id: "discord" }), bindings: identityBindings },
+        plugin: { ...createChannelTestPluginBase({ id: "discord" }), bindings },
         source: "test",
       },
     ]),
   );
 });
 
-function acpBinding(
-  conversationId: string,
-  cwd?: string,
-): NonNullable<OpenClawConfig["bindings"]>[number] {
-  return {
-    type: "acp",
-    agentId: "codex",
-    match: { channel: "discord", peer: { kind: "channel", id: conversationId } },
-    ...(cwd ? { acp: { cwd } } : {}),
-  } as NonNullable<OpenClawConfig["bindings"]>[number];
+function config(entries: NonNullable<OpenClawConfig["agents"]>["entries"]): OpenClawConfig {
+  return { agents: { defaults: { workspace: "/shared-ws" }, entries } };
 }
-
-const baseCfg: OpenClawConfig = {
-  agents: {
-    defaults: { workspace: "/shared-ws" },
-    entries: { main: {}, codex: { runtime: { type: "acp" } } },
-  },
-};
-
-function sessionAcpMeta(cwd?: string): SessionAcpMeta {
+const cfg = config({ main: {}, codex: { runtime: { type: "acp" } } });
+function acp(cwd?: string): SessionAcpMeta {
   return {
     backend: "acpx",
     agent: "codex",
@@ -61,76 +42,63 @@ function sessionAcpMeta(cwd?: string): SessionAcpMeta {
     lastActivityAt: 0,
   };
 }
-
-async function bindingSessionKey(cfg: OpenClawConfig, conversationId: string): Promise<string> {
-  const resolved = resolveConfiguredAcpBindingRecord({
-    cfg,
-    channel: "discord",
-    accountId: "default",
-    conversationId,
-  });
-  return resolved?.record.targetSessionKey ?? "";
+function binding(conversationId: string, cwd?: string) {
+  return {
+    type: "acp",
+    agentId: "codex",
+    match: { channel: "discord", peer: { kind: "channel", id: conversationId } },
+    ...(cwd ? { acp: { cwd } } : {}),
+  } satisfies NonNullable<OpenClawConfig["bindings"]>[number];
 }
 
-function expectProvisioning(
-  expected: "standard" | "runtime-managed-implicit",
-  params: Partial<Parameters<typeof resolveAcpAgentWorkspaceProvisioningForTurn>[0]> = {},
-) {
-  return expect(
-    resolveAcpAgentWorkspaceProvisioningForTurn({ cfg: baseCfg, agentId: "codex", ...params }),
-  ).resolves.toBe(expected);
-}
+// #92015: a sibling binding must not inherit the cwd-bearing turn's decision.
+it("scopes provisioning to the concrete ACP binding", async () => {
+  const mixed = { ...cfg, bindings: [binding("111", "/projects/app"), binding("222")] };
+  const key = (conversationId: string) =>
+    resolveConfiguredAcpBindingRecord({
+      cfg: mixed,
+      channel: "discord",
+      accountId: "default",
+      conversationId,
+    })?.record.targetSessionKey ?? "";
+  const withCwd = key("111");
+  const withoutCwd = key("222");
+  expect(withCwd).not.toBe(withoutCwd);
+  await expect(resolve({ cfg: mixed, agentId: "codex", sessionKey: withCwd })).resolves.toBe(
+    "runtime-managed-implicit",
+  );
+  await expect(resolve({ cfg: mixed, agentId: "codex", sessionKey: withoutCwd })).resolves.toBe(
+    "standard",
+  );
+});
 
-describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
-  it("scopes the skip to the turn bound to a cwd-bearing binding (mixed bindings)", async () => {
-    const cfg: OpenClawConfig = {
-      ...baseCfg,
-      bindings: [acpBinding("111", "/projects/app"), acpBinding("222")],
-    };
-    const keyWithCwd = await bindingSessionKey(cfg, "111");
-    const keyWithoutCwd = await bindingSessionKey(cfg, "222");
-    expect(keyWithCwd).not.toBe(keyWithoutCwd);
+it.each([
+  ["/projects/app", "runtime-managed-implicit"],
+  [undefined, "standard"],
+])("uses the live ACP session cwd %s", async (cwd, expected) => {
+  await expect(resolve({ cfg, agentId: "codex", sessionEntry: { acp: acp(cwd) } })).resolves.toBe(
+    expected,
+  );
+});
 
-    await expectProvisioning("runtime-managed-implicit", { cfg, sessionKey: keyWithCwd });
-    await expectProvisioning("standard", { cfg, sessionKey: keyWithoutCwd });
-  });
+it.each(["work", "pinned"])("keeps standard provisioning for %s", async (agentId) => {
+  await expect(
+    resolve({
+      cfg: config({
+        work: { runtime: { type: "embedded" } },
+        pinned: { workspace: "/explicit-ws", runtime: { type: "acp" } },
+      }),
+      agentId,
+      sessionEntry: { acp: acp("/projects/app") },
+    }),
+  ).resolves.toBe("standard");
+});
 
-  it("uses the live session ACP meta cwd as the invocation cwd", async () => {
-    await expectProvisioning("runtime-managed-implicit", {
-      sessionEntry: { acp: sessionAcpMeta("/projects/app") },
-    });
-    await expectProvisioning("standard", { sessionEntry: { acp: sessionAcpMeta() } });
-  });
-
-  it("keeps standard provisioning for embedded agents and explicit workspaces", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/shared-ws" },
-        entries: {
-          work: { runtime: { type: "embedded" } },
-          pinned: { workspace: "/explicit-ws", runtime: { type: "acp" } },
-        },
-      },
-    };
-    await expectProvisioning("standard", {
-      cfg,
-      agentId: "work",
-      sessionEntry: { acp: sessionAcpMeta("/projects/app") },
-    });
-    await expectProvisioning("standard", {
-      cfg,
-      agentId: "pinned",
-      sessionEntry: { acp: sessionAcpMeta("/projects/app") },
-    });
-  });
-
-  it("falls back to the agent-global runtime acp.cwd default", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/shared-ws" },
-        entries: { codex: { runtime: { type: "acp", acp: { cwd: "/projects/app" } } } },
-      },
-    };
-    await expectProvisioning("runtime-managed-implicit", { cfg });
-  });
+it("falls back to the agent-global ACP cwd", async () => {
+  await expect(
+    resolve({
+      cfg: config({ codex: { runtime: { type: "acp", acp: { cwd: "/projects/app" } } } }),
+      agentId: "codex",
+    }),
+  ).resolves.toBe("runtime-managed-implicit");
 });

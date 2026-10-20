@@ -46,13 +46,10 @@ export const unopenedMcpConfig = {
   mcp: { servers: { fixture: { command: process.execPath } } },
 } satisfies OpenClawConfig;
 
-// Module-local, so shared (non-isolated) workers reset it with each test file's graph.
+// Graph-local ownership prevents a previous non-isolated file from bypassing mocks.
 let currentGraphManager: unknown;
 
 export async function bindSessionMcpRuntimeTestScheduler(): Promise<void> {
-  // The manager lives on globalThis and lazily loads the runtime from the graph
-  // that created it. A manager left by an earlier file would bypass this file's
-  // mocks and spies, so retire it before binding.
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const existing = globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
   if (existing !== undefined && existing !== currentGraphManager) {
@@ -83,9 +80,7 @@ export function makeRequesterParams(
 
 // Passive cache/TTL tests deliberately relinquish admission before inspecting the
 // raw runtime. Production callers transfer the acquired lease to their consumer.
-export async function getOrCreateSessionMcpRuntime(
-  params: Parameters<typeof acquireSessionMcpRuntime>[0],
-) {
+export async function getOrCreateSessionMcpRuntime(params: RuntimeParams) {
   const lease = await acquireSessionMcpRuntime(params);
   lease.releaseLease();
   return lease.runtime;
@@ -150,13 +145,7 @@ export function makeRuntime(
     getCatalog: async () => ({
       version: 1,
       generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
-        },
-      },
+      servers: { [serverName]: { serverName, launchSummary: serverName, toolCount: tools.length } },
       tools: tools.map((tool) => ({
         serverName,
         safeServerName: serverName,
@@ -164,9 +153,7 @@ export function makeRuntime(
         description: tool.description,
         inputSchema: {
           type: "object",
-          properties: {
-            toolName: { type: "string", const: tool.toolName },
-          },
+          properties: { toolName: { type: "string", const: tool.toolName } },
         },
         fallbackDescription: tool.description,
       })),

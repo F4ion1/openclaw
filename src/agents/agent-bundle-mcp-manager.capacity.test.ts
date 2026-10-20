@@ -42,8 +42,8 @@ function setup() {
       catalog: await runtime.getCatalog(),
     };
     sources.set(runtime, source);
-    let activeLeases = 0;
-    Object.defineProperty(runtime, "activeLeases", { get: () => activeLeases });
+    const leases = new Set<symbol>();
+    Object.defineProperty(runtime, "activeLeases", { get: () => leases.size });
     return Object.assign(runtime, {
       sessionId: input.sessionId,
       sessionKey: input.sessionKey,
@@ -52,13 +52,10 @@ function setup() {
       configFingerprint: input.configFingerprint ?? "fixture",
       requesterScope: input.requesterScope,
       acquireLease() {
-        activeLeases++;
-        let released = false;
+        const lease = Symbol("mcp-test-lease");
+        leases.add(lease);
         return () => {
-          if (!released) {
-            released = true;
-            activeLeases--;
-          }
+          leases.delete(lease);
         };
       },
       getCatalog: () => source.pending ?? Promise.resolve(source.catalog),
@@ -84,7 +81,12 @@ function setup() {
   };
   const advertise = async (lease: Parameters<typeof manager.rememberAdvertisedScopedCatalog>[0]) =>
     manager.rememberAdvertisedScopedCatalog(lease, await lease.runtime.getCatalog());
-  return { manager, factory, sources, fill, materialize, evict, advertise };
+  const publish = async (input: Parameters<typeof manager.acquire>[0] = mixedParams) => {
+    const lease = (await manager.acquireRequesterScoped(input))!;
+    await advertise(lease);
+    lease.releaseLease();
+  };
+  return { manager, factory, sources, fill, materialize, evict, advertise, publish };
 }
 
 type Materialized = Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>;
@@ -238,16 +240,14 @@ describe("MCP capacity catalog continuity", () => {
 
   it("bounds requester snapshots and keeps recent schemas reachable for retirement", async () => {
     await withRequester(async () => {
-      const { manager, advertise } = setup();
+      const { manager, advertise, publish } = setup();
       const input = (index: number) => ({
         ...mixedParams,
         sessionId: `scoped-${index}`,
         sessionKey: `agent:test:scoped-${index}`,
       });
       for (let index = 0; index < 512; index++) {
-        const lease = (await manager.acquireRequesterScoped(input(index)))!;
-        await advertise(lease);
-        lease.releaseLease();
+        await publish(input(index));
       }
       for (let index = 256; index < 512; index++) {
         held.push((await manager.acquireRequesterScoped(input(index)))!);
@@ -273,12 +273,10 @@ describe("MCP capacity catalog continuity", () => {
 
   it("bounds evicted requester partitions within a session with live owners", async () => {
     await withRequester(async () => {
-      const { manager, factory, advertise } = setup();
+      const { manager, factory, publish } = setup();
       const input = (index: number) => ({ ...mixedParams, requesterSenderId: `sender-${index}` });
       for (let index = 0; index < 513; index++) {
-        const lease = (await manager.acquireRequesterScoped(input(index)))!;
-        await advertise(lease);
-        lease.releaseLease();
+        await publish(input(index));
       }
       for (let index = 257; index < 513; index++) {
         held.push((await manager.acquireRequesterScoped(input(index)))!);
@@ -339,10 +337,8 @@ describe("MCP capacity catalog continuity", () => {
     "retires evicted requester catalogs through %s cleanup",
     async (retirement) => {
       await withRequester(async () => {
-        const { manager, fill, advertise } = setup();
-        const lease = (await manager.acquireRequesterScoped(mixedParams))!;
-        await advertise(lease);
-        lease.releaseLease();
+        const { manager, fill, publish } = setup();
+        await publish();
         await fill();
         expect(manager.resolveSessionId(params.sessionKey)).toBe(params.sessionId);
         expect(manager.listSessionIdsForAgent("test")).toContain(params.sessionId);
@@ -391,10 +387,8 @@ describe("MCP capacity catalog continuity", () => {
     "invalidates requester snapshots and advertised schemas on binding change: %j",
     async (change) => {
       await withRequester(async () => {
-        const { manager, fill, advertise } = setup();
-        const first = (await manager.acquireRequesterScoped(mixedParams))!;
-        await advertise(first);
-        first.releaseLease();
+        const { manager, fill, publish } = setup();
+        await publish();
         await fill();
         const refused = (await manager.acquireRequesterScoped({ ...mixedParams, ...change }))!;
         expect((await refused.runtime.getCatalog()).tools).toEqual([]);

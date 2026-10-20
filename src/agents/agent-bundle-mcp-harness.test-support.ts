@@ -1,22 +1,14 @@
 import { createRequesterMcpConnect } from "./agent-bundle-mcp-requester-connect.js";
-/** Shared runtime fixtures for the agent bundle MCP harness materializer tests. */
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
-export function makeRuntime(params: {
-  sessionId: string;
-  requesterSenderId: string;
-}): SessionMcpRuntime {
+type Requester = { sessionId: string; requesterSenderId: string };
+
+export function makeRuntime(params: Requester): SessionMcpRuntime {
   const serverName = "user-mail";
   const catalog = {
     version: 1,
     generatedAt: 0,
-    servers: {
-      [serverName]: {
-        serverName,
-        launchSummary: serverName,
-        toolCount: 1,
-      },
-    },
+    servers: { [serverName]: { serverName, launchSummary: serverName, toolCount: 1 } },
     tools: [
       {
         serverName,
@@ -29,7 +21,7 @@ export function makeRuntime(params: {
     ],
   };
   let lastUsedAt = Date.now();
-  let activeLeases = 0;
+  const leases = new Set<symbol>();
   return {
     sessionId: params.sessionId,
     workspaceDir: "/workspace",
@@ -40,17 +32,13 @@ export function makeRuntime(params: {
       return lastUsedAt;
     },
     get activeLeases() {
-      return activeLeases;
+      return leases.size;
     },
     acquireLease: () => {
-      activeLeases += 1;
-      let released = false;
+      const lease = Symbol("mcp-test-lease");
+      leases.add(lease);
       return () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        activeLeases -= 1;
+        leases.delete(lease);
       };
     },
     markUsed: () => {
@@ -59,23 +47,16 @@ export function makeRuntime(params: {
     peekCatalog: () => catalog,
     getCatalog: async () => catalog,
     callTool: async (_server, toolName) => ({
-      content: [
-        {
-          type: "text",
-          text: `live:${toolName}:${params.requesterSenderId}`,
-        },
-      ],
+      content: [{ type: "text", text: `live:${toolName}:${params.requesterSenderId}` }],
       isError: false,
     }),
     dispose: async () => {},
   };
 }
 
-export async function makeConnectRuntime(params: {
-  sessionId: string;
-  requesterSenderId: string;
-  publicOrigin?: string;
-}): Promise<SessionMcpRuntime> {
+export async function makeConnectRuntime(
+  params: Requester & { publicOrigin?: string },
+): Promise<SessionMcpRuntime> {
   const runtime = makeRuntime(params);
   const catalog = { version: 1, generatedAt: 0, servers: {}, tools: [] };
   runtime.peekCatalog = () => catalog;
