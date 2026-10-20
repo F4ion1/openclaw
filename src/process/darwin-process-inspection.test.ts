@@ -41,6 +41,10 @@ const mapped = {
   owner: "same",
   startedAt: "Fri Jan 2 10:17:36 1970",
 };
+const snapshot = (pids?: readonly number[]) =>
+  readDarwinProcessSnapshot(performance.now() + 1000, pids);
+const tree = (roots: readonly number[]) => readDarwinProcessTree(performance.now() + 1000, roots);
+const commandLine = () => readDarwinProcessCommandLine(123, performance.now() + 1000);
 beforeEach(() => {
   native.census.mockReset().mockReturnValue([row]);
   native.command.mockReset();
@@ -49,7 +53,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it("preserves persisted UTC lstart identities and selected PID queries", async () => {
-  expect(await readDarwinProcessSnapshot(performance.now() + 1000, [123])).toEqual([mapped]);
+  expect(await snapshot([123])).toEqual([mapped]);
   expect(native.census).toHaveBeenCalledExactlyOnceWith({
     timeoutMs: expect.any(Number),
     pids: [123],
@@ -59,14 +63,12 @@ it("preserves persisted UTC lstart identities and selected PID queries", async (
 it("omits incomplete topology only after proving that the PID disappeared", async () => {
   native.census.mockReturnValue([{ pid: 123, owner: "unknown" }]);
   native.identity.mockReturnValue(null);
-  expect(await readDarwinProcessSnapshot(performance.now() + 1000)).toEqual([]);
+  expect(await snapshot()).toEqual([]);
   expect(native.identity).toHaveBeenCalledExactlyOnceWith(123);
   native.identity.mockImplementation(() => {
     throw new ProcSafeError("access-denied", "denied");
   });
-  await expect(readDarwinProcessSnapshot(performance.now() + 1000)).rejects.toMatchObject({
-    reason: "permission",
-  });
+  await expect(snapshot()).rejects.toMatchObject({ reason: "permission" });
 });
 
 it.each([
@@ -99,10 +101,7 @@ it.each([
   native.census.mockImplementation(() => {
     throw new ProcSafeError(code, "unavailable");
   });
-  await expect(readDarwinProcessSnapshot(performance.now() + 1000)).rejects.toMatchObject({
-    reason,
-    code: mappedCode,
-  });
+  await expect(snapshot()).rejects.toMatchObject({ reason, code: mappedCode });
 });
 
 it("rejects observations completed after the caller's deadline", async () => {
@@ -120,12 +119,10 @@ it("rejects observations completed after the caller's deadline", async () => {
 
 it("does not confuse unreadable relevant identity with a vanished process", async () => {
   native.census.mockReturnValue([{ ...row, identity: undefined }]);
-  await expect(readDarwinProcessSnapshot(performance.now() + 1000, [123])).rejects.toMatchObject({
-    reason: "permission",
-  });
+  await expect(snapshot([123])).rejects.toMatchObject({ reason: "permission" });
   native.census.mockReturnValue([]);
-  expect(await readDarwinProcessSnapshot(performance.now() + 1000, [123])).toEqual([]);
-  expect(await readDarwinProcessSnapshot(performance.now() + 1000, [])).toEqual([]);
+  expect(await snapshot([123])).toEqual([]);
+  expect(await snapshot([])).toEqual([]);
 });
 
 it("requires identities only for the requested lineage and observer", async () => {
@@ -137,29 +134,23 @@ it("requires identities only for the requested lineage and observer", async () =
     child,
     { ...row, pid: 789, owner: "different", identity: undefined },
   ]);
-  expect(await readDarwinProcessTree(performance.now() + 1000, [123])).toEqual([
+  expect(await tree([123])).toEqual([
     { ...mapped, pid: process.pid },
     mapped,
     { ...mapped, pid: 456, ppid: 123 },
   ]);
   native.census.mockReturnValue([observer, row, { ...child, identity: undefined }]);
-  await expect(readDarwinProcessTree(performance.now() + 1000, [123])).rejects.toMatchObject({
-    reason: "permission",
-  });
+  await expect(tree([123])).rejects.toMatchObject({ reason: "permission" });
 });
 
 it("reads arguments without requesting environment and keeps errors distinct from absence", async () => {
   native.command.mockReturnValue({ argv: ["/opt/codex", "app-server"] });
-  expect(await readDarwinProcessCommandLine(123, performance.now() + 1000)).toBe(
-    "/opt/codex app-server",
-  );
+  expect(await commandLine()).toBe("/opt/codex app-server");
   expect(native.command).toHaveBeenCalledExactlyOnceWith(123);
   native.command.mockReturnValue(null);
-  expect(await readDarwinProcessCommandLine(123, performance.now() + 1000)).toBe("");
+  expect(await commandLine()).toBe("");
   native.command.mockImplementation(() => {
     throw new ProcSafeError("access-denied", "denied");
   });
-  await expect(readDarwinProcessCommandLine(123, performance.now() + 1000)).rejects.toMatchObject({
-    reason: "permission",
-  });
+  await expect(commandLine()).rejects.toMatchObject({ reason: "permission" });
 });

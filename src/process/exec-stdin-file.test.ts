@@ -68,33 +68,24 @@ it("settles cancellation without closing the caller's file descriptor", async ()
   }
 });
 
-it.each<{ options: CommandOptions; message: string }>([
-  {
-    options: { stdinFileDescriptor: 0, input: "payload" },
-    message: "either input or stdinFileDescriptor",
-  },
-  {
-    options: { stdinFileDescriptor: 0, beforeInput: () => undefined },
-    message: "admission requires explicit input",
-  },
-  { options: { stdinFileDescriptor: -1 }, message: "nonnegative integer" },
-  { options: { stdinFileDescriptor: 0.5 }, message: "nonnegative integer" },
-])(
-  "rejects ambiguous or invalid file input before spawning: $options",
-  async ({ options, message }) => {
-    const root = temporary.make("openclaw-command-stdin-rejected-");
-    const marker = path.join(root, "spawned");
-    await expect(
-      runCommandWithTimeout(
-        [
-          process.execPath,
-          "-e",
-          "require('node:fs').writeFileSync(process.argv[1], 'spawned')",
-          marker,
-        ],
-        { ...options, timeoutMs: 5_000 },
-      ),
-    ).rejects.toThrow(message);
-    expect(fs.existsSync(marker)).toBe(false);
-  },
-);
+it.each<[CommandOptions, string]>([
+  [{ stdinFileDescriptor: 0, input: "payload" }, "either input or stdinFileDescriptor"],
+  [{ stdinFileDescriptor: 0, beforeInput: () => undefined }, "admission requires explicit input"],
+  [{ stdinFileDescriptor: -1 }, "nonnegative integer"],
+  [{ stdinFileDescriptor: 0.5 }, "nonnegative integer"],
+])("rejects ambiguous or invalid file input before spawning: %j", async (options, message) => {
+  const root = temporary.make("openclaw-command-stdin-rejected-");
+  const marker = path.join(root, "spawned");
+  await expect(
+    runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        "require('node:fs').writeFileSync(process.argv[1], 'spawned')",
+        marker,
+      ],
+      { ...options, timeoutMs: 5_000 },
+    ),
+  ).rejects.toThrow(message);
+  expect(fs.existsSync(marker)).toBe(false);
+});

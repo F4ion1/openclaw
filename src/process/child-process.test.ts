@@ -5,30 +5,40 @@ import { execa, type ResultPromise } from "execa";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 
+function fakeChild(exitCode: number | null = null) {
+  const stdout = new PassThrough(),
+    stderr = new PassThrough();
+  const child = Object.assign(new EventEmitter(), { stdout, stderr, exitCode, signalCode: null });
+  return { child: child as unknown as ChildProcess, stdout, stderr };
+}
+
 describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExit", () => {
-  let child: ResultPromise | undefined;
+  let runningChild: ResultPromise | undefined;
+  const spawn = (command: string, buffer = true) =>
+    (runningChild = execa("/bin/sh", ["-c", command], {
+      buffer,
+      detached: true,
+      reject: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      stripFinalNewline: false,
+    }));
 
   afterEach(() => {
-    if (child?.pid) {
+    if (runningChild?.pid) {
       try {
-        process.kill(-child.pid, "SIGKILL");
+        process.kill(-runningChild.pid, "SIGKILL");
       } catch {}
     }
-    child = undefined;
+    runningChild = undefined;
     vi.useRealTimers();
   });
 
   it.each([250, 1_250])(
     "drains descendant output across a %ims event-loop stall",
     async (stallMs) => {
-      const command =
-        'printf "HEAD\\n"; printf "HEAD\\n" >&2; ( sleep 0.05; printf "TAIL\\n"; printf "TAIL\\n" >&2 ) &';
-      child = execa("/bin/sh", ["-c", command], {
-        detached: true,
-        reject: false,
-        stdio: ["ignore", "pipe", "pipe"],
-        stripFinalNewline: false,
-      });
+      const child = spawn(
+        'printf "HEAD\\n"; printf "HEAD\\n" >&2; ( sleep 0.05; printf "TAIL\\n"; printf "TAIL\\n" >&2 ) &',
+      );
       const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
 
       // Simulate a contended worker after the direct child exits. The descendant
@@ -49,12 +59,7 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
   );
 
   it("releases a quiet inherited pipe after the idle grace", async () => {
-    child = execa("/bin/sh", ["-c", 'printf "DONE\\n"; ( sleep 30 ) &'], {
-      buffer: false,
-      detached: true,
-      reject: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn('printf "DONE\\n"; ( sleep 30 ) &', false);
     const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
     let output = "";
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -71,17 +76,10 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
     "bounds continuously writing descendants when drain starts after exit=%s",
     async (alreadyExited) => {
       vi.useFakeTimers();
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      const fakeChild = Object.assign(new EventEmitter(), {
-        stdout,
-        stderr,
-        exitCode: alreadyExited ? 0 : null,
-        signalCode: null,
-      }) as unknown as ChildProcess;
-      const cleanup = releaseChildProcessOutputAfterExit(fakeChild);
+      const { child, stdout, stderr } = fakeChild(alreadyExited ? 0 : null);
+      const cleanup = releaseChildProcessOutputAfterExit(child);
       if (!alreadyExited) {
-        fakeChild.emit("exit", 0);
+        child.emit("exit", 0);
       }
       const writer = setInterval(() => stdout.write("TICK\n"), 30);
 
@@ -103,14 +101,9 @@ describe.skipIf(process.platform === "win32")("releaseChildProcessOutputAfterExi
 
   it.each(["idle", "hard"])("cancels pending %s release when cleaned up", async (deadline) => {
     vi.useFakeTimers();
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const fakeChild = Object.assign(new EventEmitter(), {
-      stdout,
-      stderr,
-    }) as unknown as ChildProcess;
-    const cleanup = releaseChildProcessOutputAfterExit(fakeChild);
-    fakeChild.emit("exit", 0);
+    const { child, stdout, stderr } = fakeChild();
+    const cleanup = releaseChildProcessOutputAfterExit(child);
+    child.emit("exit", 0);
     const writer = deadline === "hard" ? setInterval(() => stdout.write("TICK\n"), 30) : undefined;
 
     await vi.advanceTimersByTimeAsync(deadline === "hard" ? 1_000 : 100);
