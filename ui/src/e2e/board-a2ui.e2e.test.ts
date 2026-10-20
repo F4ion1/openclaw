@@ -161,6 +161,167 @@ suite.define(() => {
     });
   });
 
+  it("keeps v0.8 bindings, templated rows, and actions live in the rendered catalog", async () => {
+    const page = await suite.newPage();
+    await page.addScriptTag({
+      path: path.join(bundleDirectory, bundleFiles["v0.8"]),
+      type: "module",
+    });
+    await page.evaluate(() => {
+      Reflect.set(globalThis, "canvasActions", []);
+      Reflect.set(globalThis, "openclaw", {
+        state: {
+          emit: async (action: unknown) => {
+            Reflect.get(globalThis, "canvasActions").push(action);
+          },
+        },
+      });
+      document.body.append(document.createElement("openclaw-a2ui-host"));
+      Reflect.get(globalThis, "openclawA2UI").applyMessages([
+        {
+          surfaceUpdate: {
+            surfaceId: "main",
+            components: [
+              {
+                id: "root",
+                component: {
+                  Column: {
+                    children: {
+                      explicitList: ["field", "mirror", "list", "choice", "date", "time", "save"],
+                    },
+                  },
+                },
+              },
+              {
+                id: "field",
+                component: {
+                  TextField: { label: { literalString: "Name" }, text: { path: "/name" } },
+                },
+              },
+              { id: "mirror", component: { Text: { text: { path: "/name" } } } },
+              {
+                id: "date",
+                component: { DateTimeInput: { value: { path: "/date" }, enableTime: false } },
+              },
+              {
+                id: "time",
+                component: { DateTimeInput: { value: { path: "/time" }, enableDate: false } },
+              },
+              {
+                id: "list",
+                component: {
+                  List: { children: { template: { componentId: "row", dataBinding: "/items" } } },
+                },
+              },
+              {
+                id: "row",
+                component: { Column: { children: { explicitList: ["row-label", "choose"] } } },
+              },
+              { id: "row-label", component: { Text: { text: { path: "label" } } } },
+              {
+                id: "choose",
+                component: {
+                  Button: {
+                    child: "choose-label",
+                    action: {
+                      name: "choose",
+                      context: [{ key: "label", value: { path: "label" } }],
+                    },
+                  },
+                },
+              },
+              {
+                id: "choose-label",
+                component: { Text: { text: { literalString: "Choose row" } } },
+              },
+              {
+                id: "choice",
+                component: {
+                  MultipleChoice: {
+                    selections: { path: "/selected" },
+                    variant: "chips",
+                    options: [{ label: { literalString: "Alpha" }, value: "alpha" }],
+                  },
+                },
+              },
+              {
+                id: "save",
+                component: {
+                  Button: {
+                    child: "save-label",
+                    action: { name: "save", context: [{ key: "name", value: { path: "/name" } }] },
+                  },
+                },
+              },
+              { id: "save-label", component: { Text: { text: { literalString: "Save" } } } },
+            ],
+          },
+        },
+        {
+          dataModelUpdate: {
+            surfaceId: "main",
+            contents: [
+              { key: "name", valueString: "Initial" },
+              { key: "date", valueString: "2026-10-15" },
+              { key: "time", valueString: "12:30" },
+              { key: "selected", valueString: '["alpha"]' },
+              {
+                key: "items",
+                valueMap: [
+                  { key: "first", valueMap: [{ key: "label", valueString: "First row" }] },
+                ],
+              },
+            ],
+          },
+        },
+        { beginRendering: { surfaceId: "main", root: "root" } },
+      ]);
+    });
+    await page.getByText("First row", { exact: true }).waitFor();
+    await page.locator('input[type="date"]').fill("2026-10-16");
+    await page.locator('input[type="time"]').fill("13:30");
+    await expect.poll(() => page.locator('input[type="date"]').inputValue()).toBe("2026-10-16");
+    await expect.poll(() => page.locator('input[type="time"]').inputValue()).toBe("13:30");
+    const choice = page.getByRole("button", { name: "Alpha" });
+    await choice.click();
+    await expect.poll(() => choice.getAttribute("aria-pressed")).toBe("false");
+    await choice.click();
+    await expect.poll(() => choice.getAttribute("aria-pressed")).toBe("true");
+    const field = page.getByRole("textbox", { name: "Name", exact: true });
+    await field.fill("Edited");
+    await page.getByText("Edited", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "canvasActions")))
+      .toMatchObject([
+        { eventType: "a2ui.action", action: { name: "save", context: { name: "Edited" } } },
+      ]);
+    await page.getByRole("button", { name: "Choose row", exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "canvasActions")))
+      .toMatchObject([
+        { action: { name: "save" } },
+        { action: { name: "choose", context: { label: "First row" } } },
+      ]);
+    const retained = await field.elementHandle();
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "openclawA2UI").applyMessages([
+        {
+          dataModelUpdate: {
+            surfaceId: "main",
+            path: "/items",
+            contents: [{ key: "second", valueMap: [{ key: "label", valueString: "Second row" }] }],
+          },
+        },
+      ]),
+    );
+    await page.getByText("Second row", { exact: true }).waitFor();
+    expect(await field.evaluate((element, previous) => element === previous, retained)).toBe(true);
+    expect(await field.inputValue()).toBe("Edited");
+    await page.getByText("Updated: choose", { exact: true }).waitFor();
+    await retained?.dispose();
+  });
+
   for (const { version, colorScheme, rejectsAction, name } of [
     ...(["v0.8", "v0.9"] as const).flatMap((protocol) =>
       (["dark", "light"] as const).map((theme) => ({
