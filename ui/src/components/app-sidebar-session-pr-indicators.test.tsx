@@ -1,5 +1,5 @@
 import { createMemo, For } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
@@ -246,6 +246,16 @@ describe("Passive sidebar PR indicators", () => {
         { sessionKeys: [], passiveSessionKeys: [row.key] },
         { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
       );
+      const store = sessionPullRequestsForGateway(harness.gateway);
+      const activeOwner = {};
+      store.watch(activeOwner, [row.key], { foreground: true });
+      onTestFinished(() => store.unwatch(activeOwner));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.request).toHaveBeenLastCalledWith(
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        { sessionKeys: [row.key] },
+        { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+      );
 
       harness.emit({
         sessions: {
@@ -287,6 +297,24 @@ describe("Passive sidebar PR indicators", () => {
         numbers: [1, 2],
         state,
       });
+
+      harness.emit({
+        sessions: {
+          [row.key]: {
+            pullRequests: [],
+            rateLimited: false,
+            status: "unavailable",
+            discardPrevious: true,
+          },
+        },
+      });
+      await host.updateComplete;
+      expect(store.get(row.key)?.pullRequests).toEqual([]);
+      expect(host.textContent).toBe("");
+      expect(host.indicators.count(row.key)).toBe(0);
+      expect(
+        host.indicators.summary(row.key, row.worktreeId ?? "", { numbers: [99], state }),
+      ).toBeUndefined();
 
       harness.emit({
         sessions: {

@@ -155,6 +155,7 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
           continue;
         }
         if (
+          !snapshot.discardPrevious &&
           snapshot.status !== "ready" &&
           snapshot.pullRequests.length === 0 &&
           !snapshot.taskPullRequests?.length
@@ -165,6 +166,7 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
           continue;
         }
         const branchKnown =
+          snapshot.discardPrevious ||
           snapshot.branchRead !== false ||
           snapshot.pullRequestCount !== undefined ||
           snapshot.pullRequests.length > 0 ||
