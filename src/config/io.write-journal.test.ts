@@ -87,6 +87,13 @@ describe("config write and startup journal", () => {
       );
     });
 
+  const latestSlot = (home: string) =>
+    readLatestConfigSnapshotAuditRecordAsync({ env: process.env, homedir: () => home });
+  const externalRecords = (home: string) =>
+    listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
+      (record) => record.event === "config.external",
+    );
+
   async function reconcileStartup(snapshot: ConfigFileSnapshot) {
     const reloader = startGatewayConfigReloader({
       scheduler: createTestGatewayScheduler(),
@@ -124,20 +131,13 @@ describe("config write and startup journal", () => {
         expect(auditQueries).toEqual([]);
       });
       const writtenSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-      const slot = await readLatestConfigSnapshotAuditRecordAsync({
-        env: process.env,
-        homedir: () => home,
-      });
+      const slot = await latestSlot(home);
       expect(writtenSnapshot.valid).toBe(true);
       expect(slot).toMatchObject({ rawHash: write.persistedHash });
       expect(slot?.rawHash).toBe(writtenSnapshot.hash);
 
       await reconcileStartup(writtenSnapshot);
-      expect(
-        listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
-          (record) => record.event === "config.external",
-        ),
-      ).toEqual([]);
+      expect(externalRecords(home)).toEqual([]);
 
       const handEditedAuthoredConfig = structuredClone(writtenSnapshot.parsed) as OpenClawConfig;
       handEditedAuthoredConfig.gateway = { ...handEditedAuthoredConfig.gateway, port: 18790 };
@@ -145,10 +145,7 @@ describe("config write and startup journal", () => {
       const handEditedSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
       await reconcileStartup(handEditedSnapshot);
 
-      const externalRecord = listConfigAuditRecordsForTests({
-        env: process.env,
-        homedir: () => home,
-      }).findLast((record) => record.event === "config.external");
+      const externalRecord = externalRecords(home).at(-1);
       expect(externalRecord).toMatchObject({
         event: "config.external",
         detectedBy: "startup",
@@ -170,17 +167,11 @@ describe("config write and startup journal", () => {
         const snapshot = await readConfigFileSnapshotForRuntimeTransaction({});
         await reconcileStartup(snapshot);
 
-        expect(
-          listConfigAuditRecordsForTests({ env: process.env, homedir: () => home }).filter(
-            (record) => record.event === "config.external",
-          ),
-        ).toEqual([]);
-        expect(
-          await readLatestConfigSnapshotAuditRecordAsync({
-            env: process.env,
-            homedir: () => home,
-          }),
-        ).toMatchObject({ configPath: configPathB, rawHash: snapshot.hash });
+        expect(externalRecords(home)).toEqual([]);
+        expect(await latestSlot(home)).toMatchObject({
+          configPath: configPathB,
+          rawHash: snapshot.hash,
+        });
       });
     });
   });

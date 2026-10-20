@@ -131,33 +131,17 @@ describe("config io compatibility", () => {
   });
 
   it("normalizes safe-bin config entries at config load time", () => {
+    const globalExec = {
+      safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
+      safeBinProfiles: { " MyFilter ": { allowedValueFlags: ["--limit", " --limit ", ""] } },
+    };
+    const agentExec = {
+      safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
+      safeBinProfiles: { " Custom ": { deniedFlags: ["-f", " -f ", ""] } },
+    };
     const cfg = {
-      tools: {
-        exec: {
-          safeBinTrustedDirs: [" /custom/bin ", "", "/custom/bin", "/agent/bin"],
-          safeBinProfiles: {
-            " MyFilter ": {
-              allowedValueFlags: ["--limit", " --limit ", ""],
-            },
-          },
-        },
-      },
-      agents: {
-        entries: {
-          ops: {
-            tools: {
-              exec: {
-                safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
-                safeBinProfiles: {
-                  " Custom ": {
-                    deniedFlags: ["-f", " -f ", ""],
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
+      tools: { exec: globalExec },
+      agents: { entries: { ops: { tools: { exec: agentExec } } } },
     };
     normalizeExecSafeBinProfilesInConfig(cfg);
     expect(cfg.tools?.exec?.safeBinProfiles).toEqual({

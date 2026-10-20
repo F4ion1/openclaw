@@ -129,9 +129,7 @@ describe("config IO with deferred plugin migrations", () => {
     },
   );
   it("normal reads and writes never inspect deferred migration records", async () => {
-    const root = tempDirs.make("openclaw-canonical-config-");
-    const configPath = path.join(root, "openclaw.json");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
+    const { configPath, env, ioOptions } = fixture();
     fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local", port: 18789 } }));
     await recordDeferredPluginMigrations({
       env,
@@ -147,13 +145,7 @@ describe("config IO with deferred plugin migrations", () => {
         "deferred-plugin-migration:sample",
       );
     }
-    const io = createConfigIO({
-      env,
-      configPath,
-      observe: false,
-      pluginValidation: "skip",
-      shellEnvFallback: "defer",
-    });
+    const io = createConfigIO(ioOptions);
     expect(io.loadConfig().gateway?.port).toBe(18789);
     expect((await io.loadConfigAsync()).gateway?.port).toBe(18789);
     expect((await io.readConfigFileSnapshot()).valid).toBe(true);
@@ -162,13 +154,7 @@ describe("config IO with deferred plugin migrations", () => {
         .valid,
     ).toBe(true);
     expect(readCurrentConfigForPolicyCheck({ env, configPath }).gateway?.port).toBe(18789);
-    await io.writeConfigFile(
-      { gateway: { mode: "local", port: 18790 } },
-      {
-        skipPluginValidation: true,
-        skipRuntimeSnapshotRefresh: true,
-      },
-    );
+    await io.writeConfigFile({ gateway: { mode: "local", port: 18790 } }, writeOptions);
     expect(JSON.parse(fs.readFileSync(configPath, "utf8")).gateway.port).toBe(18790);
     const prepared = await io.readConfigFileSnapshotForWrite();
     await replaceConfigFile({
@@ -204,9 +190,7 @@ describe("config IO with deferred plugin migrations", () => {
           { gateway: { mode: "local", port: 18790 } },
           {
             ...repairOptions,
-            beforeCommit: async () => {
-              await recordDeferredPluginMigrations({ env, pending: [stronger] });
-            },
+            beforeCommit: () => recordDeferredPluginMigrations({ env, pending: [stronger] }),
           },
         ),
       ).rejects.toBeInstanceOf(DeferredPluginMigrationConflictError);
@@ -279,9 +263,8 @@ describe("config IO with deferred plugin migrations", () => {
         writeOptions: {
           ...prepared.writeOptions,
           ...repairOptions,
-          preCommitRuntimePreflight: async () => {
-            await recordDeferredPluginMigrations({ env, pending: [stronger] });
-          },
+          preCommitRuntimePreflight: () =>
+            recordDeferredPluginMigrations({ env, pending: [stronger] }),
         },
       }),
     ).rejects.toBeInstanceOf(DeferredPluginMigrationConflictError);
@@ -361,24 +344,20 @@ describe("config IO with deferred plugin migrations", () => {
 
     const replacement = structuredClone(snapshot.sourceConfig);
     replacement.plugins = { entries: { sample: { config: { legacyRoot: "/srv/replacement" } } } };
-    await expect(
-      io.writeConfigFile(replacement, {
-        explicitSetPaths: [["plugins", "entries", "sample", "config", "legacyRoot"]],
-        ...writeOptions,
-      }),
-    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
-    await expect(
-      io.writeConfigFile(replacement, {
-        auditOrigin: "config-rpc",
-        ...writeOptions,
-      }),
-    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
-    await expect(
-      io.writeConfigFile(snapshot.sourceConfig, {
-        unsetPaths: [["plugins", "entries", "sample", "config"]],
-        ...writeOptions,
-      }),
-    ).rejects.toThrow('Plugin "sample" data/settings upgrade is unfinished');
+    const expectProtectedWrite = (
+      config: Parameters<typeof io.writeConfigFile>[0],
+      options: Parameters<typeof io.writeConfigFile>[1],
+    ) =>
+      expect(io.writeConfigFile(config, { ...options, ...writeOptions })).rejects.toThrow(
+        'Plugin "sample" data/settings upgrade is unfinished',
+      );
+    await expectProtectedWrite(replacement, {
+      explicitSetPaths: [["plugins", "entries", "sample", "config", "legacyRoot"]],
+    });
+    await expectProtectedWrite(replacement, { auditOrigin: "config-rpc" });
+    await expectProtectedWrite(snapshot.sourceConfig, {
+      unsetPaths: [["plugins", "entries", "sample", "config"]],
+    });
     expect(fs.readFileSync(configPath, "utf8")).toBe(JSON.stringify(source));
 
     await io.writeConfigFile({ gateway: { mode: "local", port: 18790 } }, repairOptions);
@@ -459,9 +438,7 @@ describe("config IO with deferred plugin migrations", () => {
     };
 
     await expect(
-      complete(async () => {
-        await recordDeferredPluginMigrations({ env, pending: [late] });
-      }),
+      complete(() => recordDeferredPluginMigrations({ env, pending: [late] })),
     ).rejects.toBeInstanceOf(DeferredPluginMigrationConflictError);
     expect(ledger.pendingReadsOutsideWrites).toBe(0);
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);

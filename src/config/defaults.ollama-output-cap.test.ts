@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { applyModelDefaults } from "./defaults.js";
+import type { ModelDefinitionConfig } from "./types.models.js";
 import { validateConfigObjectRaw } from "./validation-core.js";
 
 const rootDir = path.resolve("extensions/ollama");
@@ -13,6 +14,22 @@ if (!loaded.ok) {
 const manifestRegistry = {
   plugins: [createPluginManifestRecordFixture({ ...loaded.manifest, rootDir })],
 };
+
+function materialize(
+  provider: string,
+  id: string,
+  baseUrl: string,
+  model: Partial<ModelDefinitionConfig> = {},
+  maxTokens?: number,
+) {
+  const config = { baseUrl, api: "ollama", maxTokens, models: [{ id, name: id, ...model }] };
+  const parsed = validateConfigObjectRaw({ models: { providers: { [provider]: config } } });
+  if (!parsed.ok) {
+    throw new Error(JSON.stringify(parsed.issues));
+  }
+  return applyModelDefaults(parsed.config, { manifestRegistry }).models?.providers?.[provider]
+    ?.models[0];
+}
 
 describe("Ollama configured output budgets", () => {
   it.each([
@@ -33,22 +50,7 @@ describe("Ollama configured output budgets", () => {
     ["nemotron-3-super", 262_144],
     ["nemotron-3-ultra", 262_144],
   ])("materializes %s from the authored cloud catalog", (id, expected) => {
-    const parsed = validateConfigObjectRaw({
-      models: {
-        providers: {
-          "ollama-cloud": {
-            baseUrl: "https://ollama.com",
-            api: "ollama",
-            models: [{ id, name: id }],
-          },
-        },
-      },
-    });
-    if (!parsed.ok) {
-      throw new Error(JSON.stringify(parsed.issues));
-    }
-    const materialized = applyModelDefaults(parsed.config, { manifestRegistry });
-    expect(materialized.models?.providers?.["ollama-cloud"]?.models[0]?.maxTokens).toBe(expected);
+    expect(materialize("ollama-cloud", id, "https://ollama.com")?.maxTokens).toBe(expected);
   });
 
   it.each([
@@ -77,32 +79,20 @@ describe("Ollama configured output budgets", () => {
   ])(
     "materializes $id at $baseUrl (model URL $modelBaseUrl) with authored cap $maxTokens",
     ({ id, baseUrl, modelBaseUrl, maxTokens, providerMaxTokens, expected }) => {
-      const parsed = validateConfigObjectRaw({
-        models: {
-          providers: {
-            ollama: {
-              baseUrl,
-              api: "ollama",
-              maxTokens: providerMaxTokens,
-              models: [
-                {
-                  id,
-                  name: id,
-                  baseUrl: modelBaseUrl,
-                  contextWindow: 262_144,
-                  maxTokens,
-                  params: { num_predict: -1 },
-                },
-              ],
-            },
+      expect(
+        materialize(
+          "ollama",
+          id,
+          baseUrl,
+          {
+            baseUrl: modelBaseUrl,
+            contextWindow: 262_144,
+            maxTokens,
+            params: { num_predict: -1 },
           },
-        },
-      });
-      if (!parsed.ok) {
-        throw new Error(JSON.stringify(parsed.issues));
-      }
-      const materialized = applyModelDefaults(parsed.config, { manifestRegistry });
-      expect(materialized.models?.providers?.ollama?.models[0]).toMatchObject({
+          providerMaxTokens,
+        ),
+      ).toMatchObject({
         maxTokens: expected,
         params: { num_predict: -1 },
       });

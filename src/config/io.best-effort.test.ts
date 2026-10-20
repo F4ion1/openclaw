@@ -13,17 +13,27 @@ import { readCurrentConfigForResolution } from "./io.runtime.js";
 import { resetConfigOverrides, setConfigOverride } from "./runtime-overrides.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
+function resolutionWarning(configPath: string) {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(readCurrentConfigForResolution({ configPath }).config).toEqual({});
+    return warn.mock.calls.map(([line]) => String(line)).join("\n");
+  } finally {
+    warn.mockRestore();
+  }
+}
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  resetConfigOverrides();
+});
+
 const cachePruningConfig = {
   auth: { profiles: { "anthropic:api": { provider: "anthropic", mode: "api_key" as const } } },
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 };
 
 describe("readBestEffortConfig", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    resetConfigOverrides();
-  });
-
   it("records why an unparseable config was ignored by best-effort reads", async () => {
     await withTempHome(async (home) => {
       const configPath = `${home}/.openclaw/openclaw.json`;
@@ -50,8 +60,9 @@ describe("readBestEffortConfig", () => {
     await withTempHome(async (home) => {
       const mixedCaseKey = "OpenClaw_Config_Path";
       const customConfigPath = `${home}/custom-openclaw.json`;
-      await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
-        await withEnvAsync({ [mixedCaseKey]: customConfigPath }, async () => {
+      await withEnvAsync(
+        { OPENCLAW_CONFIG_PATH: undefined, [mixedCaseKey]: customConfigPath },
+        async () => {
           const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
           try {
             await fs.writeFile(
@@ -67,8 +78,8 @@ describe("readBestEffortConfig", () => {
           } finally {
             platformSpy.mockRestore();
           }
-        });
-      });
+        },
+      );
     });
   });
 
@@ -156,11 +167,6 @@ describe("readBestEffortConfig", () => {
 });
 
 describe("readCurrentConfigForResolution", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    resetConfigOverrides();
-  });
-
   it.each([1, null])(
     "emits the directory-resolution warning with a malformed redaction entry %j",
     async (entry) => {
@@ -169,19 +175,12 @@ describe("readCurrentConfigForResolution", () => {
           logging: { redactPatterns: [entry] },
           skills: { workshop: { approvalPolicy: "pending", maxPending: 3 } },
         });
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        try {
-          const resolution = readCurrentConfigForResolution({ configPath });
-          expect(resolution.config).toEqual({});
-          const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
-          expect(warning).toContain("Config warnings:");
-          expect(warning).toContain(
-            "Config unavailable; using environment and default agent directory settings.",
-          );
-          expect(warning).toContain("logging.redactPatterns");
-        } finally {
-          warn.mockRestore();
-        }
+        const warning = resolutionWarning(configPath);
+        expect(warning).toContain("Config warnings:");
+        expect(warning).toContain(
+          "Config unavailable; using environment and default agent directory settings.",
+        );
+        expect(warning).toContain("logging.redactPatterns");
       });
     },
   );
@@ -191,40 +190,22 @@ describe("readCurrentConfigForResolution", () => {
       const configPath = await writeOpenClawConfig(home, {
         gateway: { port: "abc" },
       } as never);
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      try {
-        const resolution = readCurrentConfigForResolution({ configPath });
-
-        expect(resolution.config).toEqual({});
-        const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
-        expect(warning).toContain("Config unavailable");
-        // The degraded read must not hide why the file was rejected; doctor repairs the
-        // same file moments later, so a bare availability warning is misleading.
-        expect(warning).toContain("expected number, received string");
-      } finally {
-        warn.mockRestore();
-      }
+      const warning = resolutionWarning(configPath);
+      expect(warning).toContain("Config unavailable");
+      // The degraded read must not hide why the file was rejected; doctor repairs the
+      // same file moments later, so a bare availability warning is misleading.
+      expect(warning).toContain("expected number, received string");
     });
   });
 
   it("keeps the plain availability warning for an absent config file", async () => {
     await withTempHome(async (home) => {
       const configPath = `${home}/.openclaw/absent.json`;
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      try {
-        const resolution = readCurrentConfigForResolution({ configPath });
-
-        expect(resolution.config).toEqual({});
-        const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
-        // Absent files carry no rejection reason, so the warning stays plain.
-        expect(warning).toContain(
-          `${configPath}: Config unavailable; using environment and default agent directory settings.`,
-        );
-      } finally {
-        warn.mockRestore();
-      }
+      const warning = resolutionWarning(configPath);
+      // Absent files carry no rejection reason, so the warning stays plain.
+      expect(warning).toContain(
+        `${configPath}: Config unavailable; using environment and default agent directory settings.`,
+      );
     });
   });
 });

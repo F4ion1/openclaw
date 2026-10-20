@@ -39,6 +39,9 @@ function createTempConfig(files: Record<string, string>): string {
   return path.join(dir, "openclaw.json5");
 }
 
+const configFile = (config: unknown) =>
+  createTempConfig({ "openclaw.json5": JSON.stringify(config) });
+
 afterEach(() => {
   vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
@@ -75,16 +78,17 @@ describe("readGatewayDispatchConfig", () => {
 
     const config = readGatewayDispatchConfig({ env });
 
-    expect(config.gateway?.port).toBe(18888);
-    expect(config.gateway?.auth).toMatchObject({ mode: "token", token: "inline-token" });
-    expect(config.agents?.defaults?.timeoutSeconds).toBe(42);
+    expect(config).toMatchObject({
+      gateway: { port: 18888, auth: { mode: "token", token: "inline-token" } },
+      agents: { defaults: { timeoutSeconds: 42 } },
+      session: { mainKey: "main" },
+    });
     expect(config.agents?.entries).toEqual({ ops: {} });
     expect(config.plugins).toEqual({
       allow: ["vault"],
       entries: { vault: { enabled: true } },
       load: { paths: ["./plugins/vault"] },
     });
-    expect(config.session?.mainKey).toBe("main");
     expect((config as { models?: unknown }).models).toBeUndefined();
     expect(shellEnvMocks.loadShellEnvFallback).not.toHaveBeenCalled();
   });
@@ -111,11 +115,9 @@ describe("readGatewayDispatchConfig", () => {
       expected: "${TOKEN}",
     },
   ])("preserves $name literal credentials through session defaults", ({ token, env, expected }) => {
-    const configPath = createTempConfig({
-      "openclaw.json5": JSON.stringify({
-        gateway: { auth: { mode: "token", token } },
-        session: { mainKey: "custom" },
-      }),
+    const configPath = configFile({
+      gateway: { auth: { mode: "token", token } },
+      session: { mainKey: "custom" },
     });
 
     const config = readGatewayDispatchConfig({ configPath, env });
@@ -130,9 +132,7 @@ describe("readGatewayDispatchConfig", () => {
   it.each(["${MISSING_TOKEN}", "prefix-${MISSING_TOKEN}"])(
     "rejects an unresolved credential %s",
     (token) => {
-      const configPath = createTempConfig({
-        "openclaw.json5": JSON.stringify({ gateway: { auth: { mode: "token", token } } }),
-      });
+      const configPath = configFile({ gateway: { auth: { mode: "token", token } } });
       const config = readGatewayDispatchConfig({ configPath, env: {} });
 
       expect(() => resolveGatewayCredentialsFromConfig({ cfg: config, env: {} })).toThrow(
@@ -146,9 +146,7 @@ describe("readGatewayDispatchConfig", () => {
     { name: "deferred", enabled: true, deferred: true },
     { name: "unchanged", enabled: true, deferred: false },
   ])("reads config once when shell fallback is $name", async ({ enabled, deferred }) => {
-    const configPath = createTempConfig({
-      "openclaw.json5": JSON.stringify({ gateway: { port: 18888 } }),
-    });
+    const configPath = configFile({ gateway: { port: 18888 } });
     shellEnvMocks.shouldEnableShellEnvFallback.mockReturnValue(enabled);
     shellEnvMocks.shouldDeferShellEnvFallback.mockReturnValue(deferred);
     const readFile = vi.spyOn(fs, "readFileSync");
