@@ -15,40 +15,35 @@ export function createTrustedInternalChatSendFixture(chatSend: (...args: unknown
     options: Pick<ChatSendInternalOptions, "beforeDispatch">,
   ) => {
     let registration: Promise<void | (() => void)> | undefined;
-    const result = chatSend(
-      {
-        ...request,
-        respond: (...args: Parameters<RespondFn>) => {
-          const [ok, payload] = args;
-          const acknowledgement = payload as { runId?: string; status?: string } | undefined;
-          if (
-            ok &&
-            acknowledgement?.runId &&
-            (!acknowledgement.status || acknowledgement.status === "started")
-          ) {
-            registration = options.beforeDispatch?.({
-              runId: acknowledgement.runId,
-              assertCurrent() {},
-              assertWorkAdmissionCurrent() {},
-            });
-          }
-          if (!registration) {
-            return request.respond(...args);
-          }
-          void registration.then(
-            () => request.respond(...args),
-            (error: unknown) =>
-              request.respond(false, undefined, {
-                code: ErrorCodes.UNAVAILABLE,
-                message: String(error),
-              }),
-          );
+    return Promise.resolve(
+      chatSend(
+        {
+          ...request,
+          respond: (...args: Parameters<RespondFn>) => {
+            const [ok, payload] = args;
+            const { runId, status } = (payload ?? {}) as { runId?: string; status?: string };
+            if (ok && runId && (!status || status === "started")) {
+              registration = options.beforeDispatch?.({
+                runId,
+                assertCurrent() {},
+                assertWorkAdmissionCurrent() {},
+              });
+            }
+            const respond = () => request.respond(...args);
+            return registration
+              ? void registration.then(respond, (error: unknown) =>
+                  request.respond(false, undefined, {
+                    code: ErrorCodes.UNAVAILABLE,
+                    message: String(error),
+                  }),
+                )
+              : respond();
+          },
         },
-      },
-      onAdmissionOwned,
-      options,
-    );
-    return Promise.resolve(result).then(() => registration);
+        onAdmissionOwned,
+        options,
+      ),
+    ).then(() => registration);
   };
 }
 
@@ -62,19 +57,17 @@ export function createBrowserProvider(createBrowserSession: BrowserSessionFactor
   };
 }
 
+function browserCredentials(clientSecret: string) {
+  return { provider: "openai", transport: "webrtc" as const, clientSecret };
+}
+
 export function createBrowserSessionMock() {
-  return vi.fn(async (_input: unknown) => ({
-    provider: "openai",
-    transport: "webrtc" as const,
-    clientSecret: "secret",
-  }));
+  return vi.fn(async (_input: unknown) => browserCredentials("secret"));
 }
 
 export type BrowserRequest = Parameters<BrowserSessionFactory>[0];
 export const browserSession = {
-  provider: "openai",
-  transport: "webrtc" as const,
-  clientSecret: "test-pending-offer",
+  ...browserCredentials("test-pending-offer"),
   offerUrl: "/plugins/openai/realtime/calls",
 };
 

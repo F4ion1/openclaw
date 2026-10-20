@@ -63,18 +63,15 @@ it.each(["success", "provider failure", "transcript failure"])(
         role: "user",
         text: "cancel",
       });
-      expect(flushTranscript).not.toHaveBeenCalled();
-      expect(closeLogicalSession).not.toHaveBeenCalled();
+      expect([flushTranscript.mock.calls, closeLogicalSession.mock.calls]).toEqual([[], []]);
       finishProvider.resolve();
       await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
       owner.control.onTranscript?.("user", "late after disposal", true);
-      expect(appendTranscript).toHaveBeenCalledOnce();
       expect(closeLogicalSession).not.toHaveBeenCalled();
       finishWrite.resolve();
       expect(await closing).toBe(outcome === "success" ? undefined : failure);
       expect(closeLogicalSession).toHaveBeenCalledOnce();
-      expect(controlAgentRun).not.toHaveBeenCalled();
-      expect(talkEvents).not.toHaveBeenCalled();
+      expect([controlAgentRun.mock.calls, talkEvents.mock.calls]).toEqual([[], []]);
       owner.control.onTranscript?.("assistant", "late after logical close", true);
       expect(appendTranscript).toHaveBeenCalledOnce();
     } finally {
