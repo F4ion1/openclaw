@@ -1,5 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionCreateTarget } from "./session-create-target.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
@@ -47,28 +48,32 @@ async function fixture() {
     incognito: true as const,
   };
   const result = await storage.mutate(
-    {
-      type: "session.entry.create",
-      input: {
-        entry,
-      },
-    },
+    { type: "session.entry.create", input: { entry } },
     authority,
   );
   expect(result.kind).toBe("committed");
-  return { owner, storage, entry };
+  return {
+    owner,
+    patch: (patch: Partial<SessionEntry>) =>
+      storage.mutate(
+        { type: "session.entry.patch", input: { operation: { kind: "fields", patch } } },
+        authority,
+      ),
+    reset: {
+      key,
+      agentId: "main",
+      storePath: path,
+      target: { canonicalKey: key, storeKeys: [key] },
+      entry,
+      commitGuard() {},
+    },
+  };
 }
 
 it("reads committed actor changes through Gateway target and creation preparation", async () => {
-  const { storage } = await fixture();
+  const { patch } = await fixture();
   const target = await resolveGatewaySessionStoreTargetInWorker({ cfg, key, agentId: "main" });
-  await storage.mutate(
-    {
-      type: "session.entry.patch",
-      input: { operation: { kind: "fields", patch: { displayName: "Current title" } } },
-    },
-    authority,
-  );
+  await patch({ displayName: "Current title" });
   expect(
     (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }, cfg)).entry?.displayName,
   ).toBe("Current title");
@@ -78,27 +83,11 @@ it("reads committed actor changes through Gateway target and creation preparatio
 });
 
 it("resets the selected session after cleanup writes metadata without requiring its old row", async () => {
-  const { storage, owner, entry } = await fixture();
+  const { patch, owner, reset } = await fixture();
   const result = await deleteIncognitoSessionForReset({
-    key,
-    agentId: "main",
-    storePath: path,
-    target: { canonicalKey: key, storeKeys: [key] },
-    entry,
-    commitGuard() {},
+    ...reset,
     async beforeDelete() {
-      await storage.mutate(
-        {
-          type: "session.entry.patch",
-          input: {
-            operation: {
-              kind: "fields",
-              patch: { displayName: "Cleanup complete", updatedAt: 2 },
-            },
-          },
-        },
-        authority,
-      );
+      await patch({ displayName: "Cleanup complete", updatedAt: 2 });
     },
   });
   expect(result).toEqual({ ok: true, value: { deletedSessionId: "original" } });
@@ -106,15 +95,11 @@ it("resets the selected session after cleanup writes metadata without requiring 
 });
 
 it("checks live deletion authority after asynchronous cleanup", async () => {
-  const { owner, entry } = await fixture();
+  const { owner, reset } = await fixture();
   let allowed = true;
   await expect(
     deleteIncognitoSessionForReset({
-      key,
-      agentId: "main",
-      storePath: path,
-      target: { canonicalKey: key, storeKeys: [key] },
-      entry,
+      ...reset,
       commitGuard() {
         if (!allowed) {
           throw new Error("Deletion authority revoked");
