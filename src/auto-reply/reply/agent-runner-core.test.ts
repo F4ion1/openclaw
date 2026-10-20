@@ -12,45 +12,23 @@ import {
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
 
-it.each([false, true])(
-  "awaits restart recovery before choosing the error reply (%s)",
-  async (armed) => {
-    const replyOperation = createReplyOperation({
-      sessionKey: `agent:main:restart-read-${armed}`,
-      sessionId: `restart-read-${armed}`,
-      turnKind: "visible",
-      resetTriggered: false,
-    });
-    replyOperation.abortForRestart();
-    try {
-      const reply = await handleReplyAgentRunError(new Error("restart"), {
-        resolveVisibleReplyDelivery: async () => false,
-        isHeartbeat: false,
-        replyExpectation: "required",
-        isRestartRecoveryArmed: async () => armed,
-        replyOperation,
-        resolvedVerboseLevel: "off",
-        returnWithQueuedFollowupDrain: (value) => value,
-        sessionCtx: {},
-      });
-      expect(reply?.text).toBe(
-        armed ? undefined : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-      );
-    } finally {
-      replyOperation.complete();
-    }
-  },
-);
-
-it("renders restart recovery ownership changes as session guidance", async () => {
+async function runError(
+  id: string,
+  error: unknown,
+  overrides: Partial<Parameters<typeof handleReplyAgentRunError>[1]> = {},
+  restart = false,
+) {
   const replyOperation = createReplyOperation({
-    sessionKey: "agent:main:restart-claim-changed",
-    sessionId: "restart-claim-changed",
+    sessionKey: `agent:main:${id}`,
+    sessionId: id,
     turnKind: "visible",
     resetTriggered: false,
   });
+  if (restart) {
+    replyOperation.abortForRestart();
+  }
   try {
-    const reply = await handleReplyAgentRunError(createRestartRecoveryClaimChangedError(), {
+    return await handleReplyAgentRunError(error, {
       resolveVisibleReplyDelivery: async () => false,
       isHeartbeat: false,
       replyExpectation: "required",
@@ -59,49 +37,48 @@ it("renders restart recovery ownership changes as session guidance", async () =>
       resolvedVerboseLevel: "off",
       returnWithQueuedFollowupDrain: (value) => value,
       sessionCtx: {},
+      ...overrides,
     });
-
-    expect(reply?.text).toBe(
-      "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
-    );
-    expect(reply?.text).not.toContain("restart recovery claim");
   } finally {
     replyOperation.complete();
   }
+}
+
+it.each([false, true])(
+  "awaits restart recovery before choosing the error reply (%s)",
+  async (armed) => {
+    const reply = await runError(
+      `restart-read-${armed}`,
+      new Error("restart"),
+      { isRestartRecoveryArmed: async () => armed },
+      true,
+    );
+    expect(reply?.text).toBe(
+      armed ? undefined : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+    );
+  },
+);
+
+it("renders restart recovery ownership changes as session guidance", async () => {
+  const reply = await runError("restart-claim-changed", createRestartRecoveryClaimChangedError());
+  expect(reply?.text).toBe(
+    "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
+  );
+  expect(reply?.text).not.toContain("restart recovery claim");
 });
 
 it.each([false, true])(
   "keeps setup failures retryable only before durable acceptance (%s)",
   async (accepted) => {
-    const replyOperation = createReplyOperation({
-      sessionKey: `agent:main:input-acceptance-${accepted}`,
-      sessionId: `input-acceptance-${accepted}`,
-      turnKind: "visible",
-      resetTriggered: false,
-    });
     const failure = new Error("ENOSPC: turn preparation failed");
-    try {
-      const reply = handleReplyAgentRunError(failure, {
-        resolveVisibleReplyDelivery: async () => false,
-        isHeartbeat: false,
-        replyExpectation: "required",
-        userTurnAccepted: accepted,
-        isRestartRecoveryArmed: async () => false,
-        replyOperation,
-        resolvedVerboseLevel: "off",
-        returnWithQueuedFollowupDrain: (value) => value,
-        sessionCtx: {},
+    const reply = runError(`input-acceptance-${accepted}`, failure, { userTurnAccepted: accepted });
+    if (accepted) {
+      await expect(reply).resolves.toMatchObject({
+        isError: true,
+        text: expect.not.stringContaining(SILENT_REPLY_TOKEN),
       });
-      if (accepted) {
-        await expect(reply).resolves.toMatchObject({
-          isError: true,
-          text: expect.not.stringContaining(SILENT_REPLY_TOKEN),
-        });
-      } else {
-        await expect(reply).rejects.toBe(failure);
-      }
-    } finally {
-      replyOperation.complete();
+    } else {
+      await expect(reply).rejects.toBe(failure);
     }
   },
 );

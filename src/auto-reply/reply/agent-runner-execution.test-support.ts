@@ -4,7 +4,6 @@ import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
-import type { DeferredEmbeddedRunLifecycleOwner } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
@@ -100,10 +99,9 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
-vi.mock("../../agents/embedded-agent-runner/run-entry.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../agents/embedded-agent-runner/run-entry.js")
-  >("../../agents/embedded-agent-runner/run-entry.js");
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agents/embedded-agent-runner/run-entry.js")>();
   return {
     ...actual,
     runEmbeddedAgentEntry: (params: RunEntryParams) =>
@@ -169,37 +167,28 @@ vi.mock("../../agents/model-fallback-attempt.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/model-selection.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
-    "../../agents/model-selection.js",
-  );
-  return {
-    ...actual,
-    isCliProvider: (provider: unknown) => state.isCliProviderMock(provider),
-  };
-});
+vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
+  isCliProvider: (provider: unknown) => state.isCliProviderMock(provider),
+}));
 
-vi.mock("../../agents/bootstrap-budget.js", async () => ({
-  ...(await vi.importActual<typeof import("../../agents/bootstrap-budget.js")>(
-    "../../agents/bootstrap-budget.js",
-  )),
+vi.mock("../../agents/bootstrap-budget.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/bootstrap-budget.js")>()),
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
-vi.mock("../../agents/embedded-agent-helpers/context-overflow-observation.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../agents/embedded-agent-helpers/context-overflow-observation.js")
-  >("../../agents/embedded-agent-helpers/context-overflow-observation.js");
-  return {
-    ...actual,
+vi.mock(
+  "../../agents/embedded-agent-helpers/context-overflow-observation.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../agents/embedded-agent-helpers/context-overflow-observation.js")
+    >()),
     isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
-  };
-});
+  }),
+);
 
-vi.mock("../../agents/failover/context-overflow.js", async () => ({
-  ...(await vi.importActual<typeof import("../../agents/failover/context-overflow.js")>(
-    "../../agents/failover/context-overflow.js",
-  )),
+vi.mock("../../agents/failover/context-overflow.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/failover/context-overflow.js")>()),
   isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
   isLikelyContextOverflowError: (message?: string) =>
     state.isLikelyContextOverflowErrorMock(message),
@@ -213,15 +202,13 @@ vi.mock("../../config/sessions.js", async (importOriginal) => ({
   updateSessionStore: state.updateSessionStoreMock,
 }));
 
-vi.mock("../../globals.js", async () => ({
-  ...(await vi.importActual<typeof import("../../globals.js")>("../../globals.js")),
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
 }));
 
-vi.mock("../../infra/agent-events.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-    "../../infra/agent-events.js",
-  );
+vi.mock("../../infra/agent-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
   const emitAgentEvent = vi.fn((...args: Parameters<typeof actual.emitAgentEvent>) =>
     actual.emitAgentEvent(...args),
   );
@@ -232,16 +219,11 @@ vi.mock("../../infra/agent-events.js", async () => {
     registerAgentRunContext: vi.fn(),
   };
 });
-vi.mock("../../infra/agent-run-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
-    "../../infra/agent-run-registry.js",
-  );
-  return {
-    ...actual,
-    clearAgentRunContext: vi.fn(),
-    registerAgentRunContext: vi.fn(),
-  };
-});
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
+  clearAgentRunContext: vi.fn(),
+  registerAgentRunContext: vi.fn(),
+}));
 
 vi.mock("../../infra/message-tool-run-outcome-store.js", () => ({
   recordMessageToolRunOutcome: (params: unknown) => state.recordMessageToolRunOutcomeMock(params),
@@ -259,33 +241,24 @@ vi.mock("../../runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../utils/message-channel.js", async () => ({
-  ...(await vi.importActual<typeof import("../../utils/message-channel.js")>(
-    "../../utils/message-channel.js",
-  )),
+vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/message-channel.js")>()),
   isMarkdownCapableMessageChannel: () => true,
   resolveMessageChannel: () => "whatsapp",
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
 }));
 
-vi.mock("../heartbeat.js", async () => {
-  const actual = await vi.importActual<typeof import("../heartbeat.js")>("../heartbeat.js");
-  return {
-    ...actual,
-    stripHeartbeatToken: (text: string) => ({
-      text,
-      didStrip: false,
-      shouldSkip: false,
-    }),
-  };
-});
+vi.mock("../heartbeat.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../heartbeat.js")>()),
+  stripHeartbeatToken: (text: string) => ({ text, didStrip: false, shouldSkip: false }),
+}));
 
 vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
 }));
 
-vi.mock("./agent-runner-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js")),
+vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   mintReplyMessageActionTurnCapability: state.mintReplyMessageActionTurnCapabilityMock,
   buildEmbeddedRunExecutionParams: (
     params: Parameters<typeof buildEmbeddedRunExecutionParams>[0],
@@ -340,9 +313,7 @@ vi.mock("./reply-delivery.js", async (importOriginal) => ({
 
 vi.mock("./reply-media-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./reply-media-paths.js")>()),
-  createReplyMediaContext: () => ({
-    normalizePayload: (payload: unknown) => payload,
-  }),
+  createReplyMediaContext: () => ({ normalizePayload: (payload: unknown) => payload }),
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
@@ -409,54 +380,29 @@ export {
   runInitialModelFallbackAttempt as runInitialFallbackAttempt,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 
-export type EmbeddedAgentParams = {
+export type EmbeddedAgentParams = Pick<
+  RunEmbeddedAgentInternalParams,
+  | "currentInboundContext"
+  | "onDeferredLifecycleOwner"
+  | "onCompactionAccounting"
+  | "onExecutionStarted"
+  | "onExecutionPhase"
+  | "onLaneWait"
+  | "onAssistantMessageStart"
+  | "onAutoCompactionSucceeded"
+  | "onReasoningStream"
+  | "onReasoningEnd"
+  | "onAgentEvent"
+> & {
   runId: string;
   sessionId?: string;
   sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
-  currentInboundContext?: RunEmbeddedAgentInternalParams["currentInboundContext"];
   lifecycleGeneration?: string;
-  onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
-  onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
-  onExecutionStarted?: RunEmbeddedAgentInternalParams["onExecutionStarted"];
-  onExecutionPhase?: (info: {
-    phase:
-      | "runner_entered"
-      | "workspace"
-      | "runtime_plugins"
-      | "before_agent_reply"
-      | "model_resolution"
-      | "auth"
-      | "context_engine"
-      | "attempt_dispatch"
-      | "context_assembled"
-      | "turn_accepted"
-      | "process_spawned"
-      | "tool_execution_started"
-      | "assistant_output_started"
-      | "model_call_started";
-    provider?: string;
-    model?: string;
-    backend?: string;
-    source?: string;
-    tool?: string;
-    toolCallId?: string;
-    itemId?: string;
-  }) => void;
-  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onAssistantMessageStart?: () => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onAutoCompactionSucceeded?: (count: number) => void;
-  onReasoningStream?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-    isReasoningSnapshot?: boolean;
-    requiresReasoningProgressOptIn?: boolean;
-  }) => Promise<void> | void;
-  onReasoningEnd?: () => Promise<void> | void;
   onItemEvent?: (payload: {
     itemId?: string;
     toolCallId?: string;
@@ -470,7 +416,6 @@ export type EmbeddedAgentParams = {
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<void> | void;
-  onAgentEvent?: RunEmbeddedAgentInternalParams["onAgentEvent"];
 };
 
 export function createMockTypingSignaler(): TypingSignaler {
@@ -522,11 +467,7 @@ export function createFollowupRun(): FollowupRun {
       ],
       verboseLevel: "off",
       elevatedLevel: "off",
-      bashElevated: {
-        enabled: false,
-        allowed: false,
-        defaultLevel: "off",
-      },
+      bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
     },
@@ -639,12 +580,7 @@ export function createMinimalRunAgentTurnParams(overrides?: {
   return {
     commandBody: "fix it",
     followupRun: overrides?.followupRun ?? createFollowupRun(),
-    sessionCtx:
-      overrides?.sessionCtx ??
-      ({
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext),
+    sessionCtx: overrides?.sessionCtx ?? { Provider: "whatsapp", MessageSid: "msg" },
     opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
     replyOperation: overrides?.replyOperation,
     typingSignals: overrides?.typingSignals ?? createMockTypingSignaler(),
@@ -687,25 +623,18 @@ export async function setupAgentRunnerExecutionTestState() {
       .mockImplementation((params: RunEntryParams, delegate: RunEntryDelegate) => delegate(params));
     state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
-    state.isCliProviderMock.mockReset();
-    state.isCliProviderMock.mockReturnValue(false);
-    state.isInternalMessageChannelMock.mockReset();
-    state.isInternalMessageChannelMock.mockReturnValue(false);
-    state.createBlockReplyDeliveryHandlerMock.mockReset();
-    state.createBlockReplyDeliveryHandlerMock.mockReturnValue(undefined);
-    state.isCompactionFailureErrorMock.mockReset();
-    state.isCompactionFailureErrorMock.mockReturnValue(false);
-    state.isContextOverflowErrorMock.mockReset();
-    state.isContextOverflowErrorMock.mockReturnValue(false);
-    state.isLikelyContextOverflowErrorMock.mockReset();
-    state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
+    state.isCliProviderMock.mockReset().mockReturnValue(false);
+    state.isInternalMessageChannelMock.mockReset().mockReturnValue(false);
+    state.createBlockReplyDeliveryHandlerMock.mockReset().mockReturnValue(undefined);
+    state.isCompactionFailureErrorMock.mockReset().mockReturnValue(false);
+    state.isContextOverflowErrorMock.mockReset().mockReturnValue(false);
+    state.isLikelyContextOverflowErrorMock.mockReset().mockReturnValue(false);
     state.updateSessionStoreMock.mockReset();
     state.resolveCurrentTurnImagesMock.mockReset();
-    state.peekSessionMcpRuntimeMock.mockReset();
+    state.peekSessionMcpRuntimeMock.mockReset().mockReturnValue(undefined);
     state.recordMessageToolRunOutcomeMock.mockReset();
     state.mintReplyMessageActionTurnCapabilityMock.mockReset();
     state.productionBuildEmbeddedRunExecutionParams = undefined;
-    state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
     state.resolveCurrentTurnImagesMock.mockImplementation(
       async (params: { images?: unknown[]; imageOrder?: unknown[] }) => ({
         images: params.images,
