@@ -7,6 +7,7 @@ import type {
 import {
   createGitHubReadGroup,
   prepareSessionPullRequestGitHubRead,
+  type SessionPullRequestReadCredential,
 } from "./control-ui-session-pr-request.js";
 import {
   fetchSessionPullRequestCheckDetails,
@@ -38,6 +39,7 @@ export type ControlUiSessionPullRequestChecksParams = Pick<
 };
 
 type LoadSessionCheckDetailsDeps = {
+  credential?: () => SessionPullRequestReadCredential | undefined;
   /** The request handler binds and rechecks session visibility, generation, and workspace. */
   sessionScope: string;
   assertCurrent: () => void;
@@ -77,7 +79,9 @@ export async function loadControlUiSessionPullRequestChecks(
     return unavailable("The session pull request or head changed; reopen CI details");
   }
   const host = new URL(pull.url).hostname;
-  const read = prepareSessionPullRequestGitHubRead(host, deps.assertCurrent);
+  const read = prepareSessionPullRequestGitHubRead(host, deps.assertCurrent, {
+    credential: deps.credential?.(),
+  });
   const assertCurrent = read.assertCurrent;
   const checkTarget = { ...target, host, apiBaseUrl: read.apiBaseUrl };
   const key = JSON.stringify([
@@ -106,6 +110,7 @@ export async function loadControlUiSessionPullRequestChecks(
     releaseReader = pending.access.add(deps.assertCurrent);
     const transportRead = prepareSessionPullRequestGitHubRead(host, pending.access.assertCurrent, {
       signal: pending.access.signal,
+      credential: read.credential,
     });
     activeCheckDetails += 1;
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {

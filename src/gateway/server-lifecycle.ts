@@ -334,6 +334,7 @@ export async function prepareGatewayLifecycle(params: {
       const client = clients.getByConnectionId(connId);
       return client
         ? createControlUiSessionPrRead({
+            allowOwnImportedPullRequest: true,
             client,
             ...session,
             getRuntimeConfig,

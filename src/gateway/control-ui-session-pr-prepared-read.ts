@@ -53,7 +53,39 @@ export type PreparedSessionPrState = {
   snapshot?: ControlUiSessionPullRequestSnapshot;
   branchSnapshot?: ControlUiSessionPullRequestSnapshot;
   prepared?: boolean;
+  assertReadAuthority?: () => void;
 };
+
+/** Index each connection's requested keys on the cell that retains its snapshot. */
+export function addControlUiSessionPrMembership(
+  state: Pick<PreparedSessionPrState, "connIds"> & {
+    sessionKeysByConnId: Map<string, Set<string>>;
+  },
+  connId: string,
+  sessionKey: string,
+): void {
+  let keys = state.sessionKeysByConnId.get(connId);
+  if (!keys) {
+    keys = new Set();
+    state.sessionKeysByConnId.set(connId, keys);
+  }
+  keys.add(sessionKey);
+  state.connIds.add(connId);
+}
+
+/** Retire the unused cell through the same owner that retains its prepared readers. */
+export function retireControlUiSessionPrState<
+  State extends PreparedSessionPrState & { cancelRefresh?: () => void },
+>(state: State | undefined, keyStates: Map<string, State>): void {
+  if (!state || state.prepared || state.connIds.size > 0) {
+    return;
+  }
+  state.cancelRefresh?.();
+  state.cacheLifetime.abort(null);
+  if (keyStates.get(state.target.identity) === state) {
+    keyStates.delete(state.target.identity);
+  }
+}
 
 /** Retain only branch facts across audience/mode changes on the same physical source. */
 export function retainControlUiSessionPrBranchSnapshot(
@@ -74,6 +106,7 @@ export function retainControlUiSessionPrBranchSnapshot(
     state.branchSnapshot !== previous.branchSnapshot
   ) {
     state.branchSnapshot = previous.branchSnapshot;
+    state.assertReadAuthority = previous.assertReadAuthority;
     state.snapshot = undefined;
   }
 }
@@ -137,12 +170,14 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   ): Promise<ControlUiSessionPullRequestSnapshot> => {
     const state = keyStates.get(target.identity);
     const previous = state?.snapshot;
+    let assertReadAuthority: (() => void) | undefined;
     const assertActive = () => {
       if (scope.isClosing) {
         throw new Error("Session pull-request owner is closed");
       }
       assertCurrent();
       target.assertCurrent?.();
+      assertReadAuthority?.();
     };
     const publish = (snapshot: ControlUiSessionPullRequestSnapshot) => {
       // A retry may replace stale facts, but never a newer watcher publication.
@@ -153,6 +188,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
         state.snapshot === previous &&
         state.target.identity === target.identity
       ) {
+        state.assertReadAuthority = assertReadAuthority;
         publishSnapshot(state, snapshot);
       }
     };
@@ -176,6 +212,9 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
                 publishBranchSnapshot(target, pushedSnapshot(branch));
               },
               assertCurrent: assertReadCurrent,
+              retainReadAuthority: (guard) => {
+                assertReadAuthority = guard;
+              },
             });
             assertReadCurrent();
             const snapshot = pushedSnapshot(result);
@@ -220,7 +259,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
         }
       }
     }
-    if (target.source === null) {
+    if (target.source === null && !target.githubPullRequest) {
       state.snapshot ??= { pullRequests: [], rateLimited: false, status: "ready" };
     }
     const getProjection = deps.getSessionRowProjection;

@@ -1,0 +1,340 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
+import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-read.js";
+import { githubJson, requestUrl } from "./control-ui-session-prs.test-support.js";
+import { handleGatewayRequest } from "./server-methods.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+
+const io = vi.hoisted(() => ({ command: vi.fn(), identity: vi.fn(), currentIdentity: vi.fn() }));
+vi.mock("../agents/github-tool-identity.js", async (original) => ({
+  ...(await original<typeof import("../agents/github-tool-identity.js")>()),
+  prepareGitHubPublicationIdentity: io.identity,
+  matchesPreparedGitHubPublicationIdentity: io.currentIdentity,
+}));
+vi.mock("../process/exec.js", async (original) => ({
+  ...(await original<typeof import("../process/exec.js")>()),
+  runCommandBuffered: io.command,
+}));
+
+const headCommit = "a".repeat(40);
+const baseCommit = "b".repeat(40);
+const worktree = {
+  id: "own-imported-source",
+  branch: "openclaw/local-task",
+  repoRoot: "/synthetic/repository",
+  githubPullRequest: {
+    url: "https://github.com/example/repository/pull/7",
+    host: "github.com",
+    number: 7,
+    base: {
+      repository: "example/repository",
+      repositoryId: 10,
+      branch: "main",
+      commit: baseCommit,
+    },
+    head: {
+      repository: "contributor/repository",
+      repositoryId: 20,
+      branch: "original",
+      commit: headCommit,
+    },
+    preparedHeadCommit: headCommit,
+  },
+};
+
+function frames(f: Awaited<ReturnType<typeof createFixture>>) {
+  return f.socket.send.mock.calls.map(([data]) => JSON.parse(data.toString()));
+}
+function lastSnapshot(f: Awaited<ReturnType<typeof createFixture>>) {
+  return frames(f).findLast((frame) => frame.event === "controlUi.sessionPullRequests.changed")
+    ?.payload.sessions[sessionKey];
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+async function withOwnFixture(
+  run: (
+    f: Awaited<ReturnType<typeof createFixture>>,
+    remote: {
+      pr: Record<string, unknown>;
+      base: { private: boolean };
+      setPermission: (permission: string) => void;
+      beforeRead: (callback: () => Promise<void>) => void;
+      fetch: ReturnType<typeof vi.fn<typeof fetch>>;
+    },
+  ) => Promise<void>,
+  scope: "operator.read" | "operator.sessions.write" = "operator.sessions.write",
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = await createFixture(scope, true);
+    let permission = "read";
+    let before: (() => Promise<void>) | undefined;
+    const base = {
+      id: 10,
+      full_name: "example/repository",
+      name: "repository",
+      owner: { login: "example" },
+      private: false,
+    };
+    const fork = { id: 20, full_name: "contributor/repository", private: false };
+    const pr = {
+      number: 7,
+      html_url: worktree.githubPullRequest.url,
+      title: "Original contribution",
+      user: { id: 101, login: "contributor" },
+      state: "closed",
+      draft: false,
+      merged: false,
+      base: { repo: base, ref: "main", sha: baseCommit },
+      head: { repo: fork, ref: "original", sha: headCommit },
+    };
+    io.identity.mockResolvedValue({
+      source: "system-detected",
+      host: "github.com",
+      env: { GH_TOKEN: "synthetic-own-pr-read-token" },
+      account: { accountId: 42, login: "publisher" },
+    });
+    io.currentIdentity.mockReturnValue(true);
+    io.command.mockImplementation(async (argv: string[]) => {
+      if (argv[0] !== "gh" || !argv.includes("GET")) {
+        throw new Error("Unexpected non-read operation");
+      }
+      await before?.();
+      const endpoint = argv.at(-1);
+      const value =
+        endpoint === "repos/example/repository"
+          ? base
+          : endpoint === "repos/contributor/repository"
+            ? fork
+            : endpoint === "repos/example/repository/pulls/7"
+              ? pr
+              : endpoint === "user/101"
+                ? pr.user
+                : endpoint === "repos/example/repository/collaborators/contributor/permission"
+                  ? { user: pr.user, permission }
+                  : undefined;
+      return {
+        code: value ? 0 : 1,
+        signal: null,
+        killed: false,
+        stdout: Buffer.from(JSON.stringify(value ?? {})),
+        stderr: Buffer.alloc(0),
+      };
+    });
+    vi.stubEnv("GH_TOKEN", "synthetic-unrelated-service-token");
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        scope === "operator.read"
+          ? "Bearer synthetic-unrelated-service-token"
+          : "Bearer synthetic-own-pr-read-token",
+      );
+      const url = new URL(requestUrl(input));
+      if (url.pathname === `/repos/example/repository/commits/${headCommit}/check-runs`) {
+        return githubJson({
+          total_count: 1,
+          check_runs: [
+            {
+              id: 1,
+              name: "Original checks",
+              head_sha: headCommit,
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+        });
+      }
+      expect(url.href).toBe("https://api.github.com/repos/example/repository/pulls/7");
+      return githubJson(pr);
+    });
+    vi.stubGlobal("fetch", fetch);
+    io.command.mockClear();
+    try {
+      await run(f, {
+        pr,
+        base,
+        fetch,
+        setPermission: (value) => {
+          permission = value;
+        },
+        beforeRead: (callback) => {
+          before = callback;
+        },
+      });
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+it("does not hydrate public or service cards from an authenticated imported snapshot", async () => {
+  await withOwnFixture(async (f) => {
+    await f.seed(sessionKey, f.profile.id, { worktree });
+    await f.subscribe();
+    await f.subscriptions.pollNow();
+    expect(lastSnapshot(f)?.pullRequests).toHaveLength(1);
+    const service = await prepareControlUiSessionPrServiceTarget(
+      () => getSessionRowProjection(f.context),
+      { sessionKey, agentId: "main" },
+    );
+    expect(service).toBeDefined();
+    if (!service) {
+      throw new Error("Missing service fixture target");
+    }
+    expect(f.subscriptions.readPrepared(service, () => false)?.pullRequests ?? []).toEqual([]);
+  }, "operator.read");
+});
+
+it("admits only the prepared own binding and clears withdrawn private/profile access", async ({
+  signal,
+}) => {
+  await withOwnFixture(async (f, remote) => {
+    for (const binding of [
+      undefined,
+      {
+        ...worktree,
+        githubPullRequest: { ...worktree.githubPullRequest, preparedHeadCommit: undefined },
+      },
+      worktree,
+    ]) {
+      await f.seed(sessionKey, f.profile.id, { worktree: binding });
+      await f.subscribe();
+      await f.subscriptions.pollNow();
+      expect(remote.fetch).not.toHaveBeenCalled();
+      expect(io.command).not.toHaveBeenCalled();
+    }
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: f.readerEmail },
+    });
+    remote.pr.user = { id: 999, login: "other" };
+    await f.subscribe();
+    await f.subscriptions.pollNow();
+    expect(lastSnapshot(f)).toMatchObject({ pullRequests: [], discardPrevious: true });
+    expect(remote.fetch).not.toHaveBeenCalled();
+    remote.pr.user = { id: 101, login: "contributor" };
+    await f.subscriptions.pollNow();
+    expect(lastSnapshot(f)?.pullRequests).toMatchObject([
+      { number: 7, state: "closed", branch: "original" },
+    ]);
+    await f.subscriptions.pollNow();
+    // Own-PR authorization is refreshed by the bounded load, never watcher rechecks.
+    const reads = io.command.mock.calls.length;
+    expect(remote.fetch).not.toHaveBeenCalled();
+    const foreign = "agent:main:foreign-import";
+    await f.seed(foreign, f.other.id, { worktree });
+    await f.subscribe([foreign]);
+    await f.subscriptions.pollNow();
+    expect(io.command).toHaveBeenCalledTimes(reads);
+    await f.subscribe();
+    await f.subscriptions.pollNow();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 91_000);
+    remote.base.private = true;
+    remote.setPermission("none");
+    f.socket.send.mockClear();
+    const metadataReads = remote.fetch.mock.calls.length;
+    await f.subscriptions.pollNow();
+    expect(lastSnapshot(f)).toMatchObject({ pullRequests: [], discardPrevious: true });
+    expect(remote.fetch).toHaveBeenCalledTimes(metadataReads);
+
+    remote.setPermission("read");
+    remote.pr.state = "open";
+    vi.setSystemTime(Date.now() + 91_000);
+    await f.subscriptions.pollNow();
+    expect(lastSnapshot(f)?.pullRequests).toHaveLength(1);
+    expect(lastSnapshot(f)?.pullRequests[0].checks).toMatchObject({ state: "passing", passed: 1 });
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: {
+        type: "req",
+        id: "own-checks",
+        method: "controlUi.sessionPullRequests.checks",
+        params: {
+          sessionKey,
+          owner: "example",
+          repo: "repository",
+          number: 7,
+          headSha: headCommit,
+        },
+      },
+      client: f.client,
+      context: f.context,
+      isWebchatConnect: () => false,
+      respond,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        status: "ready",
+        checks: [expect.objectContaining({ name: "Original checks" })],
+      }),
+      undefined,
+    );
+    f.socket.send.mockClear();
+    const invalidated = createDeferredCore();
+    f.socket.send.mockImplementation((data) => {
+      const frame = JSON.parse(data.toString());
+      if (frame.event === "sessions.changed" && frame.payload.reason === "profile-identity") {
+        invalidated.resolve();
+      }
+    });
+    await f.changeReader("profile");
+    await withinTest(invalidated.promise, signal);
+    expect(frames(f)).toContainEqual(
+      expect.objectContaining({
+        event: "sessions.changed",
+        payload: { reason: "profile-identity" },
+      }),
+    );
+    expect(JSON.stringify(frames(f))).not.toContain("Original contribution");
+  });
+});
+
+it.each(["grant", "unsubscribe"] as const)(
+  "does not disclose a late own-PR read after %s",
+  async (change) => {
+    await withOwnFixture(async (f, remote) => {
+      await f.seed(sessionKey, f.profile.id, { worktree });
+      await syncCanonicalGitHubIdentity({
+        identity: { accountId: 101, login: "contributor" },
+        authenticationAlias: { kind: "email", email: f.readerEmail },
+      });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      remote.beforeRead(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      try {
+        await f.subscribe();
+        const polling = f.subscriptions.pollNow();
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          polling,
+          "Own imported PR read was not admitted",
+        );
+        if (change === "grant") {
+          await f.changeReader("grant");
+        } else {
+          f.subscriptions.unsubscribe(f.client.connId!);
+        }
+        release.resolve();
+        await polling;
+        expect(remote.fetch).not.toHaveBeenCalled();
+        expect(JSON.stringify(frames(f))).not.toContain("Original contribution");
+      } finally {
+        release.resolve();
+      }
+    });
+  },
+);

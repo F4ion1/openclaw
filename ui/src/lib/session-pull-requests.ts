@@ -10,6 +10,7 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../../src/gateway/control-ui-contract.js";
+import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
@@ -262,6 +263,17 @@ export function sessionPullRequestsForGateway(
     if (event.event === "sessions.changed") {
       const changed = readSessionChangedEvent(event.payload);
       const reason = asNullableRecord(event.payload)?.reason;
+      if (
+        !changed &&
+        ["delete", "sharing", "profile-identity"].includes(String(reason)) &&
+        !operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? [])
+      ) {
+        clearSnapshotsAndWaiters();
+        for (const key of watchedKeys()) {
+          refresh(key);
+        }
+        return;
+      }
       if (!changed || !STRUCTURAL_SESSION_REASONS.has(reason)) {
         return;
       }
@@ -306,6 +318,7 @@ export function sessionPullRequestsForGateway(
       let next = snapshot;
       if (
         current &&
+        !snapshot.discardPrevious &&
         canRetainCurrent &&
         (snapshot.branchRead === false ||
           snapshot.status === "rate-limited" ||
