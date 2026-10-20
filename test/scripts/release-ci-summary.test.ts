@@ -88,6 +88,38 @@ const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function completedStep(
+  name: string,
+  number: number,
+  start: number,
+  end: number,
+  conclusion = "success",
+) {
+  const time = (second: number) => `2026-08-28T12:01:0${second}.000Z`;
+  return {
+    name,
+    number,
+    status: "completed",
+    conclusion,
+    started_at: time(start),
+    completed_at: time(end),
+  };
+}
+
+function publicationPlanSteps(seal = "success", upload = "success", uploadNumber = 6) {
+  return [
+    completedStep("Seal immutable release execution plan", 5, 0, 1, seal),
+    completedStep("Upload immutable release execution plan", uploadNumber, 1, 3, upload),
+  ];
+}
+
+function planDigestStep(
+  conclusion = "success",
+  name = "Record immutable release execution plan digest",
+) {
+  return completedStep(name, 7, 3, 3, conclusion);
+}
+
 async function runInterruptedPlanFixture(
   args: string[],
   env: NodeJS.ProcessEnv,
@@ -2032,7 +2064,7 @@ describe("release CI summary child correlation", () => {
         return `RERUN_GROUP: all\nFAIL_FAST: false\nTARGET_SHA: ${fixture.targetSha}`;
       }
       if (id === npmId) {
-        return `TARGET_SHA: ${fixture.targetSha}\nDispatched full-release-artifacts.yml: https://github.com/${repository}/actions/runs/81 (attempt 1)`;
+        return `Artifact dispatch npm target ${fixture.targetSha}: https://github.com/${repository}/actions/runs/81 (attempt 1)`;
       }
       return sourceLog(id);
     };
@@ -2100,7 +2132,8 @@ describe("release CI summary child correlation", () => {
         getJobLog,
         getReleaseEvidenceClient: () => ({
           ...createReleaseEvidenceClient(repository),
-          getWorkflowSource: () => "node scripts/full-release-artifacts.mjs resolve",
+          getWorkflowSource: () =>
+            'env:\n  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"\njobs:\n  npm_artifacts:\n    name: Prepare release npm artifacts\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n    steps: []\n',
         }),
         rerunFailed,
         rerunParent,
