@@ -7,7 +7,10 @@ import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
-const characterScenarioIds = ["character-vibes-gollum"] as const;
+const scenarioId = "character-vibes-gollum";
+const reply = "The build is green, and I am here.";
+const outbound = (state: ReturnType<typeof createQaBusState>) =>
+  state.getSnapshot().messages.filter((message) => message.direction === "outbound");
 const classifiedFailureReplies = [
   {
     failureName: "provider failure",
@@ -30,15 +33,8 @@ function createCharacterScenarioApi(
   onWaitForOutboundMessage?: (state: ReturnType<typeof createQaBusState>) => void,
 ) {
   return {
-    env: {
-      providerMode: "live-frontier",
-      gateway: {
-        workspaceDir: "/qa-character-workspace",
-      },
-    },
-    fs: {
-      writeFile: async () => undefined,
-    },
+    env: { providerMode: "live-frontier", gateway: { workspaceDir: "/qa-character-workspace" } },
+    fs: { writeFile: async () => undefined },
     path: { join },
     normalizeLowercaseStringOrEmpty,
     resolveQaLiveTurnTimeoutMs: () => 10,
@@ -63,49 +59,25 @@ function createCharacterScenarioApi(
 }
 
 describe("character scenario transcript safety", () => {
-  it.each(characterScenarioIds)("requires a live provider for %s", (scenarioId) => {
+  it("requires a live provider", () => {
     const scenario = readQaScenarioById(scenarioId);
-
+    const select = (explicit: boolean, live = false) =>
+      selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        ...(explicit ? { scenarioIds: [scenarioId] } : {}),
+        providerMode: live ? "live-frontier" : "mock-openai",
+        primaryModel: `${live ? "openai" : "mock-openai"}/gpt-5.6-luna`,
+      });
     expect(scenario.execution.config?.requiredProviderMode).toBe("live-frontier");
-    expect(() =>
-      selectQaFlowSuiteScenarios({
-        scenarios: [scenario],
-        scenarioIds: [scenarioId],
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-      }),
-    ).toThrow(`${scenarioId} (providerMode=live-frontier)`);
-    expect(
-      selectQaFlowSuiteScenarios({
-        scenarios: [scenario],
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-      }),
-    ).toEqual([]);
-    expect(
-      selectQaFlowSuiteScenarios({
-        scenarios: [scenario],
-        scenarioIds: [scenarioId],
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-      }),
-    ).toEqual([scenario]);
+    expect(() => select(true)).toThrow(`${scenarioId} (providerMode=live-frontier)`);
+    expect(select(false)).toEqual([]);
+    expect(select(true, true)).toEqual([scenario]);
   });
 
-  it.each(
-    characterScenarioIds.flatMap((scenarioId) =>
-      classifiedFailureReplies.map(({ failureName, failureText, isError }) => ({
-        scenarioId,
-        failureName,
-        failureText,
-        isError,
-      })),
-    ),
-  )(
-    "rejects a $failureName after an actual reply in $scenarioId",
-    async ({ scenarioId, failureText, isError }) => {
+  it.each(classifiedFailureReplies)(
+    "rejects a $failureName after an actual reply",
+    async ({ failureText, isError }) => {
       const state = createQaBusState();
-      const firstReply = "The build is green, and I am here.";
       let waitCount = 0;
 
       await expect(
@@ -115,49 +87,38 @@ describe("character scenario transcript safety", () => {
             currentState.addOutboundMessage({
               accountId: "qa-channel",
               to: "dm:alice",
-              text: waitCount++ === 0 ? firstReply : failureText,
+              text: waitCount++ === 0 ? reply : failureText,
               ...(waitCount > 1 && isError ? { isError: true } : {}),
             });
           }),
         }),
       ).rejects.toThrow(failureText);
 
-      expect(
-        state
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound")
-          .map((message) => message.text),
-      ).toEqual([firstReply, failureText]);
+      expect(outbound(state).map((message) => message.text)).toEqual([reply, failureText]);
     },
   );
 
-  it.each(characterScenarioIds)(
-    "keeps partially missing replies visible without aborting %s",
-    async (scenarioId) => {
-      const state = createQaBusState();
-      const reply = "The build is green, and I am here.";
-      const result = await runLoadedScenarioFlow(scenarioId, {
-        state,
-        api: createCharacterScenarioApi((currentState) => {
-          if (
-            currentState.getSnapshot().messages.some((message) => message.direction === "outbound")
-          ) {
-            return;
-          }
-          currentState.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "dm:alice",
-            text: reply,
-          });
-        }),
-      });
+  it("keeps partially missing replies visible without aborting", async () => {
+    const state = createQaBusState();
+    const result = await runLoadedScenarioFlow(scenarioId, {
+      state,
+      api: createCharacterScenarioApi((currentState) => {
+        if (outbound(currentState).length) {
+          return;
+        }
+        currentState.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "dm:alice",
+          text: reply,
+        });
+      }),
+    });
 
-      expect(result.status).toBe("pass");
-      expect(result.steps[0]?.details).toContain("inbound:");
-      expect(result.steps[0]?.details).toContain(`outbound:${reply}`);
-      const messages = state.getSnapshot().messages;
-      expect(messages.filter((message) => message.direction === "inbound")).toHaveLength(4);
-      expect(messages.filter((message) => message.direction === "outbound")).toHaveLength(1);
-    },
-  );
+    expect(result.status).toBe("pass");
+    expect(result.steps[0]?.details).toContain("inbound:");
+    expect(result.steps[0]?.details).toContain(`outbound:${reply}`);
+    const messages = state.getSnapshot().messages;
+    expect(messages.filter((message) => message.direction === "inbound")).toHaveLength(4);
+    expect(outbound(state)).toHaveLength(1);
+  });
 });
