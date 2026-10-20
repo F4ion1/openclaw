@@ -2614,6 +2614,26 @@ export async function validateReleaseRunEvidence(
       () => comparison,
     );
   }
+  let validatedDirectRequestedReuse = false;
+  let expectedReuseDescendant = false;
+  if (
+    reuseRequest === undefined &&
+    hasRequestedEvidenceReuse(requestedReuse) &&
+    !currentEvidence.manifest.evidenceReuse
+  ) {
+    validateRequestedEvidenceReuse(
+      currentEvidence.manifest,
+      currentEvidence.manifest,
+      currentEvidence.manifest,
+      requestedReuse,
+      (base, head) => evidenceClient.compareCommits(base, head),
+    );
+    validatedDirectRequestedReuse = true;
+    expectedReuseDescendant =
+      expectedTargetSha !== currentEvidence.manifest.targetSha &&
+      expectedEvidenceSha === currentEvidence.manifest.targetSha &&
+      expectedEvidencePolicy !== EXACT_TARGET_EVIDENCE_REUSE_POLICY;
+  }
   /** @type {Map<string, import("./release-qualification-admission.mjs").QualificationAdmission>} */
   const qualificationAdmissions = new Map();
   const authenticateProducer = async (evidence) => {
@@ -2711,11 +2731,13 @@ export async function validateReleaseRunEvidence(
         qualificationReuseIdentity(requestedAdmission),
       );
     const admittedChangelogDescendant =
-      reuseRequest !== undefined &&
-      requestedReuseDelta !== undefined &&
-      requestedReuseDelta.policy !== EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
+      ((reuseRequest !== undefined &&
+        requestedReuseDelta !== undefined &&
+        requestedReuseDelta.policy !== EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
+        reuseRequest.targetSha === requestedAdmission.request.candidateSha) ||
+        (expectedReuseDescendant &&
+          expectedTargetSha === requestedAdmission.request.candidateSha)) &&
       currentEvidence.manifest.targetSha === selectedAdmission.request.candidateSha &&
-      reuseRequest.targetSha === requestedAdmission.request.candidateSha &&
       isDeepStrictEqual(
         qualificationReusePolicyIdentity(selectedAdmission),
         qualificationReusePolicyIdentity(requestedAdmission),
@@ -2760,7 +2782,7 @@ export async function validateReleaseRunEvidence(
       (base, head) => evidenceClient.compareCommits(base, head),
     );
   }
-  if (hasRequestedEvidenceReuse(requestedReuse)) {
+  if (hasRequestedEvidenceReuse(requestedReuse) && !validatedDirectRequestedReuse) {
     validateRequestedEvidenceReuse(
       currentEvidence.manifest,
       selectedEvidence.manifest,
