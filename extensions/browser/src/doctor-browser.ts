@@ -10,6 +10,7 @@ import {
 import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseBrowserMajorVersion, readBrowserVersion } from "./browser/chrome.executable-probe.js";
 import {
+  assertBrowserExecutableSupportsLaunch,
   resolveBrowserExecutableForPlatform,
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
@@ -17,6 +18,7 @@ import {
   getManagedBrowserMissingDisplayError,
   isLocalManagedProfile,
   resolveBrowserConfig,
+  resolveManagedBrowserHeadlessMode,
   resolveProfile,
   type ResolvedBrowserConfig,
 } from "./browser/config.js";
@@ -117,7 +119,17 @@ export async function collectBrowserReadinessFindings(
         );
       }
     }
-    return !managedExecutables.get(executablePath);
+    try {
+      const executable = managedExecutables.get(executablePath);
+      if (executable) {
+        const mode = resolveManagedBrowserHeadlessMode(resolved, profile);
+        assertBrowserExecutableSupportsLaunch(executable, mode.headless, platform);
+      }
+      return !executable;
+    } catch (error) {
+      executableErrors.set(executablePath, error instanceof Error ? error.message : String(error));
+      return true;
+    }
   });
   const missingDisplay = managedProfiles
     .map((profile) =>
@@ -249,4 +261,21 @@ export async function collectBrowserReadinessFindings(
     severity,
   );
   return findings;
+}
+
+/** Leave discovery-dependent native-host repair to explicit extension setup. */
+export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<{
+  status: "skipped";
+  reason: string;
+  changes: string[];
+  warnings: string[];
+}> {
+  return {
+    status: "skipped",
+    reason: "Doctor does not inspect personal browser profiles",
+    changes: [],
+    warnings: [
+      `Chrome extension native-host repair skipped: Doctor does not inspect personal browser profiles. Run ${formatCliCommand("openclaw browser extension install")} to repair explicitly.`,
+    ],
+  };
 }

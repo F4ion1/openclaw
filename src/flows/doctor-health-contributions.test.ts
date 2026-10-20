@@ -96,6 +96,7 @@ const mocks = vi.hoisted(() => ({
     unresolvedRefReason: "exec provider failed",
   })),
   getSkippedExecRefStaticError: vi.fn(() => undefined),
+  maybeRepairNodeServiceConfig: vi.fn(),
   maybeRepairGatewayServiceConfig: vi.fn().mockResolvedValue(undefined),
   maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
   maybeResolveDuelingSystemdGatewayScopes: vi.fn().mockResolvedValue(undefined),
@@ -270,6 +271,12 @@ vi.mock("../secrets/exec-resolution-policy.js", () => ({
   getSkippedExecRefStaticError: mocks.getSkippedExecRefStaticError,
 }));
 
+// mock-isolation: isolate the node service so container policy checks cannot inspect real services.
+vi.mock("../commands/doctor-node-services.js", () => ({
+  maybeRepairNodeServiceConfig: mocks.maybeRepairNodeServiceConfig,
+}));
+
+// mock-isolation: capture managed-service repairs without touching installed services.
 vi.mock("../commands/doctor-gateway-services.js", () => ({
   maybeRepairGatewayServiceConfig: mocks.maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices: mocks.maybeScanExtraGatewayServices,
@@ -1238,7 +1245,6 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(ctx.healthOk).toBe(true);
-    expect(ctx.gatewayHealthAuthenticated).toBe(false);
     expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
     expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
   });
@@ -1723,6 +1729,7 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
+    expect(mocks.maybeRepairNodeServiceConfig).toHaveBeenCalledOnce();
     expect(mocks.maybeScanExtraGatewayServices).not.toHaveBeenCalled();
     expect(mocks.maybeResolveDuelingSystemdGatewayScopes).not.toHaveBeenCalled();
     expect(mocks.maybeRepairGatewayServiceConfig).not.toHaveBeenCalled();
@@ -1828,6 +1835,7 @@ describe("doctor health contributions", () => {
       detected,
       config: cfg,
       doctorOnlyStateMigrations: true,
+      integrityCheck: "quick",
       legacySessionSurfaces,
     });
   });
@@ -3130,10 +3138,13 @@ describe("doctor health contributions", () => {
   });
 
   describe("config size drops during update", () => {
+    const existsSync = fs.existsSync;
     beforeEach(() => {
       mocks.replaceConfigFile.mockReset().mockResolvedValue(undefined);
       mocks.applyWizardMetadata.mockImplementation((cfg: unknown) => cfg);
-      vi.spyOn(fs, "existsSync").mockReturnValue(false);
+      vi.spyOn(fs, "existsSync").mockImplementation((value) =>
+        String(value) === "/tmp/fake-openclaw.json.pre-update" ? false : existsSync(value),
+      );
     });
 
     function buildWriteConfigCtx(env: Record<string, string | undefined>) {
@@ -3213,7 +3224,9 @@ describe("doctor health contributions", () => {
     });
 
     it("points update-time config rewrites at the pre-update backup", async () => {
-      vi.mocked(fs.existsSync).mockImplementation((value) => String(value).endsWith(".pre-update"));
+      vi.mocked(fs.existsSync).mockImplementation(
+        (value) => String(value).endsWith(".pre-update") || existsSync(value),
+      );
       const ctx = buildWriteConfigCtx({
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",

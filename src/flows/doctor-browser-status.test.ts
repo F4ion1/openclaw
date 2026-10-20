@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { maybeRepairOwnedChromeExtensionNativeHosts } from "../commands/doctor-browser.js";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import { useAutoCleanupTempDirTracker } from "../plugin-sdk/test-env.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
@@ -149,15 +150,12 @@ it.each([false, true])(
         }),
       );
     }
-    expect(check.repair === undefined).toBe(true);
+    expect("repair" in check).toBe(true);
     const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
     expect(run).toMatchObject({
-      checksRun: 1,
-      checksRepaired: 0,
-      checksValidated: 0,
       changes: [],
       effects: [],
-      warnings: [],
+      warnings: expect.arrayContaining([expect.stringContaining("repair skipped")]),
     });
     expect(run.remainingFindings).toEqual(run.findings);
     expect(accesses).toEqual([]);
@@ -210,5 +208,78 @@ it("names a configured missing executable and gives its repair instead of a plug
   expect(ctx.healthFindings?.map((finding) => finding.message).join("\n")).not.toContain(
     "No Chromium-based browser executable was found on this host",
   );
+  expect(accesses).toEqual([]);
+});
+
+const noRepair = { changes: [], effects: [] };
+const skippedWarning = "native-host repair skipped: invalid registration";
+const integrityFailure = "registration integrity failure";
+it.each([
+  [
+    "warning-only failure, even with skipped text",
+    { changes: [], warnings: [skippedWarning] },
+    "failed",
+    skippedWarning,
+  ],
+  [
+    "explicit failure",
+    { status: "failed", reason: integrityFailure, changes: [], warnings: [] },
+    "failed",
+    integrityFailure,
+  ],
+  ["completed repair", { changes: ["Repaired registration."], warnings: [] }, undefined, undefined],
+] as const)(
+  "preserves %s through the facade and adapter",
+  async (_label, output, status, reason) => {
+    capture.surface = {
+      ...capture.surface,
+      maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue(output),
+    };
+    await expect(maybeRepairOwnedChromeExtensionNativeHosts()).resolves.toEqual(output);
+    const result = await check.repair?.(repairContext(), []);
+    expect(result).toMatchObject({ changes: output.changes, warnings: output.warnings });
+    expect([result?.status, result?.reason]).toEqual([status, reason]);
+    const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
+    expect(run.remainingFindings).toEqual(run.findings);
+    expect(run.warnings.join("\n")).toContain(
+      status === "failed" ? `repair failed: ${reason}` : "repair left",
+    );
+    expect(accesses).toEqual([]);
+  },
+);
+
+it.each(["loader", "repair hook"])("keeps %s errors as failures", async (source) => {
+  const fail = () => {
+    throw new Error("synthetic browser repair unavailable");
+  };
+  if (source === "loader") {
+    capture.load.mockImplementation(fail);
+  } else {
+    capture.surface = { ...capture.surface, maybeRepairOwnedChromeExtensionNativeHosts: fail };
+  }
+  const result = await check.repair?.(repairContext(), []);
+  expect(result).toMatchObject({ status: "failed", changes: [] });
+  expect(result?.warnings?.join("\n")).toContain("synthetic browser repair unavailable");
+  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
+  expect(run.remainingFindings).toEqual(run.findings);
+  expect(run.warnings.join("\n")).toContain("repair failed:");
+  expect(accesses).toEqual([]);
+});
+
+it("does not load or invoke native-host repair in dry-run", async () => {
+  const repair = vi.fn().mockRejectedValue(new Error("must not invoke repair"));
+  capture.surface = { ...capture.surface, maybeRepairOwnedChromeExtensionNativeHosts: repair };
+  const result = await check.repair?.({ ...repairContext(), dryRun: true }, []);
+  expect(result).toEqual({
+    status: "skipped",
+    reason: "native-host repair requires filesystem writes",
+    changes: [],
+  });
+  expect(capture.load).not.toHaveBeenCalled();
+  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check], dryRun: true });
+  expect(run).toMatchObject(noRepair);
+  expect(run.remainingFindings).toEqual(run.findings);
+  expect(run.warnings).toEqual([`core/doctor/browser repair skipped: ${result!.reason}`]);
+  expect(repair).not.toHaveBeenCalled();
   expect(accesses).toEqual([]);
 });

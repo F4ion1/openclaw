@@ -3,7 +3,15 @@ import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { loadBundledPluginPublicSurfaceModuleSyncCore } from "../plugin-sdk/facade-loader.js";
 
+type BrowserNativeHostRepairResult = {
+  status?: "repaired" | "skipped" | "failed";
+  reason?: string;
+  changes: string[];
+  warnings: string[];
+};
+
 type BrowserDoctorSurface = {
+  maybeRepairOwnedChromeExtensionNativeHosts?: () => Promise<BrowserNativeHostRepairResult>;
   collectBrowserReadinessFindings: (cfg: OpenClawConfig) => Promise<readonly HealthFinding[]>;
 };
 
@@ -28,5 +36,22 @@ export async function collectBrowserReadinessFindings(
         docsUrl: "https://docs.openclaw.ai/tools/browser/troubleshooting",
       },
     ];
+  }
+}
+
+export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<BrowserNativeHostRepairResult> {
+  try {
+    const repair = loadBundledPluginPublicSurfaceModuleSyncCore<BrowserDoctorSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-doctor.js",
+    }).maybeRepairOwnedChromeExtensionNativeHosts;
+    return repair ? await repair() : { changes: [], warnings: [] };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [
+        `Browser extension native-host repair is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      ],
+    };
   }
 }

@@ -238,21 +238,11 @@ describe("checkGatewayHealth", () => {
       })
       .mockResolvedValue({});
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const onFinding = vi.fn();
-    await expect(checkGatewayHealth({ runtime, cfg, onFinding })).resolves.toMatchObject({
-      healthOk: true,
-    });
-    expect(onFinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        category: "fix-now",
-        severity: "warning",
-        message: expect.stringContaining(
-          `child workers are using ${execPath}, which no longer exists`,
-        ),
-        fixHint: expect.stringContaining("gateway status --deep"),
-      }),
+    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: true });
+    expect(note).toHaveBeenCalledWith(
+      `The Node.js runtime this Gateway started with (${execPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
+      "Gateway runtime",
     );
-    expect(note.mock.calls.some(([, title]) => title === "Gateway runtime")).toBe(false);
   });
 
   it("reports the Gateway's recorded SQLite warning", async () => {
@@ -672,24 +662,18 @@ describe("checkGatewayHealth", () => {
       gatewayReached: true,
     });
 
-    const onFinding = vi.fn();
     await expect(
-      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000, onFinding }),
+      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
     ).resolves.toEqual({
       authenticated: false,
       healthOk: true,
     });
 
     expect(sharedRuntime.error).not.toHaveBeenCalled();
-    expect(onFinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        category: "recommended",
-        message: expect.stringContaining(GATEWAY_HEALTH_RATE_LIMITED_MESSAGE),
-        fixHint: expect.stringContaining("lockout to expire"),
-      }),
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      GATEWAY_HEALTH_RATE_LIMITED_TITLE,
     );
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(probeGatewayStatus).toHaveBeenCalledOnce();
     expect(note).not.toHaveBeenCalledWith(
       GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
       GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
@@ -727,6 +711,32 @@ describe("checkGatewayHealth", () => {
     expect(note).toHaveBeenCalledWith(
       GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
       GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+    );
+  });
+
+  it("keeps a reachable Gateway healthy when device-less auth lacks read scope", async () => {
+    const error = new GatewayClientRequestError({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.read",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    });
+    retainGatewayResponsePayload(error, undefined);
+    callGateway.mockRejectedValueOnce(error);
+    probeGatewayStatus.mockResolvedValueOnce({ ok: false, gatewayReached: true });
+
+    await expect(
+      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(probeGatewayStatus).toHaveBeenCalledOnce();
+    expect(sharedRuntime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
     );
   });
 
@@ -787,6 +797,7 @@ describe("probeGatewayMemoryStatus", () => {
       method: "doctor.memory.status",
       params: { probe: false },
       timeoutMs: 1234,
+      sharedStateMode: "read-only",
       config: cfg,
     });
   });

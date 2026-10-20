@@ -19,6 +19,7 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { nativeSubagentRuntime } from "../plugins/runtime/native-subagent-context.js";
 import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/subagent-requester-context.js";
 import type { LlmCompleteUsage } from "../plugins/runtime/types-core.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -344,6 +345,7 @@ export function createGatewaySubagentRuntime(
         execution.release();
       }
     },
+    native: nativeSubagentRuntime,
     async complete(request) {
       // Authorization and credential selection must use the same request across queue waits.
       const params = { ...request };
@@ -528,11 +530,12 @@ export function createGatewaySubagentRuntime(
         const manifestPlugins =
           cfg.plugins?.enabled === false
             ? []
-            : metadata.resolvePluginMetadataSnapshot({
+            : await metadata.resolvePluginMetadataSnapshotAsync({
                 config: cfg,
                 env: process.env,
                 workspaceDir: agentScope.resolveAgentWorkspaceDir(cfg, agentId),
               });
+        sessionMutationCommitGuard();
         const selection = params.provider
           ? modelRefs.normalizeAgentCommandModelRef(cfg, params.provider, model, {
               manifestPlugins,

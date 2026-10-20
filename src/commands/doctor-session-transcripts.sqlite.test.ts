@@ -19,6 +19,7 @@ const settleRetainedDoctorSessionSources = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 const runPostSessionPluginDoctorStateRepairs = vi.hoisted(() => vi.fn());
 
+// mock-isolation: capture transcript diagnostics without terminal output.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
@@ -33,6 +34,7 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   runPostSessionPluginDoctorStateRepairs,
 }));
 
+// mock-isolation: isolate incognito-key repair from session import fixtures.
 vi.mock("./doctor-session-incognito-key-repair.js", () => ({
   repairReservedIncognitoSessionKeys,
 }));
@@ -50,6 +52,7 @@ vi.mock("./doctor-session-exec-policy.js", () => ({
   repairLegacySessionExecPolicy: vi.fn(),
 }));
 
+// mock-isolation: isolate canonical-key repair from session import fixtures.
 vi.mock("./doctor-session-canonical-keys.js", () => ({
   repairCanonicalSessionKeys,
 }));
@@ -269,6 +272,7 @@ describe("doctor session transcript repair", () => {
       apply: false,
       cfg,
       env,
+      integrityCheck: undefined,
       targets: [],
     });
   });
@@ -359,7 +363,7 @@ describe("doctor session transcript repair", () => {
     );
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith(
-      { allAgents: true, cfg, env, mode: "dry-run" },
+      { allAgents: true, cfg, env, mode: "dry-run", integrityCheck: "quick" },
       undefined,
     );
     expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
@@ -367,6 +371,7 @@ describe("doctor session transcript repair", () => {
       apply: false,
       cfg,
       env,
+      integrityCheck: "quick",
       targets: [],
     });
     expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();

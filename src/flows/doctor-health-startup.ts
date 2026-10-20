@@ -8,7 +8,9 @@ import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 
@@ -178,12 +180,14 @@ export async function runDoctorInstallationChecks(
 export async function prepareDoctorMaintenanceArchives(
   databasePreflight: DoctorDatabasePreflight | undefined,
   runtime: RuntimeEnv,
+  preflightOptions: { preserveSourceArtifacts?: true } = {},
 ): Promise<DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"]> {
+  const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   let discovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   try {
     const { prepareDoctorDatabasePreflight } =
       await import("../commands/doctor-database-preflight.js");
-    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight()))
+    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight(preflightOptions)))
       .agentDatabaseMigrationDiscovery;
     if (discovery) {
       const { prepareCanonicalTranscriptArchiveMigrations } =
@@ -194,15 +198,15 @@ export async function prepareDoctorMaintenanceArchives(
     // Offline admission still owns repairable schema and discovery failures.
     runtime.log(`Archive verification preparation deferred: ${String(error)}`);
   }
-  const { waitForCliSignalExit } = await import("../cli/signal-exit-barrier.js");
-  // Keep an accepted signal during preparation ahead of service custody.
-  await waitForCliSignalExit();
+  // Exit cleanup waits for this command to unwind; never join it from inside the command.
+  signal?.throwIfAborted();
   return discovery;
 }
 
 export async function prepareDoctorStateSchema(
   schemas: DoctorDatabasePreflight,
   shouldRepair: boolean,
+  integrityCheck?: "quick" | "full",
 ) {
   if (!shouldRepair || !schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
     return undefined;
@@ -210,7 +214,7 @@ export async function prepareDoctorStateSchema(
   const { prepareLegacyStateDatabaseSchema } = await import("../infra/state-migrations.doctor.js");
   const { throwIfDoctorStateMigrationRefused } =
     await import("../infra/state-migrations.messages.js");
-  const receipt = await prepareLegacyStateDatabaseSchema(process.env);
+  const receipt = await prepareLegacyStateDatabaseSchema(process.env, integrityCheck);
   throwIfDoctorStateMigrationRefused([receipt]);
   return receipt;
 }

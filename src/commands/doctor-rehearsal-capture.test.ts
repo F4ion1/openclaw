@@ -50,6 +50,7 @@ it("keeps config and declared plugin resources while excluding disposable core i
       },
       async () => {
         const shared = resolveOpenClawStateSqlitePath();
+        const serviceIntent = path.join(stateDir, "control", "services.sqlite");
         const agent = resolveOpenClawAgentSqlitePath({ agentId: "main" });
         openOpenClawStateDatabase();
         openOpenClawAgentDatabase({ agentId: "main" });
@@ -163,6 +164,12 @@ it("keeps config and declared plugin resources while excluding disposable core i
           const manifestBytes = await fs.readFile(manifestPath);
           const manifest = parseUpdateRecoveryBackupManifest(manifestBytes.toString());
           expect(manifest.databases).toEqual([]);
+          expect(manifest.entries).toContainEqual({
+            kind: "missing",
+            sourcePath: serviceIntent,
+            sqlite: true,
+            directory: false,
+          });
           for (const file of [shared, agent, `${agent}-journal`, alias, companionAlias]) {
             expect(manifest.excludedRoots).toContain(file);
             expect(manifest.entries.some((entry) => entry.sourcePath === file)).toBe(false);

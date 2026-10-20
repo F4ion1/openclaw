@@ -1,6 +1,8 @@
 import { listAgentIds } from "../agents/agent-scope.js";
-import { isExperimentalClawsEnabled } from "../claws/experimental.js";
-import { collectBrowserReadinessFindings } from "../commands/doctor-browser.js";
+import {
+  maybeRepairOwnedChromeExtensionNativeHosts,
+  collectBrowserReadinessFindings,
+} from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import {
   checkShellCompletionStatus,
@@ -21,8 +23,6 @@ import {
   collectDisabledCodexPluginRouteIssues,
 } from "../commands/doctor/shared/codex-route-warnings.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
-import type { CronListPageResult } from "../cron/service/list-page-types.js";
-import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
@@ -31,20 +31,16 @@ import { createAcpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { bootstrapSizeCheck } from "./doctor-core-bootstrap-size-check.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
-import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
-import {
-  collectRuntimeToolSchemaFindingsWithRuntime,
-  createRuntimeToolSchemaCheck,
-} from "./doctor-tool-schema-check.js";
+import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
+import type { HealthFinding } from "./health-checks.js";
 
 type CoreHealthCheck = Omit<DoctorHealthCheck, "kind" | "source">;
 
@@ -54,77 +50,6 @@ const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
-
-async function listGatewayCronJobsWithRuntime(
-  ctx: HealthCheckContext,
-): Promise<readonly CronJob[]> {
-  const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
-  const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
-  if (
-    (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
-    ctx.allowExecSecretRefs !== true
-  ) {
-    throw new Error(
-      "Gateway cron inventory skipped because credentials use an exec SecretRef; rerun doctor with --allow-exec.",
-    );
-  }
-  const jobs: CronJob[] = [];
-  let offset = 0;
-  let snapshotRevision: string | undefined;
-  let total: number | undefined;
-
-  while (total === undefined || offset < total) {
-    const request = {
-      method: "cron.list",
-      params: { includeDisabled: true, limit: 200, offset },
-      timeoutMs: 3000,
-      config: ctx.cfg,
-      deviceIdentity: null,
-    };
-    const page = await requestGateway<CronListPageResult>(request);
-    const validPage =
-      Array.isArray(page.jobs) &&
-      typeof page.snapshotRevision === "string" &&
-      page.snapshotRevision.length > 0 &&
-      Number.isSafeInteger(page.total) &&
-      page.total >= 0 &&
-      page.offset === offset &&
-      Number.isSafeInteger(page.limit) &&
-      page.limit > 0 &&
-      typeof page.hasMore === "boolean" &&
-      (page.nextOffset === null || Number.isSafeInteger(page.nextOffset));
-    if (!validPage) {
-      throw new Error("Gateway returned an invalid cron inventory response.");
-    }
-    if (
-      (snapshotRevision !== undefined && page.snapshotRevision !== snapshotRevision) ||
-      (total !== undefined && page.total !== total)
-    ) {
-      throw new Error("Gateway cron inventory changed while doctor was reading it.");
-    }
-    snapshotRevision ??= page.snapshotRevision;
-    total ??= page.total;
-    jobs.push(...page.jobs);
-
-    if (!page.hasMore) {
-      if (page.nextOffset !== null || jobs.length !== total) {
-        throw new Error("Gateway returned an inconsistent cron inventory response.");
-      }
-      return jobs;
-    }
-    const expectedNextOffset = offset + page.jobs.length;
-    if (
-      page.nextOffset !== expectedNextOffset ||
-      expectedNextOffset <= offset ||
-      expectedNextOffset >= total
-    ) {
-      throw new Error("Gateway returned an invalid cron inventory cursor.");
-    }
-    offset = expectedNextOffset;
-  }
-
-  throw new Error("Gateway returned an incomplete cron inventory response.");
-}
 
 const gatewayConfigCheck: CoreHealthCheck = {
   id: "core/doctor/gateway-config",
@@ -572,6 +497,25 @@ const browserCheck: CoreHealthCheck = {
   async detect(ctx) {
     return await collectBrowserReadinessFindings(ctx.cfg);
   },
+  async repair(ctx) {
+    if (ctx.dryRun === true) {
+      return {
+        status: "skipped",
+        reason: "native-host repair requires filesystem writes",
+        changes: [],
+      };
+    }
+    const result = await maybeRepairOwnedChromeExtensionNativeHosts();
+    return {
+      ...(result.status
+        ? { status: result.status, reason: result.reason }
+        : result.changes.length === 0 && result.warnings.length > 0
+          ? { status: "failed" as const, reason: result.warnings.join("; ") }
+          : {}),
+      changes: result.changes,
+      warnings: result.warnings,
+    };
+  },
 };
 
 async function detectSkillsReadiness(
@@ -787,35 +731,9 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
         return collectLocalAudioAccelerationFindings();
       },
     },
-    createRuntimeToolSchemaCheck({
-      collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
-    }),
+    runtimeToolSchemaCheck,
     workspaceSuggestionsCheck,
     skillWorkshopToolPolicyCheck,
-    ...(isExperimentalClawsEnabled()
-      ? [
-          {
-            id: "core/doctor/claws-state",
-            description: "Claw lifecycle ownership and managed resources are consistent.",
-            defaultEnabled: false as const,
-            async detect(ctx: HealthCheckContext) {
-              const [{ collectClawStateHealthFindings }, { listConfiguredMcpServers }] =
-                await Promise.all([
-                  import("../claws/doctor.js"),
-                  import("../config/mcp-config.js"),
-                ]);
-              return await collectClawStateHealthFindings({
-                cfg: ctx.cfg,
-                env: process.env,
-                listMcpServers: listConfiguredMcpServers,
-                cronGateway: {
-                  list: () => listGatewayCronJobsWithRuntime(ctx),
-                },
-              });
-            },
-          },
-        ]
-      : []),
     commandOwnerCheck,
     skillsReadinessCheck,
     finalConfigValidationCheck,

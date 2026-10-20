@@ -19,6 +19,7 @@ openclaw gateway run   # equivalent, explicit form
 
 <AccordionGroup>
   <Accordion title="Startup behavior">
+    - Unexpected startup failures print a redacted `[openclaw] Reason:` without requiring debug mode, including in managed service logs. Use `--debug` or `OPENCLAW_DEBUG=1` to include stack traces.
     - Agent requests wait for the current startup model runtime publication, including when a config refresh replaces the initial publication while startup is still preparing authentication.
     - Deferred agent database preparation retries an overlapping config or secrets refresh before admitting sessions. Database opening and migration run once; repeated supersession or a genuine database failure retains the startup refusal.
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
@@ -34,6 +35,7 @@ openclaw gateway run   # equivalent, explicit form
     - `SIGUSR2` triggers an in-process restart when authorized. `commands.restart` (default: enabled) gates externally-sent `SIGUSR2`; set it to `false` to block manual OS-signal restarts. The agent-facing `gateway` tool is read-only; agents request restart through the `openclaw` delegation tool. Effective Full Access, including Default (Full Access), authorizes permitted delegated changes without an approval prompt; restricted runs require human approval. See [Delegated setup and repair](/gateway/permission-modes#delegated-setup-and-repair).
     - `SIGUSR1` is reserved for Node's inspector, so attaching a debugger does not restart the Gateway. Prefer `openclaw gateway restart` for restarts; update manual restart scripts to send `SIGUSR2`.
     - `SIGINT`/`SIGTERM` stop the process but do not restore custom terminal state — if you wrap the CLI in a TUI or raw-mode input, restore the terminal yourself before exit.
+    - A foreground Gateway does not follow the lifetime of the process that started it. OpenClaw's own launchers, such as Node runtime recovery, forward stop signals and stop their Gateway when they exit. A shell or wrapper script that does not forward signals leaves the Gateway serving after the wrapper is killed. Signal the Gateway process itself (process title `openclaw-gateway`), or forward signals from the wrapper (for example `exec openclaw gateway run`).
 
   </Accordion>
 </AccordionGroup>

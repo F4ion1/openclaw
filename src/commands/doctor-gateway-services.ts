@@ -19,7 +19,10 @@ import {
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
-import { readDaemonRuntimePin } from "../daemon/runtime-pin-state.js";
+import {
+  readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
+} from "../daemon/runtime-pin-state.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
@@ -67,20 +70,7 @@ import {
 } from "./doctor-gateway-legacy-services.js";
 import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
-import {
-  formatServiceConfigIssues,
-  formatGatewayServiceRepairPreview,
-  reportGatewayServiceConfigAudit,
-  hasRepairableServiceDefinitionDrift,
-  isOperatorOwnedEnvironmentIssue,
-  isPreservedLaunchdTimeoutWarning,
-  isServiceDefinitionOnlyRepair,
-  isServiceInstallationOnlyRepair,
-  reportServiceDefinitionDrift,
-  reportGatewayServiceFailure,
-  reportUnresolvedGatewayServiceFindings,
-  noteDeclinedGatewayServiceRepair,
-} from "./doctor-service-audit.js";
+import * as auditUi from "./doctor-service-audit.js";
 import {
   confirmDoctorServiceRepair,
   formatServiceRepairDeferredNote,
@@ -271,21 +261,23 @@ export async function maybeRepairGatewayServiceConfig(
       command: null,
       platform: process.platform,
     });
-    reportServiceDefinitionDrift(audit);
+    auditUi.reportServiceDefinitionDrift(audit);
     if (audit.issues.length > 0) {
-      note(formatServiceConfigIssues(audit.issues).join("\n"), "Gateway service config");
+      note(auditUi.formatServiceConfigIssues(audit.issues).join("\n"), "Gateway service config");
     }
     return cfg;
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
     formatGatewayHeapLimitReport(
-      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, {}, command.programArguments),
+      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, command.programArguments),
     ),
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  const pinSnapshot = readDaemonRuntimePin({ kind: "gateway", env: process.env }, command);
+  const pinSnapshot = await withDaemonRuntimePinMigration(process.env, () =>
+    readDaemonRuntimePin({ kind: "gateway", env: process.env }, command),
+  );
   const serviceInstallEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ...(managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
@@ -367,12 +359,12 @@ export async function maybeRepairGatewayServiceConfig(
     expectedPort: repairPort,
     ...(installationDrift ? { expectedCommand: expectedPlan } : {}),
   });
-  reportServiceDefinitionDrift(audit);
+  auditUi.reportServiceDefinitionDrift(audit);
   const definitionRepair =
     !installationDrift &&
     Boolean(expectedRoot) &&
     !expectedLayout?.entrypointSourceCheckout &&
-    hasRepairableServiceDefinitionDrift(audit);
+    auditUi.hasRepairableServiceDefinitionDrift(audit);
   if (audit.runtimeNote) {
     note(audit.runtimeNote, "Gateway runtime");
   }
@@ -455,7 +447,7 @@ export async function maybeRepairGatewayServiceConfig(
     note(serviceRewriteBlock, "Gateway service config");
   }
 
-  const sourceCheckoutWarningToShow = reportGatewayServiceConfigAudit(
+  const sourceCheckoutWarningToShow = auditUi.reportGatewayServiceConfigAudit(
     audit,
     serviceLayout,
     definitionRepair,
@@ -464,7 +456,7 @@ export async function maybeRepairGatewayServiceConfig(
     return cfg;
   }
   // A short custom timeout is diagnostic, not permission to overwrite native policy.
-  if (!definitionRepair && !installationDrift && isPreservedLaunchdTimeoutWarning(audit)) {
+  if (!definitionRepair && !installationDrift && auditUi.isPreservedLaunchdTimeoutWarning(audit)) {
     return cfg;
   }
   if (
@@ -511,7 +503,11 @@ export async function maybeRepairGatewayServiceConfig(
         (isExecStartRepairIssue(issue) && hasGatewayServiceLauncherOverride(command)) ||
         (issue.code === SERVICE_AUDIT_CODES.gatewayPortMismatch &&
           hasGatewayServiceLauncherOverride(command, { includeWorkingDirectory: false })) ||
-        isOperatorOwnedEnvironmentIssue(issue, command, expectedPlan.environmentValueSources),
+        auditUi.isOperatorOwnedEnvironmentIssue(
+          issue,
+          command,
+          expectedPlan.environmentValueSources,
+        ),
     )
   ) {
     const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
@@ -532,7 +528,7 @@ export async function maybeRepairGatewayServiceConfig(
   const needsConfigWrite =
     !tokenRefConfigured && !configuredGatewayToken && Boolean(gatewayTokenForRepair);
   const { preview, unresolvedFindings: unresolvedRepairFindings } =
-    formatGatewayServiceRepairPreview({
+    auditUi.formatGatewayServiceRepairPreview({
       command,
       managedDefinition,
       plan: expectedRuntimePlan,
@@ -552,11 +548,11 @@ export async function maybeRepairGatewayServiceConfig(
     initialValue: needsConfigWrite ? false : needsAggressive ? prompter.shouldForce : true,
     requiresInteractiveConfirmation:
       needsConfigWrite ||
-      (!(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
-        !(definitionRepair && isServiceDefinitionOnlyRepair(audit))),
+      (!(installationDrift && auditUi.isServiceInstallationOnlyRepair(audit)) &&
+        !(definitionRepair && auditUi.isServiceDefinitionOnlyRepair(audit))),
   });
   if (!repair) {
-    noteDeclinedGatewayServiceRepair(needsConfigWrite, sourceCheckoutWarningToShow);
+    auditUi.noteDeclinedGatewayServiceRepair(needsConfigWrite, sourceCheckoutWarningToShow);
     return cfg;
   }
   try {
@@ -574,7 +570,7 @@ export async function maybeRepairGatewayServiceConfig(
       }
     }
   } catch (err) {
-    reportGatewayServiceFailure(
+    auditUi.reportGatewayServiceFailure(
       `Gateway service repair blocked: ${String(err)}`,
       runtime,
       options.onFinding,
@@ -612,7 +608,7 @@ export async function maybeRepairGatewayServiceConfig(
       if (err instanceof ConfigWritePostCommitError) {
         throw err;
       }
-      reportGatewayServiceFailure(
+      auditUi.reportGatewayServiceFailure(
         `Failed to persist gateway.auth.token before service repair: ${String(err)}`,
         runtime,
         options.onFinding,
@@ -658,7 +654,7 @@ export async function maybeRepairGatewayServiceConfig(
     },
   });
   if (unresolvedRepairFindings.length > 0) {
-    reportUnresolvedGatewayServiceFindings(unresolvedRepairFindings, options.onFinding);
+    auditUi.reportUnresolvedGatewayServiceFindings(unresolvedRepairFindings, options.onFinding);
   }
   return cfgForServiceInstall;
 }

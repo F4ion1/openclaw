@@ -8,7 +8,7 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
-  createAuthProfileMigrationSourceReceipt,
+  prepareAuthProfileSourceReceipt,
   type AuthProfileMigrationSourceReceipt,
 } from "../commands/doctor-auth-migration-receipts.js";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -172,10 +172,9 @@ describe("interactive Doctor auth migration", () => {
       const state = await makeState();
       const sourcePath = await state.writeText("credentials/oauth.json", "{}\n");
       const sourceBytes = fs.readFileSync(sourcePath);
-      const receipt = createAuthProfileMigrationSourceReceipt({
-        sourcePath,
-        sourceBytes,
-        sourceRecordCount: 0,
+      const receipt = prepareAuthProfileSourceReceipt({
+        pathname: sourcePath,
+        now: Date.now,
         targetDatabasePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
         targetTable: "auth_profile_store",
         env: state.env,

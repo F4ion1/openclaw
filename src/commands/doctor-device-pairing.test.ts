@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 // Doctor device pairing tests cover device-pairing checks, repair prompts, and diagnostics.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
-import { seedDeviceAuthToken } from "../infra/device-auth-store.test-support.js";
+import { clearDeviceAuthToken, loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import {
+  seedDeviceAuthToken,
+  readDeviceAuthTokenForTest,
+} from "../infra/device-auth-store.test-support.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -16,16 +18,14 @@ import {
   detectLegacyDeviceAuth,
   migrateLegacyDeviceAuth,
 } from "../infra/state-migrations.device-auth.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: exercise pairing diagnostics without opening Gateway connections.
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
@@ -98,7 +98,6 @@ describe("collectDevicePairingHealthFindings", () => {
   });
 
   afterEach(() => {
-    __setFsSafeTestHooksForTest(undefined);
     callGatewayMock.mockReset();
   });
 
@@ -191,36 +190,25 @@ describe("collectDevicePairingHealthFindings", () => {
     },
   );
 
-  it("describes remaining device-auth files when import committed before source removal failed", async () => {
+  it("retains imported device-auth JSON without reimporting a removed token", async () => {
     await withOpenClawTestState(
       { prefix: "openclaw-doctor-device-auth-debt-", env: { OPENCLAW_TEST_FAST: "1" } },
       async (state) => {
-        openOpenClawStateDatabase({ env: state.env });
         const expectedToken = "synthetic-legacy-token";
         const sourcePath = await state.writeText(
           "identity/device-auth.json",
           legacyDeviceAuthContents,
         );
-        // Migration lock release retires native handles; each read reacquires the owner.
         const readTokenRow = () => {
-          const { db: readDb } = openOpenClawStateDatabase({ env: state.env });
-          return readDb
-            .prepare("SELECT token FROM device_auth_tokens WHERE device_id = ? AND role = ?")
-            .get("synthetic-device", "operator");
+          const entry = readDeviceAuthTokenForTest({
+            env: state.env,
+            deviceId: "synthetic-device",
+            role: "operator",
+          });
+          return entry ? { token: entry.token } : undefined;
         };
-        let rowAtRemoval: unknown;
-        let removalAttempts = 0;
-        __setFsSafeTestHooksForTest({
-          beforeRootFallbackMutation(operation, targetPath) {
-            if (operation === "remove" && targetPath === sourcePath) {
-              removalAttempts++;
-              rowAtRemoval = readTokenRow();
-              throw new Error("synthetic device-auth source removal failure");
-            }
-          },
-        });
-        try {
-          const result = await migrateLegacyDeviceAuth({
+        const migrate = () =>
+          migrateLegacyDeviceAuth({
             detected: detectLegacyDeviceAuth({
               stateDir: state.stateDir,
               doctorOnlyStateMigrations: true,
@@ -228,30 +216,26 @@ describe("collectDevicePairingHealthFindings", () => {
             stateDir: state.stateDir,
             env: state.env,
           });
-          expect(removalAttempts).toBe(1);
-          expect(rowAtRemoval).toEqual({ token: expectedToken });
-          expect(result.warnings.length).toBeGreaterThan(0);
-        } finally {
-          __setFsSafeTestHooksForTest(undefined);
-        }
+        expect((await migrate()).warnings).toEqual([]);
         expect(readTokenRow()).toEqual({ token: expectedToken });
-        // Existing rows do not release the legacy-file access guard.
         await expect(
           loadDeviceAuthToken({ deviceId: "synthetic-device", role: "operator", env: state.env }),
-        ).rejects.toThrow("Legacy device auth requires migration");
+        ).resolves.toMatchObject({ token: expectedToken });
         const params = { cfg: { gateway: { mode: "remote" as const } }, healthOk: false };
         const findings = await collectDevicePairingHealthFindings(params);
-        expect(findings).toEqual([
-          expect.objectContaining({
-            requirement: "device-auth-store-legacy-file",
-            message: expect.stringContaining("is still present"),
-            fixHint: expect.stringContaining("migration or cleanup"),
-          }),
-        ]);
-        expect(findings[0]?.message).not.toContain("has not been imported");
-        expect(findings[0]?.message).not.toContain(expectedToken);
+        expect(findings).toEqual([]);
         expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
         expect(readTokenRow()).toEqual({ token: expectedToken });
+        expect(
+          await clearDeviceAuthToken({
+            deviceId: "synthetic-device",
+            role: "operator",
+            env: state.env,
+          }),
+        ).toBe(true);
+        expect((await migrate()).changes).toEqual([]);
+        expect(readTokenRow()).toBeUndefined();
+        expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
       },
     );
   });
@@ -392,6 +376,8 @@ describe("collectDevicePairingHealthFindings", () => {
       method: "device.pair.list",
       timeoutMs: 5_000,
       config: { gateway: { mode: "remote" } },
+      sharedStateMode: "read-only",
+      assertDispatchCurrent: undefined,
     });
     expect(findings).toHaveLength(1);
     expect(message).toContain("req-gateway-1");
