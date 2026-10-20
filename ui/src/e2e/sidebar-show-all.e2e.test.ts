@@ -2,27 +2,22 @@ import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Show all agents sidebar navigation" });
 
 suite.define(() => {
-  it("shows all agents from empty My sessions and other panels, including re-selection and reload", async () => {
-    await suite.withPage(
+  it("shows all agents from empty My sessions and other panels, including re-selection and reload", () =>
+    suite.withPage(
       { viewport: { width: 1280, height: 900 }, locale: "en-US" },
       async ({ page }) => {
         const agentsList: AgentsListResult = {
           defaultId: "main",
           mainKey: "main",
           scope: "per-sender",
-          agents: [
-            { id: "main", name: "Harbor" },
-            { id: "research", name: "Research" },
-          ],
+          agents: [{ id: "main" }, { id: "research" }],
         };
         await installMockGateway(page, {
-          sessions: [],
           presenceUsers: [{ self: true, id: "profile-riley", name: "Riley" }],
           methodResponses: {
             "sessions.list": {
@@ -37,13 +32,6 @@ suite.define(() => {
               ],
             },
             "agents.list": agentsList,
-            "chat.startup": {
-              agentsList,
-              messages: [],
-              metadata: { models: [] },
-              sessionId: "session:agent:main:main",
-              thinkingLevel: null,
-            },
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -55,11 +43,9 @@ suite.define(() => {
         const switcher = sidebar.locator(
           ".sidebar-agent-card__main, .sidebar-workspace-header__main",
         );
-        await switcher.waitFor();
         await chooseSidebarOwner(page, "owner:profile-riley");
         await sidebar.getByText("No active sessions match this filter", { exact: true }).waitFor();
         expect(await ownerTitle.textContent()).toContain("My sessions");
-        await captureSidebarUiProof(suite, page, "empty-my-sessions.png");
         for (const panel of ["sessions", "pages", "online", "pages"] as const) {
           const tab = sidebar.locator(`[data-navigation-view="${panel}"]`);
           if (panel !== "sessions") {
@@ -86,14 +72,10 @@ suite.define(() => {
             .toEqual(["main", "research"]);
           await expect.poll(() => groups.first().isVisible()).toBe(true);
           expect(await ownerTitle.textContent()).toContain("My sessions");
-          if (panel === "sessions") {
-            await captureSidebarUiProof(suite, page, "all-agents-empty-my-sessions.png");
-          }
         }
         await page.reload();
         await waitForControlUiRoute(page, { routeId: "chat" });
         await expect.poll(() => groups.count()).toBe(2);
       },
-    );
-  });
+    ));
 });

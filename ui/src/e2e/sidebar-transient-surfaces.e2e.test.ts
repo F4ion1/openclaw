@@ -1,5 +1,3 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiSettingsTakeover } from "../test-helpers/control-ui-e2e.ts";
@@ -11,15 +9,11 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
-import {
-  captureSidebarUiProof,
-  createSidebarCustomizationSuite,
-} from "./sidebar-customization.test-support.ts";
+import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite(
   "Control UI transient surface tokens mocked Gateway E2E",
 );
-const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const themes = [
   { colorScheme: "light", resolvedTheme: "light", theme: "claw" },
@@ -42,12 +36,7 @@ suite.define(() => {
     "uses one transient surface contract in $theme $colorScheme",
     ({ colorScheme, resolvedTheme, theme }) =>
       suite.withPage(
-        {
-          colorScheme,
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1440 },
-        },
+        { colorScheme, locale: "en-US", serviceWorkers: "block" },
         async ({ page }) => {
           const sessionKey = "agent:main:release-notes";
           await installMockGateway(page, {
@@ -78,23 +67,12 @@ suite.define(() => {
           });
           await menuSurface.waitFor({ state: "visible" });
           const menuTokens = await surfaceTokens(menuSurface);
-          const capture = async (name: string) => {
-            if (!captureProof || theme !== "claw") {
-              return;
-            }
-            const artifactDir = path.join(suite.artifactDir, "transient-surfaces");
-            await mkdir(artifactDir, { recursive: true });
-            await captureSidebarUiProof({ artifactDir }, page, `${name}-${colorScheme}.png`);
-          };
-          await capture("session-menu");
-
           await page.goto(`${suite.server.baseUrl}settings/appearance`);
           await waitForControlUiSettingsTakeover(page);
           const languageSelect = page.locator("#settings-language openclaw-select-picker");
           await openPicker(languageSelect);
           const listbox = languageSelect.locator(".picker-select__menu");
           await listbox.waitFor({ state: "visible" });
-          await capture("settings-listbox");
 
           expect(await surfaceTokens(listbox)).toEqual(menuTokens);
         },

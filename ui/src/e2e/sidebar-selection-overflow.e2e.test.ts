@@ -1,9 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 
@@ -15,8 +12,6 @@ const suite = createControlUiE2eSuite({
     args: ["--disable-features=OverlayScrollbar,FluentOverlayScrollbar,FluentScrollbar"],
   },
 });
-
-const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it.each([
@@ -33,18 +28,12 @@ suite.define(() => {
         category: "Design & UX",
         updatedAt: 40 - index,
       }));
-      await installMockGateway(page, {
-        methodResponses: {
-          "sessions.list": chatSessionListResponse(sessions),
-        },
-        sessionKey,
-      });
+      await installMockGateway(page, { sessions, sessionKey });
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       // The active row can render before roster admission; overflow needs the full roster.
       await waitForSessionRosterHydration(page);
-      // Exercise the authored classic scrollbar regardless of macOS overlay preferences.
-      // Either non-auto standard property would override the existing WebKit styles.
+      // Force classic scrollbars without overriding the authored WebKit styles.
       await page.addStyleTag({
         content: ".sidebar-shell__body { scrollbar-width: auto; scrollbar-color: auto; }",
       });
@@ -99,13 +88,6 @@ suite.define(() => {
         };
       });
 
-      if (captureProof) {
-        await page.locator(".sidebar").screenshot({
-          path: path.join(suite.artifactDir, `sidebar-${width}-overflow-${overflow}.png`),
-          animations: "disabled",
-        });
-        console.log("Sidebar geometry", geometry);
-      }
       expect(geometry.overflows).toBe(overflow);
       expect(geometry.scrollbarWidth > 0).toBe(overflow);
       expect(geometry.rightInset, JSON.stringify(geometry)).toBeCloseTo(geometry.leftInset, 1);
@@ -132,11 +114,7 @@ suite.define(() => {
     suite.withPage({ viewport: { height: 500, width: 1280 } }, async ({ page }) => {
       const sessionKey = "agent:main:dashboard:focused-session";
       await installMockGateway(page, {
-        methodResponses: {
-          "sessions.list": chatSessionListResponse([
-            { key: sessionKey, kind: "direct", label: "Focused session", updatedAt: 1 },
-          ]),
-        },
+        sessions: [{ key: sessionKey, kind: "direct", label: "Focused session", updatedAt: 1 }],
         sessionKey,
       });
 
@@ -167,10 +145,5 @@ suite.define(() => {
       expect(geometry.outlineLeft, JSON.stringify(geometry)).toBeGreaterThanOrEqual(
         geometry.clipLeft,
       );
-      if (captureProof) {
-        const artifactDir = path.join(suite.artifactDir, "sidebar-selection-overflow");
-        await fs.mkdir(artifactDir, { recursive: true });
-        await page.screenshot({ path: path.join(artifactDir, "focused-session-outline.png") });
-      }
     }));
 });

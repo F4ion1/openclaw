@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import {
@@ -9,11 +8,7 @@ import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
-import {
-  captureSidebarUiProof,
-  captureSettingsSidebarUiProof,
-  createSidebarCustomizationSuite,
-} from "./sidebar-customization.test-support.ts";
+import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocked Gateway E2E");
 
@@ -22,7 +17,6 @@ const RAIL_INBOX = ".sidebar-rail__bottom openclaw-sidebar-attention";
 let page: Page;
 const railButton = () => page.locator(`${RAIL_INBOX} .sidebar-issues-button`);
 const railCount = () => page.locator(`${RAIL_INBOX} .sidebar-issues-button__count`);
-const capture = (name: string) => captureSidebarUiProof(suite, page, name);
 async function openSettings() {
   await page.keyboard.press("Control+Shift+,");
   return waitForControlUiSettingsTakeover(page);
@@ -102,7 +96,7 @@ suite.define(() => {
     await expect.poll(() => badge.textContent()).toBe("2");
     await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
     await page.getByText("Failed settings transition", { exact: true }).waitFor();
-    await capture("inbox-before-hidden-events.png");
+
     await setVisibility(page, "hidden");
     await gateway.setMethodResponse("cron.list", cronFailure("Failure while away"));
     for (let index = 0; index < 20; index++) {
@@ -119,7 +113,6 @@ suite.define(() => {
       expect(await gateway.getRequests(method)).toHaveLength(2);
     }
     expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
-    await capture("inbox-after-hidden-events.png");
 
     await gateway.deferNext("cron.list");
     await gateway.emitGatewayEvent("cron", { action: "finished" });
@@ -145,7 +138,6 @@ suite.define(() => {
     expect(await page.locator('[data-attention-kind="cronFailed"]').count()).toBe(1);
     expect(await badge.textContent()).toBe("2");
     expect(await gateway.getRequests("cron.list")).toHaveLength(4);
-    await capture("inbox-dismissal-preserved-on-return.png");
   });
 
   it("refreshes stale auth attention after metadata changes while the first read is pending", async () => {
@@ -211,7 +203,7 @@ suite.define(() => {
     for (let index = 0; index < 20; index++) {
       await gateway.emitGatewayEvent("cron", { action: "finished", jobId: `job-${index}` });
     }
-    await capture("cron-burst-pending.png");
+
     for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
       expect(await gateway.getRequests(method)).toHaveLength(1);
     }
@@ -238,7 +230,6 @@ suite.define(() => {
     for (const method of ["cron.list", "cron.status"]) {
       expect(await gateway.getRequests(method)).toHaveLength(3);
     }
-    await capture("cron-burst-refreshed.png");
   });
 
   it("dismisses an open font picker before exiting Settings with Escape", async () => {
@@ -285,11 +276,6 @@ suite.define(() => {
 
     await openSettings();
     expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
-    await captureSidebarUiProof(
-      suite,
-      page,
-      `settings-without-inbox-${testCase.state.replaceAll(" ", "-")}.png`,
-    );
   });
 
   it("keeps loaded Inbox attention through collapsed chat and Settings", async () => {
@@ -443,18 +429,12 @@ suite.define(() => {
       expect(await input.inputValue()).toBe(value);
       expect(await input.isEditable()).toBe(true);
     }
-    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(suite.artifactDir, "gateway-draft-reconnected.png"),
-      });
-    }
   });
 
   it.each([
     { mode: "standalone", webChrome: false },
     { mode: "native web chrome", webChrome: true },
-  ])("aligns the settings search with navigation rows in $mode", async ({ mode, webChrome }) => {
+  ])("aligns the settings search with navigation rows in $mode", async ({ webChrome }) => {
     await page.setViewportSize({ height: 620, width: 1440 });
     if (webChrome) {
       await installNativeWebChrome(page);
@@ -474,11 +454,6 @@ suite.define(() => {
           .evaluate((element) => element.classList.contains("openclaw-native-web-chrome")),
       )
       .toBe(webChrome);
-    await captureSettingsSidebarUiProof(
-      suite,
-      settingsSidebar,
-      `settings-search-alignment-${mode.replaceAll(" ", "-")}.png`,
-    );
     await expect
       .poll(async () => {
         const [shell, input, link, nav] = await Promise.all([
@@ -507,10 +482,5 @@ suite.define(() => {
         })),
       )
       .toEqual({ scrolled: true, opacity: "1" });
-    await captureSettingsSidebarUiProof(
-      suite,
-      settingsSidebar,
-      `settings-search-scrolled-${mode.replaceAll(" ", "-")}.png`,
-    );
   });
 });
