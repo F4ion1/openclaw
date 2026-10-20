@@ -423,7 +423,6 @@ describe("POST /tools/invoke", () => {
     };
     const invoke = (action: string) =>
       invokeTool({
-        port: sharedPort,
         headers: gatewayAdminHeaders(),
         tool: "policy_action",
         action,

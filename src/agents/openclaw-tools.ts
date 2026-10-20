@@ -463,11 +463,13 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
+            readOnly: options?.forceRestartSafeTools,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
             agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: deliveryContext,
+            sandboxContext: options?.cronSandboxContext,
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
             creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
@@ -562,6 +564,7 @@ function* createOpenClawToolsSteps(
           sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
           runId: options?.runId,
           run: options?.skillWorkshop,
+          sandboxed: options?.sandboxed,
         }),
     progressCardTool,
     ...swarmToolGroups.structuredOutput,
@@ -656,10 +659,8 @@ function* createOpenClawToolsSteps(
     pdfTool,
   ].filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
-  let allTools = tools;
   if (!options?.disablePluginTools) {
-    allTools = [
-      ...tools,
+    tools.push(
       ...(yield {
         plugins: {
           options: { ...options, activeProjectKeys },
@@ -667,12 +668,12 @@ function* createOpenClawToolsSteps(
           existingToolNames: new Set(tools.map((tool) => tool.name)),
         },
       }),
-    ];
+    );
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
 
   return finalizeOpenClawTools({
-    tools: allTools,
+    tools,
     options,
     config: resolvedConfig,
     hookAgentId: options?.requesterAgentIdOverride ?? sessionAgentId,
