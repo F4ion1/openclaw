@@ -31,7 +31,6 @@ import {
   mapCaptureEventForQa,
   readQaCaptureStartupStatus,
 } from "./lab-server-capture.js";
-import { createFailedQaLabSelfCheckRun, withQaLabRunCounts } from "./lab-server-outcomes.js";
 import {
   detectContentType,
   isControlUiProxyPath,
@@ -93,6 +92,20 @@ async function writeQaLabServerError(
     return;
   }
   writeError(res, 500, error);
+}
+
+function withQaLabRunCounts(run: Omit<QaLabScenarioRun, "counts">): QaLabScenarioRun {
+  return {
+    ...run,
+    counts: {
+      total: run.scenarios.length,
+      pending: run.scenarios.filter((scenario) => scenario.status === "pending").length,
+      running: run.scenarios.filter((scenario) => scenario.status === "running").length,
+      passed: run.scenarios.filter((scenario) => scenario.status === "pass").length,
+      failed: run.scenarios.filter((scenario) => scenario.status === "fail").length,
+      skipped: run.scenarios.filter((scenario) => scenario.status === "skip").length,
+    },
+  };
 }
 
 function parseQaEvidenceArtifactIndexText(value: string): number {
@@ -293,12 +306,11 @@ export async function startQaLabServer(
     if (stopping || activeRun) {
       throw new Error(stopping ? "QA Lab is stopping" : "QA run already in progress");
     }
-    const startedAt = new Date().toISOString();
     const run = (async () => {
       latestScenarioRun = withQaLabRunCounts({
         kind: "self-check",
         status: "running",
-        startedAt,
+        startedAt: new Date().toISOString(),
         scenarios: [
           {
             id: "qa-self-check",
@@ -318,7 +330,7 @@ export async function startQaLabServer(
       latestScenarioRun = withQaLabRunCounts({
         kind: "self-check",
         status: "completed",
-        startedAt,
+        startedAt: latestScenarioRun.startedAt,
         finishedAt: new Date().toISOString(),
         scenarios: [
           {
@@ -336,14 +348,9 @@ export async function startQaLabServer(
         generatedAt: new Date().toISOString(),
       };
       return result;
-    })()
-      .catch((error: unknown) => {
-        latestScenarioRun = createFailedQaLabSelfCheckRun(startedAt, error);
-        throw error;
-      })
-      .finally(() => {
-        activeRun = null;
-      });
+    })().finally(() => {
+      activeRun = null;
+    });
     activeRun = run;
     return run;
   }
