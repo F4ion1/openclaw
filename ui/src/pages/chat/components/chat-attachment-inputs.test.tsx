@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { onSettled } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
@@ -15,8 +16,6 @@ let restoreDialog: () => void;
 
 const input = (kind: string, container: Element = host) =>
   container.querySelector<HTMLInputElement>(`.agent-chat__${kind}-input`)!;
-const menu = (container: Element = host) =>
-  container.querySelector<HTMLButtonElement>(".attachment-menu")!;
 const clickSpy = (element: HTMLElement) =>
   vi.spyOn(element, "click").mockImplementation(() => undefined);
 function expectRect(element: HTMLElement, ...values: number[]) {
@@ -44,56 +43,45 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function mountInputs(
-  initial: ChatAttachmentControlsProps,
-  composerClass?: string,
-  inputHandle = createChatAttachmentInputHandle(),
-  container = host,
-) {
+function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: string) {
+  const container = composerClass ? host.appendChild(document.createElement("div")) : host;
+  container.className = composerClass ?? "";
+  const handle = createChatAttachmentInputHandle();
+  const trigger = document.createElement("button");
+  trigger.addEventListener("click", () => handle.open("camera"));
   const view = mountSolid(
     (props: ChatAttachmentControlsProps) => {
-      let trigger: HTMLButtonElement | undefined;
-      onSettled(() => inputHandle.bindAnchor(trigger));
-      return composerClass ? (
-        <div class={composerClass}>
-          <ChatAttachmentInputs {...props} inputHandle={inputHandle} />
-          <button
-            ref={(element) => (trigger = element)}
-            class="attachment-menu"
-            onClick={() => inputHandle.open("camera")}
-          >
-            Take photo
-          </button>
-        </div>
-      ) : (
-        <ChatAttachmentInputs {...props} inputHandle={inputHandle} />
-      );
+      onSettled(() => handle.bindAnchor(trigger));
+      return <ChatAttachmentInputs {...props} inputHandle={handle} />;
     },
     initial,
     container,
   );
+  container.append(trigger);
   const camera = container.querySelector("openclaw-chat-camera-capture")!;
   const draw = async (next: ChatAttachmentControlsProps) => {
     view.update(next);
     await camera.updateComplete;
   };
-  return { camera, draw };
+  return {
+    camera,
+    draw,
+    handle,
+    trigger,
+    file: input("file", container),
+    photo: input("photo", container),
+  };
 }
 
 it("retains the camera across input renders and retires its active read scope", async () => {
-  const props: ChatAttachmentControlsProps = {
-    readSignal: new AbortController().signal,
-    onAttachmentsChange: vi.fn(),
-  };
+  const props = { readSignal: new AbortController().signal };
   const { draw, camera } = mountInputs(props);
   await camera.updateComplete;
   expect(camera.childElementCount).toBe(0);
 
-  for (const next of [props, { ...props, draft: "A new draft" }]) {
-    await draw(next);
-    expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
-    expect(camera.childElementCount).toBe(0);
-  }
+  await draw({ ...props, draft: "A new draft" });
+  expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
+  expect(camera.childElementCount).toBe(0);
 
   await draw({ ...props, disabled: true });
   expect(camera.disabled).toBe(true);
@@ -123,17 +111,12 @@ it.each(
   async ({ composerClass, android }) => {
     if (android) {
       vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
-        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36",
+        "Android Chrome/153.0.0.0 Mobile Safari/537.36",
       );
     }
-    const initialProps = { onAttachmentsChange: vi.fn(), disabled: false };
-    const { draw, camera } = mountInputs(initialProps, composerClass);
-    const trigger = menu();
+    const initialProps = { disabled: false };
+    const { draw, camera, trigger, photo: photoInput } = mountInputs(initialProps, composerClass);
     const nativeInput = input("camera");
-    const photoInput = input("photo");
-    if (!camera || !trigger || !nativeInput || !photoInput) {
-      throw new Error("Missing attachment controls");
-    }
     expect(nativeInput).toMatchObject({ accept: "image/*", multiple: false });
     expect(nativeInput.getAttribute("capture")).toBe("environment");
     expect(photoInput).toMatchObject({ accept: "image/*", multiple: true });
@@ -154,12 +137,12 @@ it.each(
       expect(camera.querySelector("openclaw-modal-dialog")).toBeNull();
     } else {
       expect(clickNative).not.toHaveBeenCalled();
-      const nativeButton = [...camera.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Use device camera",
+      const nativeButton = expectDefined(
+        [...camera.querySelectorAll("button")].find(
+          (button) => button.textContent?.trim() === "Use device camera",
+        ),
+        "native-camera action",
       );
-      if (!nativeButton) {
-        throw new Error("Missing explicit native-camera action");
-      }
       rectangle.mockReturnValue(new DOMRect(90, 100, 110, 120));
       nativeButton.click();
       expect(clickNative).toHaveBeenCalledOnce();
@@ -181,43 +164,35 @@ it.each(
 );
 
 it("keeps mounted picker refs scoped and refreshes their anchor rectangle on every activation", () => {
-  const first = document.createElement("div");
-  const second = document.createElement("div");
-  host.append(first, second);
-  const firstHandle = createChatAttachmentInputHandle();
-  const secondHandle = createChatAttachmentInputHandle();
-  mountInputs({}, "agent-chat__composer-shell", firstHandle, first);
-  mountInputs({}, "new-session-page__composer", secondHandle, second);
-  const firstFile = input("file", first);
-  const firstPhoto = input("photo", first);
-  const secondFile = input("file", second);
+  const first = mountInputs({}, "agent-chat__composer-shell");
+  const second = mountInputs({}, "new-session-page__composer");
   const rectangle = vi
-    .spyOn(menu(first), "getBoundingClientRect")
+    .spyOn(first.trigger, "getBoundingClientRect")
     .mockReturnValue(new DOMRect(12, 24, 36, 48));
-  vi.spyOn(menu(second), "getBoundingClientRect").mockReturnValue(new DOMRect(50, 60, 70, 80));
-  const clickFirst = clickSpy(firstFile);
-  const clickPhoto = clickSpy(firstPhoto);
-  const clickSecond = clickSpy(secondFile);
+  vi.spyOn(second.trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(50, 60, 70, 80));
+  const clickFirst = clickSpy(first.file);
+  const clickPhoto = clickSpy(first.photo);
+  const clickSecond = clickSpy(second.file);
 
-  firstHandle.open("file");
+  first.handle.open("file");
   expect(clickFirst).toHaveBeenCalledOnce();
   expect(clickSecond).not.toHaveBeenCalled();
-  expectRect(firstFile, 12, 24, 36, 48);
+  expectRect(first.file, 12, 24, 36, 48);
 
   rectangle.mockReturnValue(new DOMRect(90, 100, 110, 120));
-  firstHandle.openNative("photo");
+  first.handle.openNative("photo");
   expect(clickPhoto).toHaveBeenCalledOnce();
-  expectRect(firstPhoto, 90, 100, 110, 120);
+  expectRect(first.photo, 90, 100, 110, 120);
   expect(rectangle).toHaveBeenCalledTimes(2);
 
-  secondHandle.open("file");
+  second.handle.open("file");
   expect(clickSecond).toHaveBeenCalledOnce();
-  expectRect(secondFile, 50, 60);
+  expectRect(second.file, 50, 60);
 
   cleanupSolid();
-  firstHandle.open("file");
-  firstHandle.openNative("photo");
-  secondHandle.open("file");
+  first.handle.open("file");
+  first.handle.openNative("photo");
+  second.handle.open("file");
   expect(clickFirst).toHaveBeenCalledOnce();
   expect(clickPhoto).toHaveBeenCalledOnce();
   expect(clickSecond).toHaveBeenCalledOnce();

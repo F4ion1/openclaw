@@ -4,10 +4,7 @@ import type { StreamTargetChunk } from "mediabunny";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VideoCompressionResponse } from "./chat-attachment-video.ts";
 
-const encoder = vi.hoisted(() => ({
-  attempts: [] as StreamTargetChunk[][],
-  writes: 0,
-}));
+const encoder = vi.hoisted(() => ({ attempts: [] as StreamTargetChunk[][], writes: 0 }));
 
 vi.mock("mediabunny", () => {
   class StreamTarget {
@@ -86,11 +83,8 @@ async function compress(attempts: StreamTargetChunk[][]): Promise<VideoCompressi
     });
   });
   await import("./chat-attachment-video.worker.ts");
-  workerScope.dispatchEvent(
-    new MessageEvent("message", {
-      data: { file: new File(["source"], "screen.mp4"), maxBytes: 100_000 },
-    }),
-  );
+  const file = new File([], "screen.mp4");
+  workerScope.dispatchEvent(new MessageEvent("message", { data: { file, maxBytes: 100_000 } }));
   return result;
 }
 
