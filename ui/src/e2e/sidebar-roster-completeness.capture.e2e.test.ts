@@ -22,14 +22,11 @@ function rosterMock() {
         `agent:main:${prefix}-${index}`,
         `${label} ${index}`,
         BASE_TIME - age - index * 1_000,
-        {
-          sessionId: `${prefix}-${index}`,
-          ...(category ? { category } : {}),
-        },
+        { category },
       ),
     );
   const rows = [
-    sessionRow(MAIN_KEY, "Main", BASE_TIME, { sessionId: "main" }),
+    sessionRow(MAIN_KEY, "Main", BASE_TIME),
     ...group(2, "fresh", "Fresh fix", 1_000, FRESH_CATEGORY),
     // A 50/60-row recency page must miss the categorized tail.
     ...group(80, "filler", "Untitled", 100_000),
@@ -86,15 +83,13 @@ suite.define(() => {
         .getByText(STALE_CATEGORY, { exact: false })
         .first()
         .waitFor({ timeout: 10_000 });
-      // Captured before the row assertion so a pre-fix run still produces its
-      // own proof image instead of dying at the assertion with nothing to show.
+      // Capture the pre-fix failure before asserting its missing row.
       await captureUiProof(
         suite,
         page,
         `roster-completeness-${process.env.OPENCLAW_ROSTER_PROOF ?? "after"}.png`,
       );
-      // The section header renders from the group catalog either way; the proof
-      // is that its rows arrived, which a truncated roster cannot deliver.
+      // Catalog headers alone do not prove that the rows arrived.
       await expect
         .poll(() => sidebar.getByText("Papercut 0", { exact: false }).count(), { timeout: 10_000 })
         .toBeGreaterThan(0);

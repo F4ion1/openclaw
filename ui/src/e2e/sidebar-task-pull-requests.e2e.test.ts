@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { sessionRow as fixtureRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -18,28 +19,22 @@ const parent = "agent:main:task-parent";
 const taskPullRequests = ["Typed recovery", "Terminal presentation", "Bounded backlog"].map(
   (title, index) => {
     const number = 417 + index;
-    const pullRequest = {
+    const identity = {
       owner: "example",
       repo: "project",
       number,
       title,
       branch: "fix/child-" + index,
       url: "https://github.com/example/project/pull/" + number,
-      state: "open" as const,
-      additions: 40 + index,
-      deletions: 8,
     };
-    return {
-      owner: pullRequest.owner,
-      repo: pullRequest.repo,
-      number,
-      title,
-      branch: pullRequest.branch,
-      url: pullRequest.url,
+    return Object.assign(identity, {
       sourceSessionKey: "agent:main:child-" + index,
       sourceAgentId: "main",
-      pullRequest,
-    };
+      pullRequest: Object.assign(
+        { state: "open" as const, additions: 40 + index, deletions: 8 },
+        identity,
+      ),
+    });
   },
 );
 
@@ -63,13 +58,8 @@ suite.define(() => {
             [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
             "progressCard.get": { card: null },
             "sessions.list": chatSessionListResponse([
-              { key: selected, kind: "direct", label: "Release planning", updatedAt: Date.now() },
-              {
-                key: parent,
-                kind: "direct",
-                label: "Recovery improvements",
-                updatedAt: Date.now(),
-              },
+              fixtureRow(selected, "Release planning", Date.now()),
+              fixtureRow(parent, "Recovery improvements", Date.now()),
             ]),
           },
         });

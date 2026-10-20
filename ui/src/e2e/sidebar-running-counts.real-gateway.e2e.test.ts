@@ -15,6 +15,7 @@ import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
@@ -191,21 +192,19 @@ suite.define(() => {
           // Real runtime owners produce the liveness and sessions.changed events;
           // no mocked count response or paid inference is involved.
           for (const [index, key] of keys.entries()) {
+            const runId = runIds[index]!;
+            const context = {
+              sessionKey: key,
+              sessionId: "count-proof-session-" + index,
+              agentId: "work",
+              projectSessionActive: true,
+            };
             claims.set(
-              runIds[index]!,
-              claimAgentRunContext(
-                runIds[index]!,
-                {
-                  sessionKey: key,
-                  sessionId: "count-proof-session-" + index,
-                  agentId: "work",
-                  projectSessionActive: true,
-                },
-                { trackOwner: true, ownsContext: true },
-              ),
+              runId,
+              claimAgentRunContext(runId, context, { trackOwner: true, ownsContext: true }),
             );
             emitAgentEvent({
-              runId: runIds[index]!,
+              runId,
               sessionKey: key,
               stream: "lifecycle",
               data: { phase: "start", startedAt: Date.now() },
@@ -224,15 +223,11 @@ suite.define(() => {
               })
               .toContain("13 open sessions, 12 running");
           } finally {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator(".sidebar"),
-              [person],
-              {
-                animations: "disabled",
-                elements: [page.locator(".sidebar")],
-              },
-            );
+            const sidebar = page.locator(".sidebar");
+            const frame = await takeControlUiScreenshotFrame(page, sidebar, [person], {
+              animations: "disabled",
+              elements: [sidebar],
+            });
             writeFileSync(
               path.join(suite.artifactDir, "running-count.png"),
               frame.elements[0]!.png,
@@ -267,15 +262,11 @@ suite.define(() => {
         releaseAgentRunContext(runId, claims.get(runId));
         clearAgentRunContext(runId);
       }
-      try {
-        await proxy?.close();
-      } finally {
-        try {
-          await gateway?.close({ reason: "sidebar running count proof cleanup" });
-        } finally {
-          await state.cleanup();
-        }
-      }
+      await runQaGatewayFixture(
+        async () => proxy?.close(),
+        () => gateway?.close({ reason: "sidebar running count proof cleanup" }),
+        () => state.cleanup(),
+      );
     }
   });
 });

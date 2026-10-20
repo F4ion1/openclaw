@@ -11,7 +11,10 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
-import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
+import {
+  captureSidebarUiProof,
+  createSidebarCustomizationSuite,
+} from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite(
   "Control UI transient surface tokens mocked Gateway E2E",
@@ -79,16 +82,9 @@ suite.define(() => {
             if (!captureProof || theme !== "claw") {
               return;
             }
-            await mkdir(path.join(suite.artifactDir, "transient-surfaces"), { recursive: true });
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(
-                suite.artifactDir,
-                "transient-surfaces",
-                `${name}-${colorScheme}.png`,
-              ),
-            });
+            const artifactDir = path.join(suite.artifactDir, "transient-surfaces");
+            await mkdir(artifactDir, { recursive: true });
+            await captureSidebarUiProof({ artifactDir }, page, `${name}-${colorScheme}.png`);
           };
           await capture("session-menu");
 
