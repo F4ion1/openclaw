@@ -1,4 +1,3 @@
-// Tests pending final delivery records and deferred message-tool send behavior.
 import { describe, expect, it } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -8,10 +7,10 @@ import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import {
   classifyHeartbeatPendingFinalDelivery,
-  sanitizePendingFinalDeliveryText,
+  sanitizePendingFinalDeliveryText as sanitizeText,
 } from "./pending-final-delivery-state.js";
 import {
-  buildRecoverablePendingFinalDeliveryText,
+  buildRecoverablePendingFinalDeliveryText as recoverText,
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
   resolvePendingFinalDeliveryCompletion,
@@ -19,43 +18,35 @@ import {
 
 describe("resolvePendingFinalDeliveryCompletion", () => {
   it("persists the session writer authority with durable final custody", () => {
-    const payload = setReplyPayloadMetadata(
-      { text: "settled final" },
-      {
-        pendingFinalDeliveryCompletion: {
-          deliveryId: "delivery-1",
-          intentId: "intent-1",
-          sessionId: "session-1",
-          sessionKey: "agent:main:telegram:direct:1",
-          storePath: "/tmp/sessions.json",
-        },
-        sessionWriterDeliveryAuthority: {
-          agentId: "main",
-          expectedLifecycleRevision: "revision-a",
-          expectedSessionId: "session-1",
-          expectedWriterRunId: "run-a",
-          sessionKey: "agent:main:telegram:direct:1",
-          storePath: "/tmp/sessions.json",
-        },
-      },
-    );
-
-    expect(resolvePendingFinalDeliveryCompletion([payload])).toEqual({
-      kind: "pending-final",
+    const custody = {
       deliveryId: "delivery-1",
       intentId: "intent-1",
       sessionId: "session-1",
       sessionKey: "agent:main:telegram:direct:1",
       storePath: "/tmp/sessions.json",
-      sessionWriterDeliveryAuthority: {
-        agentId: "main",
-        expectedLifecycleRevision: "revision-a",
-        expectedSessionId: "session-1",
-        expectedWriterRunId: "run-a",
-        sessionKey: "agent:main:telegram:direct:1",
-        storePath: "/tmp/sessions.json",
+    };
+    const authority = {
+      agentId: "main",
+      expectedLifecycleRevision: "revision-a",
+      expectedSessionId: "session-1",
+      expectedWriterRunId: "run-a",
+      sessionKey: custody.sessionKey,
+      storePath: custody.storePath,
+    };
+    const expected = {
+      kind: "pending-final",
+      ...custody,
+      sessionWriterDeliveryAuthority: { ...authority },
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "settled final" },
+      {
+        pendingFinalDeliveryCompletion: custody,
+        sessionWriterDeliveryAuthority: authority,
       },
-    });
+    );
+
+    expect(resolvePendingFinalDeliveryCompletion([payload])).toEqual(expected);
   });
 });
 
@@ -70,11 +61,6 @@ it.each(["no_r", "NO_R", "NO_REPLY"])(
 );
 
 describe("sanitizePendingFinalDeliveryText", () => {
-  it("preserves indented code in pending final text", () => {
-    const text = "    const value = 1;\n    use(value);";
-    expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
-  });
-
   it("strips internal metadata from durable pending delivery text", () => {
     const text = [
       "Visible reply",
@@ -88,26 +74,21 @@ describe("sanitizePendingFinalDeliveryText", () => {
       "```",
     ].join("\n");
 
-    expect(sanitizePendingFinalDeliveryText(text)).toBe("Visible reply");
+    expect(sanitizeText(text)).toBe("Visible reply");
   });
 
-  it.each(["NO_REPLY", '"NO_REPLY"', '{"action":"NO_REPLY"}', "NO_REPLY."])(
-    "preserves prepared text without reinterpreting it: %s",
-    (text) => expect(sanitizePendingFinalDeliveryText(text)).toBe(text),
+  it.each([
+    "    const value = 1;\n    use(value);",
+    "NO_REPLY",
+    '"NO_REPLY"',
+    '{"action":"NO_REPLY"}',
+    "NO_REPLY.",
+    "NO_REPLYThe user is saying hello",
+    "HEARTBEAT_OK NO_REPLY",
+    "NO_REPLY\nAnswer.\n    Code.",
+  ])("preserves prepared text without reinterpreting it: %s", (text) =>
+    expect(sanitizeText(text)).toBe(text),
   );
-
-  it.each(["NO_REPLYThe user is saying hello", "HEARTBEAT_OK NO_REPLY"])(
-    "preserves mixed silent tokens in recovery text: %s",
-    (text) => {
-      expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
-    },
-  );
-
-  it("preserves a prepared leading control-looking line", () => {
-    expect(sanitizePendingFinalDeliveryText("NO_REPLY\nAnswer.\n    Code.")).toBe(
-      "NO_REPLY\nAnswer.\n    Code.",
-    );
-  });
 });
 
 describe("normalizePendingFinalRecoveryPayloads", () => {
@@ -124,13 +105,11 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
   });
 
   it("encodes structured media URLs as durable media directives", () => {
+    expect(recoverText([{ text: "Rendered chart", mediaUrl: "/tmp/chart.png" }])).toBe(
+      "Rendered chart\nMEDIA:/tmp/chart.png",
+    );
     expect(
-      buildRecoverablePendingFinalDeliveryText([
-        { text: "Rendered chart", mediaUrl: "/tmp/chart.png" },
-      ]),
-    ).toBe("Rendered chart\nMEDIA:/tmp/chart.png");
-    expect(
-      buildRecoverablePendingFinalDeliveryText([
+      recoverText([
         {
           text: "MEDIA:/tmp/c.png",
           mediaUrls: [" /tmp/a.png ", "/tmp/b.png", "/tmp/a.png", " "],
@@ -138,60 +117,45 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
         },
       ]),
     ).toBe("MEDIA:/tmp/a.png\nMEDIA:/tmp/b.png\nMEDIA:/tmp/c.png");
-    expect(buildRecoverablePendingFinalDeliveryText([{ text: "Visible", mediaUrl: " " }])).toBe(
-      "Visible",
-    );
+    expect(recoverText([{ text: "Visible", mediaUrl: " " }])).toBe("Visible");
   });
 
   it("refuses payload shapes the text marker cannot replay without loss", () => {
     expect(
-      buildRecoverablePendingFinalDeliveryText([
+      recoverText([
         { text: "Pick one", interactive: { blocks: [{ type: "buttons", buttons: [] }] } },
       ]),
     ).toBeUndefined();
     expect(
-      buildRecoverablePendingFinalDeliveryText([
-        { text: "Secret image", mediaUrl: "/tmp/secret.png", sensitiveMedia: true },
-      ]),
+      recoverText([{ text: "Secret image", mediaUrl: "/tmp/secret.png", sensitiveMedia: true }]),
     ).toBeUndefined();
-    expect(
-      buildRecoverablePendingFinalDeliveryText([{ text: "[[reply_to_current]] visible final" }]),
-    ).toBeUndefined();
+    expect(recoverText([{ text: "[[reply_to_current]] visible final" }])).toBeUndefined();
   });
 
   it("separates implicit delivery threading from explicit reply semantics", () => {
-    expect(
-      buildRecoverablePendingFinalDeliveryText([
-        { text: "Visible final", replyToId: "source-message" },
-      ]),
-    ).toBe("Visible final");
+    expect(recoverText([{ text: "Visible final", replyToId: "source-message" }])).toBe(
+      "Visible final",
+    );
 
     const explicitReply = { text: "Visible final", replyToId: "source-message" };
     setReplyPayloadMetadata(explicitReply, { replyToIdExplicit: true });
-    expect(buildRecoverablePendingFinalDeliveryText([explicitReply])).toBeUndefined();
+    expect(recoverText([explicitReply])).toBeUndefined();
   });
 
   it("refuses multi-payload media finals because text recovery loses payload boundaries", () => {
     expect(
-      buildRecoverablePendingFinalDeliveryText([
+      recoverText([
         { text: "A", mediaUrl: "/tmp/a.png" },
         { text: "B", mediaUrl: "/tmp/b.png" },
       ]),
     ).toBeUndefined();
-    expect(
-      buildRecoverablePendingFinalDeliveryText([{ text: "A\nMEDIA:/tmp/a.png" }, { text: "B" }]),
-    ).toBeUndefined();
+    expect(recoverText([{ text: "A\nMEDIA:/tmp/a.png" }, { text: "B" }])).toBeUndefined();
   });
 
   it("preserves ordinary prose previously treated as silence", () => {
-    expect(
-      buildRecoverablePendingFinalDeliveryText([
-        { text: "No channel reply." },
-        { text: "visible final" },
-      ]),
-    ).toBe("No channel reply.\n\nvisible final");
-    expect(buildRecoverablePendingFinalDeliveryText([{ text: "No channel reply." }])).toBe(
-      "No channel reply.",
+    expect(recoverText([{ text: "No channel reply." }, { text: "visible final" }])).toBe(
+      "No channel reply.\n\nvisible final",
     );
+    expect(recoverText([{ text: "No channel reply." }])).toBe("No channel reply.");
   });
 });
