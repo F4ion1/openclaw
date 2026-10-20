@@ -58,23 +58,6 @@ export const SessionGitHubPullRequestInspectResultSchema = closedObject({
   state: stringLiteralUnion(["open", "draft", "closed", "merged"]),
   base: GitHubPullRequestRefSchema,
   head: Type.Union([GitHubPullRequestRefSchema, Type.Null()]),
-  publisher: GitHubPublicationPublisherSchema,
-  maintainerCanModify: Type.Boolean(),
-  continuation: closedObject({
-    status: stringLiteralUnion(["permission_observed", "blocked", "unknown"]),
-    reason: stringLiteralUnion([
-      "head_repository_write",
-      "maintainer_edits",
-      "closed",
-      "head_unavailable",
-      "head_changed",
-      "repository_archived",
-      "permission_unavailable",
-      "no_head_permission",
-      "protected_branch",
-    ]),
-    message: NonEmptyString,
-  }),
 });
 
 export const SessionGitHubPublishParamsSchema = closedObject({

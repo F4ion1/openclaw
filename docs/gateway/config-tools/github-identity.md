@@ -104,19 +104,16 @@ Publication may wait until the requesting turn finishes and its workspace is acc
 
 Use `github_publish` with `action: "inspect_pr"` and `pullRequestUrl` to inspect
 an existing PR authored by a currently verified GitHub account linked to the
-requesting person. The URL must name a PR on the configured GitHub host. The
-Gateway checks numeric account identity, current session access and the selected
+requesting person. The URL must name a PR on the configured GitHub host. Copied
+Files, Commits and Checks links, query strings and comment or review anchors
+resolve to the same canonical PR. The Gateway checks numeric account identity, current session access and the selected
 shared publisher. A private repository also requires current repository access
 for the linked account; shared credentials alone do not grant that access.
 
 Inspection returns the canonical PR URL, author, state, base and head repository
-IDs, branches and observed commits. Its `continuation` result distinguishes
-observed repository-write or fork maintainer-edit permission from a blocked or
-unknown outcome. Closed PRs, missing heads, archived repositories, protected
-branches and missing permissions include a concrete explanation. An observed
-permission is not a guarantee that a later push will succeed: GitHub's branch
-rules and the actual transport still apply, and later operations must recheck
-current authority and head state.
+IDs, branches and observed commits. Closed and merged PRs retain their state;
+a deleted head repository returns a null head. Later operations must check their
+own write eligibility, current authority and head state before making changes.
 
 This action makes no GitHub or workspace writes, creates no publication receipt,
 and does not bind or prepare the PR in the conversation. Its result is data,

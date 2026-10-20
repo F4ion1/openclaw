@@ -9,7 +9,6 @@ import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-con
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
-import { normalizeGitHubLogin } from "../utils/github-login.js";
 import {
   currentGitHubPublicationConfig,
   matchesCurrentGitHubPublicationIdentity,
@@ -31,13 +30,41 @@ const unavailable = () =>
   new Error(
     "The PR could not be verified as yours with current repository access. Check its URL and your linked GitHub account.",
   );
-const repositoryPattern = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/u;
 const commitPattern = /^[a-f0-9]{40}$/u;
+
+// This API observation also accepts managed-user shortcodes; the canonical profile
+// login normalizer handles non-managed usernames only. Numeric account IDs establish ownership.
+function isGitHubLogin(value: string): boolean {
+  return /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,37}[A-Za-z0-9])?$/u.test(value);
+}
+
+function isRepositoryName(value: string): boolean {
+  const [owner, name, extra] = value.split("/");
+  return (
+    owner !== undefined &&
+    isGitHubLogin(owner) &&
+    name !== undefined &&
+    /^[A-Za-z0-9._-]{1,100}$/u.test(name) &&
+    name !== "." &&
+    name !== ".." &&
+    !/\.(?:git|atom)$/iu.test(name) &&
+    extra === undefined
+  );
+}
 
 function parsePullRequestUrl(value: string, host: string) {
   const url = URL.parse(value);
-  const match = url && /^\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)\/?$/u.exec(url.pathname);
-  const repository = match?.[1];
+  const match =
+    url &&
+    /^\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)(?:\/(?:files|checks|commits(?:\/[a-f0-9]{40})?))?\/?$/u.exec(
+      url.pathname,
+    );
+  let repository: string | undefined;
+  try {
+    repository = match ? decodeURIComponent(match[1]!) : undefined;
+  } catch {
+    repository = undefined;
+  }
   const number = Number(match?.[2]);
   if (
     !url ||
@@ -45,10 +72,8 @@ function parsePullRequestUrl(value: string, host: string) {
     url.host !== host ||
     url.username ||
     url.password ||
-    url.search ||
-    url.hash ||
     !repository ||
-    !repositoryPattern.test(repository) ||
+    !isRepositoryName(repository) ||
     !Number.isSafeInteger(number) ||
     number < 1
   ) {
@@ -64,22 +89,15 @@ function repositoryFacts(value: unknown) {
     !Number.isSafeInteger(value.id) ||
     value.id < 1 ||
     typeof value.full_name !== "string" ||
-    !repositoryPattern.test(value.full_name) ||
-    typeof value.private !== "boolean" ||
-    typeof value.archived !== "boolean" ||
-    !isRecord(value.owner) ||
-    typeof value.owner.type !== "string"
+    !isRepositoryName(value.full_name) ||
+    typeof value.private !== "boolean"
   ) {
     throw unavailable();
   }
-  const permissions = isRecord(value.permissions) ? value.permissions : undefined;
   return {
     id: value.id,
     name: value.full_name,
     private: value.private,
-    archived: value.archived,
-    ownerType: value.owner.type,
-    push: typeof permissions?.push === "boolean" ? permissions.push : undefined,
   };
 }
 
@@ -202,8 +220,8 @@ export async function inspectOwnGitHubPullRequest(params: {
     for (const accountId of admittedIds) {
       const user = await read(`user/${accountId}`);
       const login =
-        isRecord(user) && typeof user.login === "string"
-          ? normalizeGitHubLogin(user.login)
+        isRecord(user) && typeof user.login === "string" && isGitHubLogin(user.login)
+          ? user.login
           : undefined;
       if (
         isRecord(user) &&
@@ -226,13 +244,12 @@ export async function inspectOwnGitHubPullRequest(params: {
     !admittedIds.includes(pr.user.id) ||
     (baseRepository.private && !privateReaders.has(pr.user.id)) ||
     typeof pr.user.login !== "string" ||
-    !normalizeGitHubLogin(pr.user.login) ||
+    !isGitHubLogin(pr.user.login) ||
     pr.number !== target.number ||
     pr.html_url !== `https://${host}/${baseRepository.name}/pull/${target.number}` ||
     (pr.state !== "open" && pr.state !== "closed") ||
     typeof pr.draft !== "boolean" ||
     typeof pr.merged !== "boolean" ||
-    typeof pr.maintainer_can_modify !== "boolean" ||
     !isRecord(pr.head)
   ) {
     throw unavailable();
@@ -256,89 +273,6 @@ export async function inspectOwnGitHubPullRequest(params: {
     }
   }
   const head = headRepository ? refFacts(pr.head, headRepository) : null;
-  let continuation: Inspection["continuation"];
-  if (pr.state === "closed" || pr.merged) {
-    continuation = {
-      status: "blocked",
-      reason: "closed",
-      message: "This PR is closed or merged; it cannot be continued as an open PR.",
-    };
-  } else if (!head || !headRepository) {
-    continuation = {
-      status: "blocked",
-      reason: "head_unavailable",
-      message: "The original head repository is unavailable. Restore it before continuing this PR.",
-    };
-  } else if (baseRepository.archived || headRepository.archived) {
-    continuation = {
-      status: "blocked",
-      reason: "repository_archived",
-      message: "The base or head repository is archived. It must be writable before continuing.",
-    };
-  } else {
-    const branch = await read(
-      `repos/${head.repository}/branches/${encodeURIComponent(head.branch)}`,
-    );
-    const permission =
-      headRepository.push === true
-        ? "head_repository_write"
-        : pr.maintainer_can_modify &&
-            baseRepository.push === true &&
-            headRepository.ownerType === "User" &&
-            headRepository.id !== baseRepository.id
-          ? "maintainer_edits"
-          : undefined;
-    if (
-      !isRecord(branch) ||
-      branch.name !== head.branch ||
-      !isRecord(branch.commit) ||
-      typeof branch.commit.sha !== "string" ||
-      !commitPattern.test(branch.commit.sha) ||
-      typeof branch.protected !== "boolean"
-    ) {
-      continuation = {
-        status: "unknown",
-        reason: "head_unavailable",
-        message:
-          "The original head branch could not be read. Check its existence and the publisher's access.",
-      };
-    } else if (branch.commit.sha !== head.commit) {
-      continuation = {
-        status: "unknown",
-        reason: "head_changed",
-        message: "The head changed during inspection. Inspect again before preparing work.",
-      };
-    } else if (!permission) {
-      continuation =
-        headRepository.push === undefined || baseRepository.push === undefined
-          ? {
-              status: "unknown",
-              reason: "permission_unavailable",
-              message:
-                "GitHub did not expose enough publisher permission information. Verify access to the original head branch.",
-            }
-          : {
-              status: "blocked",
-              reason: "no_head_permission",
-              message:
-                "The publisher has no observed write permission to the original head. Grant repository access or allow maintainer edits on an eligible fork.",
-            };
-    } else if (branch.protected) {
-      continuation = {
-        status: "unknown",
-        reason: "protected_branch",
-        message:
-          "The head branch is protected. Repository permission alone does not establish that the publisher can append commits.",
-      };
-    } else {
-      continuation = {
-        status: "permission_observed",
-        reason: permission,
-        message:
-          "GitHub reports permission to contribute to this head. This read does not test commit transport or guarantee a later push; later operations must recheck access and the head.",
-      };
-    }
-  }
   const result: Inspection = {
     url: pr.html_url,
     host,
@@ -347,13 +281,6 @@ export async function inspectOwnGitHubPullRequest(params: {
     state: pr.merged ? "merged" : pr.state === "closed" ? "closed" : pr.draft ? "draft" : "open",
     base,
     head,
-    publisher: {
-      source: identity.source,
-      accountId: identity.account.accountId,
-      login: identity.account.login,
-    },
-    maintainerCanModify: pr.maintainer_can_modify,
-    continuation,
   };
   assertCurrent();
   return { result, assertCurrent };

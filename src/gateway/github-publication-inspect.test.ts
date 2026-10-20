@@ -26,7 +26,9 @@ const mocks = githubPublicationTestMocks();
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
 
-async function fixture(options: { linked?: boolean; host?: string } = {}) {
+async function fixture(
+  options: { linked?: boolean; host?: string; repository?: string; login?: string } = {},
+) {
   const f = await createRequesterPolicyFixture({ sessionId: SESSION_ID, sessionKey: SESSION_KEY });
   const host = options.host ?? "github.com";
   const config = { ...f.config, gateway: { ...f.config.gateway, github: { host } } };
@@ -55,32 +57,24 @@ async function fixture(options: { linked?: boolean; host?: string } = {}) {
   });
   const baseRepo = {
     id: 10,
-    full_name: "example/repository",
+    full_name: options.repository ?? "example/repository",
     private: false,
-    archived: false,
-    owner: { type: "Organization" },
-    permissions: { push: true },
   };
   const fork = {
     id: 20,
     full_name: "contributor/repository",
     private: false,
-    archived: false,
-    owner: { type: "User" },
-    permissions: { push: false as boolean | undefined },
   };
   const pr = {
     number: 7,
-    html_url: `https://${host}/example/repository/pull/7`,
-    user: { id: 101, login: "contributor" },
+    html_url: `https://${host}/${baseRepo.full_name}/pull/7`,
+    user: { id: 101, login: options.login ?? "contributor" },
     state: "open",
     draft: false,
     merged: false,
-    maintainer_can_modify: true,
     base: { repo: baseRepo, ref: "release", sha: BASE },
     head: { repo: fork as typeof fork | typeof baseRepo | null, ref: "topic/existing", sha: HEAD },
   };
-  const branch = { name: "topic/existing", commit: { sha: HEAD }, protected: false };
   let accessId = 101;
   let access = "read";
   let beforeRead: ((endpoint: string) => Promise<void>) | undefined;
@@ -93,19 +87,17 @@ async function fixture(options: { linked?: boolean; host?: string } = {}) {
     const endpoint = argv.at(-1)!;
     await beforeRead?.(endpoint);
     const value =
-      endpoint === "repos/example/repository"
+      endpoint === `repos/${baseRepo.full_name}`
         ? baseRepo
         : endpoint === "repos/contributor/repository"
           ? fork
-          : endpoint === "repos/example/repository/pulls/7"
+          : endpoint === `repos/${baseRepo.full_name}/pulls/7`
             ? pr
             : endpoint.startsWith("user/")
-              ? { id: Number(endpoint.slice(5)), login: "contributor" }
-              : endpoint.endsWith("/collaborators/contributor/permission")
+              ? { id: Number(endpoint.slice(5)), login: pr.user.login }
+              : endpoint.endsWith(`/collaborators/${pr.user.login}/permission`)
                 ? { permission: access, user: { id: accessId } }
-                : endpoint.includes("/branches/")
-                  ? branch
-                  : undefined;
+                : undefined;
     return value ? commandResult(JSON.stringify(value)) : commandResult("", 1);
   });
   const invoke = async (args: Record<string, unknown> = {}, raw = false) => {
@@ -142,7 +134,6 @@ async function fixture(options: { linked?: boolean; host?: string } = {}) {
     pr,
     baseRepo,
     fork,
-    branch,
     requests,
     invoke,
     onRead(callback: (endpoint: string) => Promise<void>) {
@@ -189,15 +180,15 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
           branch: "topic/existing",
           commit: HEAD,
         },
-        continuation: {
-          status: "permission_observed",
-          reason: variant === "fork" ? "maintainer_edits" : "head_repository_write",
-        },
       });
       expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY })).toEqual(
         before,
       );
-      expect(f.requests.every((args) => args[0] === "gh" && args.includes("GET"))).toBe(true);
+      expect(f.requests.map((args) => args.at(-1))).toEqual([
+        "repos/example/repository",
+        "repos/example/repository/pulls/7",
+        ...(variant === "fork" ? ["repos/contributor/repository"] : []),
+      ]);
       expect(f.externalWrites).toEqual([]);
     },
   );
@@ -224,7 +215,7 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     if (variant === "unlinked") {
       expect(f.requests).toEqual([]);
     }
-    expect(f.requests.some((args) => args.at(-1)?.includes("/branches/"))).toBe(false);
+    expect(f.requests.some((args) => args.at(-1) === "repos/contributor/repository")).toBe(false);
   });
 
   it.each(["role", "linked identity", "publisher", "session"])(
@@ -255,7 +246,7 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
       });
       await expect(f.invoke()).rejects.toThrow();
       expect(entered).toBe(true);
-      expect(f.requests.some((args) => args.at(-1)?.includes("/branches/"))).toBe(false);
+      expect(f.requests.some((args) => args.at(-1) === "repos/contributor/repository")).toBe(false);
     },
   );
 
@@ -283,44 +274,63 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     f.fork.private = true;
     f.setAccess("none");
     await expect(f.invoke()).rejects.toThrow("could not be verified as yours");
-    expect(f.requests.some((args) => args.at(-1)?.includes("/branches/"))).toBe(false);
+    expect(f.externalWrites).toEqual([]);
   });
 
-  it.each([
-    ["closed", "blocked", "closed"],
-    ["deleted head", "blocked", "head_unavailable"],
-    ["missing permission", "blocked", "no_head_permission"],
-    ["protected", "unknown", "protected_branch"],
-    ["advanced", "unknown", "head_changed"],
-    ["archived", "blocked", "repository_archived"],
-    ["unknown permissions", "unknown", "permission_unavailable"],
-  ])(
-    "reports %s without claiming continuation is guaranteed",
-    async (condition, status, reason) => {
-      const f = await fixture();
-      if (condition === "closed") {
-        f.pr.state = "closed";
+  it("preserves draft, closed and merged states and an unavailable head", async () => {
+    const f = await fixture();
+    f.pr.draft = true;
+    expect(await f.invoke()).toMatchObject({ state: "draft" });
+    f.pr.state = "closed";
+    expect(await f.invoke()).toMatchObject({ state: "closed" });
+    f.pr.merged = true;
+    f.pr.head.repo = null;
+    expect(await f.invoke()).toMatchObject({ state: "merged", head: null });
+  });
+
+  it.each(["github.com", "git.example.test"])(
+    "resolves copied PR views on %s to the same canonical reference",
+    async (host) => {
+      const f = await fixture({ host });
+      const canonical = await f.invoke();
+      const endpoints = f.requests.map((args) => args.at(-1));
+      for (const suffix of [
+        "/",
+        "?diff=unified&w=1",
+        "#issuecomment-123",
+        "#pullrequestreview-456",
+        "/files?diff=split#diff-123",
+        "/commits",
+        `/commits/${HEAD}`,
+        "/checks?check_run_id=789",
+      ]) {
+        f.requests.length = 0;
+        expect(await f.invoke({ pullRequestUrl: f.pr.html_url + suffix })).toEqual(canonical);
+        expect(f.requests.map((args) => args.at(-1))).toEqual(endpoints);
       }
-      if (condition === "deleted head") {
-        f.pr.head.repo = null;
-      }
-      if (condition === "missing permission") {
-        f.pr.maintainer_can_modify = false;
-      }
-      if (condition === "protected") {
-        f.branch.protected = true;
-      }
-      if (condition === "advanced") {
-        f.branch.commit.sha = "c".repeat(40);
-      }
-      if (condition === "archived") {
-        f.fork.archived = true;
-      }
-      if (condition === "unknown permissions") {
-        f.fork.permissions.push = undefined;
-        f.pr.maintainer_can_modify = false;
-      }
-      expect(await f.invoke()).toMatchObject({ continuation: { status, reason } });
+    },
+  );
+
+  it.each(["github.com", "git.example.test"])(
+    "reads a managed account's current login and repository name on %s",
+    async (host) => {
+      const f = await fixture({
+        host,
+        repository: "mona-cat_octo/.repo.._",
+        login: "mona-cat_octo",
+      });
+      f.baseRepo.private = true;
+      expect(await f.invoke()).toMatchObject({
+        url: `https://${host}/mona-cat_octo/.repo.._/pull/7`,
+        author: { accountId: 101, login: "mona-cat_octo" },
+        base: { repository: "mona-cat_octo/.repo.._", repositoryId: 10 },
+      });
+      expect(
+        f.requests.some(
+          (args) =>
+            args.at(-1) === "repos/mona-cat_octo/.repo.._/collaborators/mona-cat_octo/permission",
+        ),
+      ).toBe(true);
     },
   );
 
@@ -352,7 +362,17 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
       "https://other.test/example/repository/pull/7",
       "https://name:secret@github.com/example/repository/pull/7",
       "https://github.com/example/repository/issues/7",
-      "https://github.com/example/repository/pull/7?token=synthetic",
+      "https://github.com:8443/example/repository/pull/7",
+      "https://github.com/example/repository/pull/7/other",
+      "https://github.com/example/repository/pull/7/commits/not-a-commit",
+      "https://github.com/-example/repository/pull/7",
+      "https://github.com/example/repository.git/pull/7",
+      "https://github.com/example/repository.atom/pull/7",
+      "https://github.com/example/repo%2Fother/pull/7",
+      "https://github.com/example/repo%ZZ/pull/7",
+      `https://github.com/${"a".repeat(40)}/repository/pull/7`,
+      `https://github.com/example/${"a".repeat(101)}/pull/7`,
+      "https://github.com/example/repository/pull/9007199254740992",
       "https://github.com/example/repository/pull/0",
     ]) {
       await expect(f.invoke({ pullRequestUrl: url })).rejects.toThrow("pull request URL");
