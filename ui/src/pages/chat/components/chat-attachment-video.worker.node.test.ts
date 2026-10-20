@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamTargetChunk } from "mediabunny";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VideoCompressionResponse } from "./chat-attachment-video.ts";
@@ -21,15 +22,11 @@ vi.mock("mediabunny", () => {
     StreamTarget,
     Output,
     Input: class {
-      async getVideoTracks() {
-        return [{ getDisplayWidth: async () => 320, getDisplayHeight: async () => 180 }];
-      }
-      async getAudioTracks() {
-        return [];
-      }
-      async computeDuration() {
-        return 1;
-      }
+      getVideoTracks = async () => [
+        { getDisplayWidth: async () => 320, getDisplayHeight: async () => 180 },
+      ];
+      getAudioTracks = async () => [];
+      computeDuration = async () => 1;
       dispose() {}
     },
     Mp4OutputFormat: vi.fn(),
@@ -66,7 +63,6 @@ vi.mock("mediabunny", () => {
 
 beforeEach(() => {
   vi.resetModules();
-  encoder.attempts = [];
   encoder.writes = 0;
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -79,8 +75,9 @@ function writeChunk(data: number[] | number, position = 0): StreamTargetChunk {
 async function compress(attempts: StreamTargetChunk[][]): Promise<VideoCompressionResponse> {
   encoder.attempts = attempts;
   const workerScope = new EventTarget();
-  vi.stubGlobal("addEventListener", workerScope.addEventListener.bind(workerScope));
-  vi.stubGlobal("removeEventListener", workerScope.removeEventListener.bind(workerScope));
+  for (const method of ["addEventListener", "removeEventListener"] as const) {
+    vi.stubGlobal(method, workerScope[method].bind(workerScope));
+  }
   const result = new Promise<VideoCompressionResponse>((resolve) => {
     vi.stubGlobal("postMessage", (message: VideoCompressionResponse) => {
       if (message.type !== "progress") {
@@ -99,11 +96,7 @@ async function compress(attempts: StreamTargetChunk[][]): Promise<VideoCompressi
 
 async function prepared(attempts: StreamTargetChunk[][]) {
   const result = await compress(attempts);
-  expect(result.type).toBe("ready");
-  if (result.type !== "ready") {
-    throw new Error("Expected a prepared file");
-  }
-  return result.file;
+  return expectDefined(result.type === "ready" ? result.file : undefined, "prepared video");
 }
 
 it("preserves positional header rewrites without publishing unused capacity", async () => {

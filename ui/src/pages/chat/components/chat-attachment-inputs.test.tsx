@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
@@ -49,23 +50,15 @@ function mountInputs(
   inputHandle = createChatAttachmentInputHandle(),
   container = host,
 ) {
-  let update!: (props: ChatAttachmentControlsProps) => void;
-  mountSolid(
-    () => {
-      const [props, setProps] = createSignal(initial);
+  const view = mountSolid(
+    (props: ChatAttachmentControlsProps) => {
       let trigger: HTMLButtonElement | undefined;
       onSettled(() => inputHandle.bindAnchor(trigger));
-      update = (next) => {
-        setProps(next);
-        flush();
-      };
       return composerClass ? (
         <div class={composerClass}>
-          <ChatAttachmentInputs {...props()} inputHandle={inputHandle} />
+          <ChatAttachmentInputs {...props} inputHandle={inputHandle} />
           <button
-            ref={(element) => {
-              trigger = element;
-            }}
+            ref={(element) => (trigger = element)}
             class="attachment-menu"
             onClick={() => inputHandle.open("camera")}
           >
@@ -73,12 +66,18 @@ function mountInputs(
           </button>
         </div>
       ) : (
-        <ChatAttachmentInputs {...props()} inputHandle={inputHandle} />
+        <ChatAttachmentInputs {...props} inputHandle={inputHandle} />
       );
     },
-    { container },
+    initial,
+    container,
   );
-  return update;
+  const camera = container.querySelector("openclaw-chat-camera-capture")!;
+  const draw = async (next: ChatAttachmentControlsProps) => {
+    view.update(next);
+    await camera.updateComplete;
+  };
+  return { camera, draw };
 }
 
 it("retains the camera across input renders and retires its active read scope", async () => {
@@ -86,37 +85,32 @@ it("retains the camera across input renders and retires its active read scope", 
     readSignal: new AbortController().signal,
     onAttachmentsChange: vi.fn(),
   };
-  const draw = mountInputs(props);
-  const camera = host.querySelector("openclaw-chat-camera-capture")!;
+  const { draw, camera } = mountInputs(props);
   await camera.updateComplete;
   expect(camera.childElementCount).toBe(0);
 
   for (const next of [props, { ...props, draft: "A new draft" }]) {
-    draw(next);
-    await camera.updateComplete;
+    await draw(next);
     expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
     expect(camera.childElementCount).toBe(0);
   }
 
-  draw({ ...props, disabled: true });
-  await camera.updateComplete;
+  await draw({ ...props, disabled: true });
   expect(camera.disabled).toBe(true);
   camera.show();
   await camera.updateComplete;
   expect(camera.childElementCount).toBe(0);
 
   const readSignal = new AbortController().signal;
-  draw({ ...props, disabled: true, readSignal });
-  await camera.updateComplete;
+  await draw({ ...props, disabled: true, readSignal });
   expect(camera.readSignal).toBe(readSignal);
   expect(camera.childElementCount).toBe(0);
 
-  draw({ ...props, disabled: false, readSignal });
-  await camera.updateComplete;
+  await draw({ ...props, disabled: false, readSignal });
   camera.show();
   await camera.updateComplete;
   expect(camera.querySelector("openclaw-modal-dialog")).not.toBeNull();
-  draw({ ...props, readSignal: new AbortController().signal });
+  await draw({ ...props, readSignal: new AbortController().signal });
   await waitForSolid(() => expect(camera.querySelector("openclaw-modal-dialog")).toBeNull());
 });
 
@@ -133,8 +127,7 @@ it.each(
       );
     }
     const initialProps = { onAttachmentsChange: vi.fn(), disabled: false };
-    const draw = mountInputs(initialProps, composerClass);
-    const camera = host.querySelector("openclaw-chat-camera-capture");
+    const { draw, camera } = mountInputs(initialProps, composerClass);
     const trigger = menu();
     const nativeInput = input("camera");
     const photoInput = input("photo");
@@ -143,13 +136,13 @@ it.each(
     }
     expect(nativeInput).toMatchObject({ accept: "image/*", multiple: false });
     expect(nativeInput.getAttribute("capture")).toBe("environment");
-    expect(photoInput.multiple).toBe(true);
+    expect(photoInput).toMatchObject({ accept: "image/*", multiple: true });
     expect(photoInput.hasAttribute("capture")).toBe(false);
+    expect(input("file").hasAttribute("accept")).toBe(false);
     await camera.updateComplete;
     // A callback retained from the earlier render would now reject this picker.
     initialProps.disabled = true;
-    draw({ ...initialProps, disabled: false });
-    await camera.updateComplete;
+    await draw({ ...initialProps, disabled: false });
     const clickNative = clickSpy(nativeInput);
     const rectangle = vi
       .spyOn(trigger, "getBoundingClientRect")
@@ -179,22 +172,13 @@ it.each(
       { cameraActive: false },
       { readSignal: AbortSignal.abort() },
     ]) {
-      draw({ ...initialProps, disabled: false, ...unavailable });
-      await camera.updateComplete;
+      await draw({ ...initialProps, disabled: false, ...unavailable });
       trigger.click();
       expect(clickNative).toHaveBeenCalledOnce();
       expect(camera.querySelector("openclaw-modal-dialog")).toBeNull();
     }
   },
 );
-
-it("leaves the general file picker unrestricted while photo and camera stay image-only", () => {
-  mountInputs({ onAttachmentsChange: vi.fn() });
-  // General files share chat admission; Android greys out anything outside an accept list.
-  expect(input("file")?.hasAttribute("accept")).toBe(false);
-  expect(input("photo")?.accept).toBe("image/*");
-  expect(input("camera")?.accept).toBe("image/*");
-});
 
 it("keeps mounted picker refs scoped and refreshes their anchor rectangle on every activation", () => {
   const first = document.createElement("div");
@@ -204,7 +188,6 @@ it("keeps mounted picker refs scoped and refreshes their anchor rectangle on eve
   const secondHandle = createChatAttachmentInputHandle();
   mountInputs({}, "agent-chat__composer-shell", firstHandle, first);
   mountInputs({}, "new-session-page__composer", secondHandle, second);
-  flush();
   const firstFile = input("file", first);
   const firstPhoto = input("photo", first);
   const secondFile = input("file", second);

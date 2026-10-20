@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
-import { createComponent, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
+import { createToolResultMessage } from "./chat-message.test-support.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import {
   installTranscriptDomMocks,
@@ -19,7 +19,6 @@ afterEach(resetTranscriptTestDom);
 function mountThread(id: string, overrides: Partial<ChatThreadProps> = {}) {
   const container = document.body.appendChild(document.createElement("div"));
   const transcript = createTestTranscript();
-  let connected = false;
   onTestFinished(() => {
     render(null, container);
     transcript.dispose();
@@ -37,26 +36,24 @@ function mountThread(id: string, overrides: Partial<ChatThreadProps> = {}) {
   };
   const draw = () => {
     render(renderChatThread(props, transcript), container);
-    if (!connected) {
-      transcript.start();
-      connected = true;
-    }
     transcript.update();
   };
-  draw();
-  return { container, props, draw };
+  render(renderChatThread(props, transcript), container);
+  transcript.start();
+  transcript.update();
+  const find = <T extends Element = HTMLElement>(selector: string) =>
+    container.querySelector<T>(selector);
+  return { container, props, draw, find };
 }
 
 it("keeps streaming text and open status details stable behind the dot preview", async () => {
-  const { container, props, draw } = mountThread("bubble-stream");
+  const { props, draw, find } = mountThread("bubble-stream");
   await waitForSolid(() => {
-    expect(container.querySelector(".chat-bubble.streaming p")?.textContent).toBe(
-      "Here is the first part",
-    );
-    expect(container.querySelector(".chat-bubble-activity")).not.toBeNull();
+    expect(find(".chat-bubble.streaming p")?.textContent).toBe("Here is the first part");
+    expect(find(".chat-bubble-activity")).not.toBeNull();
   });
-  const paragraph = container.querySelector(".chat-bubble.streaming p");
-  const details = container.querySelector<HTMLDetailsElement>(".chat-bubble-activity");
+  const paragraph = find(".chat-bubble.streaming p");
+  const details = find<HTMLDetailsElement>(".chat-bubble-activity");
   expect(details?.open).toBe(false);
   expect(details?.querySelectorAll(".chat-bubble-dots > span")).toHaveLength(3);
   details!.querySelector("summary")!.click();
@@ -65,57 +62,45 @@ it("keeps streaming text and open status details stable behind the dot preview",
   props.stream += " and the rest of the answer.";
   draw();
   await waitForSolid(() => {
-    expect(container.querySelector(".chat-bubble.streaming p")).toBe(paragraph);
+    expect(find(".chat-bubble.streaming p")).toBe(paragraph);
     expect(paragraph?.textContent).toContain("the rest of the answer.");
-    expect(container.querySelector(".chat-bubble-activity")).toBe(details);
+    expect(find(".chat-bubble-activity")).toBe(details);
     expect(details?.open).toBe(true);
   });
   props.chatBubbleMode = false;
   draw();
   await waitForSolid(() => {
-    expect(container.querySelector(".chat-bubble-activity")).toBeNull();
-    expect(container.querySelector(".chat-working-indicator")).not.toBeNull();
+    expect(find(".chat-bubble-activity")).toBeNull();
+    expect(find(".chat-working-indicator")).not.toBeNull();
   });
 });
 
 it("labels tool activity and exposes existing cards without hiding the answer", async () => {
-  const { container, props, draw } = mountThread("bubble-tools", {
+  const { container, props, draw, find } = mountThread("bubble-tools", {
     showToolCalls: true,
     stream: "The answer keeps streaming.",
     toolMessages: [
-      {
-        role: "toolResult",
-        toolName: "read",
-        toolCallId: "bubble-read",
+      createToolResultMessage("bubble-read", "read", "Detailed file contents.", {
         runId: "bubble-run",
-        content: "Detailed file contents.",
         timestamp: 3,
-      },
+      }),
     ],
   });
   await waitForSolid(() => {
-    expect(container.querySelector(".chat-activity-group--bubble > button")?.textContent).toContain(
-      "Raw details",
-    );
+    expect(find(".chat-activity-group--bubble > button")?.textContent).toContain("Raw details");
     expect(container.textContent).toContain("The answer keeps streaming.");
   });
-  const button = container.querySelector<HTMLButtonElement>(
-    ".chat-activity-group--bubble > button",
-  );
+  const button = find<HTMLButtonElement>(".chat-activity-group--bubble > button");
   expect(button?.querySelector(".chat-bubble-dots")).toBeNull();
   expect(container.textContent).not.toContain("Detailed file contents.");
-  const status = container.querySelector<HTMLDetailsElement>(".chat-bubble-activity");
+  const status = find<HTMLDetailsElement>(".chat-bubble-activity");
   expect(status).not.toBeNull();
   status!.querySelector("summary")!.click();
   expect(status!.open).toBe(true);
   expect(status!.querySelector(".chat-working-indicator")).not.toBeNull();
   button!.click();
-  await waitForSolid(() =>
-    expect(container.querySelector(".chat-activity-group.is-open")).not.toBeNull(),
-  );
-  const tool = container.querySelector<HTMLButtonElement>(
-    ".chat-activity-group__body .chat-tool-msg-summary",
-  );
+  await waitForSolid(() => expect(find(".chat-activity-group.is-open")).not.toBeNull());
+  const tool = find<HTMLButtonElement>(".chat-activity-group__body .chat-tool-msg-summary");
   expect(tool).not.toBeNull();
   tool!.click();
   await waitForSolid(() => {
@@ -129,7 +114,7 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   props.streamStartedAt = null;
   draw();
   await waitForSolid(() => {
-    expect(container.querySelector(".chat-bubble-dots--working")).toBeNull();
+    expect(find(".chat-bubble-dots--working")).toBeNull();
     expect(container.textContent).toContain("Detailed file contents.");
   });
 });
@@ -138,17 +123,11 @@ it.each([
   { label: "Starting model", options: { startupLabel: "Starting model" } },
   { label: "Waiting for approval", options: { waitingApproval: true } },
 ])("keeps $label visible instead of replacing it with working dots", ({ label, options }) => {
-  const container = document.createElement("div");
-  const view = mountSolid(
-    () =>
-      createComponent(ChatWorkingIndicator, {
-        part: { kind: "reading-indicator", key: "status", startedAt: 1 },
-        options: { bubbleMode: true, ...options },
-      }),
-    { container },
-  );
-  onTestFinished(view.unmount);
-  flush();
+  const { container, dispose } = mountSolid(ChatWorkingIndicator, {
+    part: { kind: "reading-indicator", key: "status", startedAt: 1 },
+    options: { bubbleMode: true, ...options },
+  });
+  onTestFinished(dispose);
   expect(container.querySelector("details")).toBeNull();
   expect(container.querySelector(".chat-working-indicator")?.textContent).toContain(label);
   expect(container.querySelector(".chat-bubble-dots--working")).toBeNull();
