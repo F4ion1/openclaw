@@ -50,7 +50,6 @@ afterEach(async () => {
 afterAll(async () => {
   await workers.close();
   closeOpenClawStateDatabaseForTest();
-  resetConfigRuntimeState();
   vi.restoreAllMocks();
   await suiteRootTracker.cleanup();
 });
@@ -60,25 +59,21 @@ const withJournal = (
 ) =>
   withSuiteHome(async (home) => {
     const configPath = path.join(home, ".openclaw", "openclaw.json");
-    await withEnvAsync(
+    const ioOptions = {
+      configPath,
+      env: process.env,
+      homedir: () => home,
+      observe: false,
+      logger: log,
+    };
+    return withEnvAsync(
       {
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
         OPENCLAW_TEST_FAST: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
-      () =>
-        run(
-          createConfigIO({
-            configPath,
-            env: process.env,
-            homedir: () => home,
-            observe: false,
-            logger: log,
-          }),
-          home,
-          configPath,
-        ),
+      () => run(createConfigIO(ioOptions), home, configPath),
     );
   });
 
@@ -121,10 +116,8 @@ it("shares raw snapshot hashes between config writes and gateway startup reconci
     const write = await io.writeConfigFile({ gateway: { port: 18789 } });
     expect(prepare.mock.calls.filter(([sql]) => sql.includes("diagnostic_events"))).toEqual([]);
     const writtenSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
-    const slot = await latestSlot(home);
-    expect(writtenSnapshot.valid).toBe(true);
-    expect(slot).toMatchObject({ rawHash: write.persistedHash });
-    expect(slot?.rawHash).toBe(writtenSnapshot.hash);
+    expect(writtenSnapshot).toMatchObject({ valid: true, hash: write.persistedHash });
+    expect(await latestSlot(home)).toMatchObject({ rawHash: write.persistedHash });
 
     await reconcileStartup(writtenSnapshot);
     expect(externalRecords(home)).toEqual([]);
@@ -135,8 +128,7 @@ it("shares raw snapshot hashes between config writes and gateway startup reconci
     const handEditedSnapshot = await readConfigFileSnapshotForRuntimeTransaction({});
     await reconcileStartup(handEditedSnapshot);
 
-    const externalRecord = externalRecords(home).at(-1);
-    expect(externalRecord).toMatchObject({
+    expect(externalRecords(home).at(-1)).toMatchObject({
       event: "config.external",
       detectedBy: "startup",
       previousHash: write.persistedHash,

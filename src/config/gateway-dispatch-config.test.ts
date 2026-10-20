@@ -29,16 +29,16 @@ beforeEach(() => {
   shellEnvMocks.shouldEnableShellEnvFallback.mockReset().mockReturnValue(false);
 });
 
-function configFile(config: unknown, files: Record<string, string> = {}): string {
+function configFile(config: unknown, base?: string): string {
   const dir = tempDirs.make("openclaw-gateway-dispatch-config-");
-  for (const [name, contents] of Object.entries({
-    ...files,
-    "openclaw.json5": typeof config === "string" ? config : JSON.stringify(config),
-  })) {
-    fs.writeFileSync(path.join(dir, name), contents);
+  const configPath = path.join(dir, "openclaw.json5");
+  if (base !== undefined) {
+    fs.writeFileSync(path.join(dir, "gateway-base.json5"), base);
   }
-  return path.join(dir, "openclaw.json5");
+  fs.writeFileSync(configPath, typeof config === "string" ? config : JSON.stringify(config));
+  return configPath;
 }
+
 afterEach(() => vi.restoreAllMocks());
 
 it("reads only gateway dispatch fields from JSON5 config with includes and env vars", () => {
@@ -51,17 +51,13 @@ it("reads only gateway dispatch fields from JSON5 config with includes and env v
         load: { paths: ["./plugins/vault"] } },
       session: { mainKey: "main-ops", store: "./sessions.json" },
     }`,
-    {
-      "gateway-base.json5": `{
+    `{
       gateway: { port: 18888, auth: { mode: "token", token: "\${OPENCLAW_GATEWAY_TOKEN}" } },
       models: { providers: { expensive: { apiKey: "\${MISSING_MODEL_KEY}" } } },
     }`,
-    },
   );
   const env = { OPENCLAW_CONFIG_PATH: configPath };
-
   const config = readGatewayDispatchConfig({ env });
-
   expect(config).toMatchObject({
     gateway: { port: 18888, auth: { mode: "token", token: "inline-token" } },
     agents: { defaults: { timeoutSeconds: 42 } },

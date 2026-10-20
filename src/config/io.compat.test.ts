@@ -114,11 +114,7 @@ it.each([undefined, "1"])("reports newer config unless update handoff is %s", as
     expect(logger.warn).not.toHaveBeenCalled();
   } else {
     expect(logger.warn).toHaveBeenCalledWith(
-      [
-        `Your OpenClaw config was written by version 9999.1.1, but this command is running ${VERSION}.`,
-        "Check: `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
-        "If unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
-      ].join("\n"),
+      `Your OpenClaw config was written by version 9999.1.1, but this command is running ${VERSION}.\nCheck: \`openclaw --version\`, \`which openclaw\`, and \`openclaw gateway status --deep\`.\nIf unexpected, update PATH so \`openclaw\` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.`,
     );
   }
 });
