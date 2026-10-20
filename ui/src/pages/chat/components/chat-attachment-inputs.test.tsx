@@ -12,6 +12,19 @@ import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 let host: HTMLDivElement;
 let restoreDialog: () => void;
 
+const input = (kind: string, container: Element = host) =>
+  container.querySelector<HTMLInputElement>(`.agent-chat__${kind}-input`)!;
+const menu = (container: Element = host) =>
+  container.querySelector<HTMLButtonElement>(".attachment-menu")!;
+const clickSpy = (element: HTMLElement) =>
+  vi.spyOn(element, "click").mockImplementation(() => undefined);
+function expectRect(element: HTMLElement, ...values: number[]) {
+  const properties = ["left", "top", "width", "height"].slice(0, values.length);
+  expect(properties.map((key) => element.style.getPropertyValue(key))).toEqual(
+    values.map((value) => `${value}px`),
+  );
+}
+
 beforeEach(() => {
   restoreDialog = installDialogPolyfill();
   vi.stubGlobal("isSecureContext", false);
@@ -78,15 +91,12 @@ it("retains the camera across input renders and retires its active read scope", 
   await camera.updateComplete;
   expect(camera.childElementCount).toBe(0);
 
-  draw(props);
-  await camera.updateComplete;
-  expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
-  expect(camera.childElementCount).toBe(0);
-
-  draw({ ...props, draft: "A new draft" });
-  await camera.updateComplete;
-  expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
-  expect(camera.childElementCount).toBe(0);
+  for (const next of [props, { ...props, draft: "A new draft" }]) {
+    draw(next);
+    await camera.updateComplete;
+    expect(host.querySelector("openclaw-chat-camera-capture")).toBe(camera);
+    expect(camera.childElementCount).toBe(0);
+  }
 
   draw({ ...props, disabled: true });
   await camera.updateComplete;
@@ -125,15 +135,14 @@ it.each(
     const initialProps = { onAttachmentsChange: vi.fn(), disabled: false };
     const draw = mountInputs(initialProps, composerClass);
     const camera = host.querySelector("openclaw-chat-camera-capture");
-    const menu = host.querySelector<HTMLButtonElement>(".attachment-menu");
-    const nativeInput = host.querySelector<HTMLInputElement>(".agent-chat__camera-input");
-    const photoInput = host.querySelector<HTMLInputElement>(".agent-chat__photo-input");
-    if (!camera || !menu || !nativeInput || !photoInput) {
+    const trigger = menu();
+    const nativeInput = input("camera");
+    const photoInput = input("photo");
+    if (!camera || !trigger || !nativeInput || !photoInput) {
       throw new Error("Missing attachment controls");
     }
-    expect(nativeInput.accept).toBe("image/*");
+    expect(nativeInput).toMatchObject({ accept: "image/*", multiple: false });
     expect(nativeInput.getAttribute("capture")).toBe("environment");
-    expect(nativeInput.multiple).toBe(false);
     expect(photoInput.multiple).toBe(true);
     expect(photoInput.hasAttribute("capture")).toBe(false);
     await camera.updateComplete;
@@ -141,11 +150,11 @@ it.each(
     initialProps.disabled = true;
     draw({ ...initialProps, disabled: false });
     await camera.updateComplete;
-    const clickNative = vi.spyOn(nativeInput, "click").mockImplementation(() => undefined);
+    const clickNative = clickSpy(nativeInput);
     const rectangle = vi
-      .spyOn(menu, "getBoundingClientRect")
+      .spyOn(trigger, "getBoundingClientRect")
       .mockReturnValue(new DOMRect(12, 24, 36, 48));
-    menu.click();
+    trigger.click();
     await camera.updateComplete;
     if (android) {
       expect(clickNative).toHaveBeenCalledOnce();
@@ -164,8 +173,7 @@ it.each(
       await camera.updateComplete;
     }
     expect(rectangle).toHaveBeenCalledOnce();
-    expect(nativeInput.style.left).toBe(android ? "12px" : "90px");
-    expect(nativeInput.style.top).toBe(android ? "24px" : "100px");
+    expectRect(nativeInput, android ? 12 : 90, android ? 24 : 100);
     for (const unavailable of [
       { disabled: true },
       { cameraActive: false },
@@ -173,7 +181,7 @@ it.each(
     ]) {
       draw({ ...initialProps, disabled: false, ...unavailable });
       await camera.updateComplete;
-      menu.click();
+      trigger.click();
       expect(clickNative).toHaveBeenCalledOnce();
       expect(camera.querySelector("openclaw-modal-dialog")).toBeNull();
     }
@@ -182,8 +190,6 @@ it.each(
 
 it("leaves the general file picker unrestricted while photo and camera stay image-only", () => {
   mountInputs({ onAttachmentsChange: vi.fn() });
-  const input = (kind: string) =>
-    host.querySelector<HTMLInputElement>(`.agent-chat__${kind}-input`);
   // General files share chat admission; Android greys out anything outside an accept list.
   expect(input("file")?.hasAttribute("accept")).toBe(false);
   expect(input("photo")?.accept).toBe("image/*");
@@ -199,40 +205,31 @@ it("keeps mounted picker refs scoped and refreshes their anchor rectangle on eve
   mountInputs({}, "agent-chat__composer-shell", firstHandle, first);
   mountInputs({}, "new-session-page__composer", secondHandle, second);
   flush();
-  const firstFile = first.querySelector<HTMLInputElement>(".agent-chat__file-input")!;
-  const firstPhoto = first.querySelector<HTMLInputElement>(".agent-chat__photo-input")!;
-  const secondFile = second.querySelector<HTMLInputElement>(".agent-chat__file-input")!;
-  const firstTrigger = first.querySelector<HTMLButtonElement>(".attachment-menu")!;
-  const secondTrigger = second.querySelector<HTMLButtonElement>(".attachment-menu")!;
+  const firstFile = input("file", first);
+  const firstPhoto = input("photo", first);
+  const secondFile = input("file", second);
   const rectangle = vi
-    .spyOn(firstTrigger, "getBoundingClientRect")
+    .spyOn(menu(first), "getBoundingClientRect")
     .mockReturnValue(new DOMRect(12, 24, 36, 48));
-  vi.spyOn(secondTrigger, "getBoundingClientRect").mockReturnValue(new DOMRect(50, 60, 70, 80));
-  const clickFirst = vi.spyOn(firstFile, "click").mockImplementation(() => undefined);
-  const clickPhoto = vi.spyOn(firstPhoto, "click").mockImplementation(() => undefined);
-  const clickSecond = vi.spyOn(secondFile, "click").mockImplementation(() => undefined);
+  vi.spyOn(menu(second), "getBoundingClientRect").mockReturnValue(new DOMRect(50, 60, 70, 80));
+  const clickFirst = clickSpy(firstFile);
+  const clickPhoto = clickSpy(firstPhoto);
+  const clickSecond = clickSpy(secondFile);
 
   firstHandle.open("file");
   expect(clickFirst).toHaveBeenCalledOnce();
   expect(clickSecond).not.toHaveBeenCalled();
-  expect(firstFile.style.left).toBe("12px");
-  expect(firstFile.style.top).toBe("24px");
-  expect(firstFile.style.width).toBe("36px");
-  expect(firstFile.style.height).toBe("48px");
+  expectRect(firstFile, 12, 24, 36, 48);
 
   rectangle.mockReturnValue(new DOMRect(90, 100, 110, 120));
   firstHandle.openNative("photo");
   expect(clickPhoto).toHaveBeenCalledOnce();
-  expect(firstPhoto.style.left).toBe("90px");
-  expect(firstPhoto.style.top).toBe("100px");
-  expect(firstPhoto.style.width).toBe("110px");
-  expect(firstPhoto.style.height).toBe("120px");
+  expectRect(firstPhoto, 90, 100, 110, 120);
   expect(rectangle).toHaveBeenCalledTimes(2);
 
   secondHandle.open("file");
   expect(clickSecond).toHaveBeenCalledOnce();
-  expect(secondFile.style.left).toBe("50px");
-  expect(secondFile.style.top).toBe("60px");
+  expectRect(secondFile, 50, 60);
 
   cleanupSolid();
   firstHandle.open("file");

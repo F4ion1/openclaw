@@ -16,7 +16,7 @@ import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it("keeps streaming text and open status details stable behind the dot preview", async () => {
+function mountThread(id: string, overrides: Partial<ChatThreadProps> = {}) {
   const container = document.body.appendChild(document.createElement("div"));
   const transcript = createTestTranscript();
   let connected = false;
@@ -26,15 +26,14 @@ it("keeps streaming text and open status details stable behind the dot preview",
     container.remove();
   });
   const props: ChatThreadProps = {
-    ...threadProps("bubble-stream", "agent:main:main", [
-      { role: "user", content: "Check this", timestamp: 1 },
-    ]),
+    ...threadProps(id, "agent:main:main", [{ role: "user", content: "Check this", timestamp: 1 }]),
     chatBubbleMode: true,
     runActive: true,
     runWorking: true,
     runId: "bubble-run",
     stream: "Here is the first part",
     streamStartedAt: 2,
+    ...overrides,
   };
   const draw = () => {
     render(renderChatThread(props, transcript), container);
@@ -45,6 +44,11 @@ it("keeps streaming text and open status details stable behind the dot preview",
     transcript.update();
   };
   draw();
+  return { container, props, draw };
+}
+
+it("keeps streaming text and open status details stable behind the dot preview", async () => {
+  const { container, props, draw } = mountThread("bubble-stream");
   await waitForSolid(() => {
     expect(container.querySelector(".chat-bubble.streaming p")?.textContent).toBe(
       "Here is the first part",
@@ -52,9 +56,7 @@ it("keeps streaming text and open status details stable behind the dot preview",
     expect(container.querySelector(".chat-bubble-activity")).not.toBeNull();
   });
   const paragraph = container.querySelector(".chat-bubble.streaming p");
-  expect(paragraph?.textContent).toBe("Here is the first part");
   const details = container.querySelector<HTMLDetailsElement>(".chat-bubble-activity");
-  expect(details).not.toBeNull();
   expect(details?.open).toBe(false);
   expect(details?.querySelectorAll(".chat-bubble-dots > span")).toHaveLength(3);
   details!.querySelector("summary")!.click();
@@ -77,25 +79,9 @@ it("keeps streaming text and open status details stable behind the dot preview",
 });
 
 it("labels tool activity and exposes existing cards without hiding the answer", async () => {
-  const container = document.body.appendChild(document.createElement("div"));
-  const transcript = createTestTranscript();
-  let connected = false;
-  onTestFinished(() => {
-    render(null, container);
-    transcript.dispose();
-    container.remove();
-  });
-  const props: ChatThreadProps = {
-    ...threadProps("bubble-tools", "agent:main:main", [
-      { role: "user", content: "Check this", timestamp: 1 },
-    ]),
-    chatBubbleMode: true,
+  const { container, props, draw } = mountThread("bubble-tools", {
     showToolCalls: true,
-    runActive: true,
-    runWorking: true,
-    runId: "bubble-run",
     stream: "The answer keeps streaming.",
-    streamStartedAt: 2,
     toolMessages: [
       {
         role: "toolResult",
@@ -106,16 +92,7 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
         timestamp: 3,
       },
     ],
-  };
-  const draw = () => {
-    render(renderChatThread(props, transcript), container);
-    if (!connected) {
-      transcript.start();
-      connected = true;
-    }
-    transcript.update();
-  };
-  draw();
+  });
   await waitForSolid(() => {
     expect(container.querySelector(".chat-activity-group--bubble > button")?.textContent).toContain(
       "Raw details",
@@ -125,10 +102,8 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   const button = container.querySelector<HTMLButtonElement>(
     ".chat-activity-group--bubble > button",
   );
-  expect(button?.textContent).toContain("Raw details");
   expect(button?.querySelector(".chat-bubble-dots")).toBeNull();
   expect(container.textContent).not.toContain("Detailed file contents.");
-  expect(container.textContent).toContain("The answer keeps streaming.");
   const status = container.querySelector<HTMLDetailsElement>(".chat-bubble-activity");
   expect(status).not.toBeNull();
   status!.querySelector("summary")!.click();

@@ -8,31 +8,22 @@ import {
   shouldFetchChatAudioWaveform,
 } from "./chat-audio-waveform.ts";
 
+const retain = (key: string, sizeBytes = 1) =>
+  cacheAndRetainChatAudioBlob(key, { blobUrl: `blob:${key}`, sizeBytes });
+
 describe("chat audio waveform", () => {
   it("caps waveform decoding by byte size and duration", () => {
-    expect(
-      shouldFetchChatAudioWaveform({
-        sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
-        durationSeconds: 300,
-      }),
-    ).toBe(true);
-    expect(shouldFetchChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES + 1 })).toBe(
-      false,
-    );
-    expect(
-      shouldFetchChatAudioWaveform({
-        sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
-        durationSeconds: 301,
-      }),
-    ).toBe(false);
-    expect(shouldFetchChatAudioWaveform({})).toBe(false);
-    expect(shouldFetchChatAudioWaveform({ sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES })).toBe(false);
-    expect(
-      shouldFetchChatAudioWaveform({
-        sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
-        durationSeconds: Number.NaN,
-      }),
-    ).toBe(false);
+    const sizeBytes = CHAT_AUDIO_WAVEFORM_MAX_BYTES;
+    expect(shouldFetchChatAudioWaveform({ sizeBytes, durationSeconds: 300 })).toBe(true);
+    for (const input of [
+      { sizeBytes: sizeBytes + 1 },
+      { sizeBytes, durationSeconds: 301 },
+      {},
+      { sizeBytes },
+      { sizeBytes, durationSeconds: Number.NaN },
+    ]) {
+      expect(shouldFetchChatAudioWaveform(input)).toBe(false);
+    }
   });
 
   it("normalizes bucket peaks across every channel", () => {
@@ -54,10 +45,7 @@ describe("chat audio waveform", () => {
   it("enforces the entry cap until the last lease releases an evictable Blob", () => {
     const releases: Array<() => void> = [];
     for (let index = 0; index < 32; index += 1) {
-      const retained = cacheAndRetainChatAudioBlob(`retained-${index}`, {
-        blobUrl: `blob:retained-${index}`,
-        sizeBytes: 1,
-      });
+      const retained = retain(`retained-${index}`);
       expect(retained).not.toBeNull();
       if (!retained) {
         throw new Error("expected retained audio blob");
@@ -65,29 +53,16 @@ describe("chat audio waveform", () => {
       expect(retained.value.blobUrl).toBe(`blob:retained-${index}`);
       releases.push(retained.release);
     }
-    expect(
-      cacheAndRetainChatAudioBlob("retained-overflow", {
-        blobUrl: "blob:retained-overflow",
-        sizeBytes: 1,
-      }),
-    ).toBeNull();
+    expect(retain("retained-overflow")).toBeNull();
 
     const shared = retainCachedChatAudioBlob("retained-0");
     expect(shared).not.toBeNull();
     releases[0]!();
     releases[0]!();
-    expect(
-      cacheAndRetainChatAudioBlob("retained-overflow", {
-        blobUrl: "blob:retained-overflow",
-        sizeBytes: 1,
-      }),
-    ).toBeNull();
+    expect(retain("retained-overflow")).toBeNull();
 
     shared!.release();
-    const replacement = cacheAndRetainChatAudioBlob("retained-after-release", {
-      blobUrl: "blob:retained-after-release",
-      sizeBytes: 1,
-    });
+    const replacement = retain("retained-after-release");
     expect(replacement).not.toBeNull();
     expect(retainCachedChatAudioBlob("retained-0")).toBeNull();
     replacement?.release();
@@ -99,18 +74,10 @@ describe("chat audio waveform", () => {
 
   it("caps retained audio bytes at 48 MiB", () => {
     const releases = Array.from({ length: 6 }, (_, index) =>
-      cacheAndRetainChatAudioBlob(`large-${index}`, {
-        blobUrl: `blob:large-${index}`,
-        sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
-      }),
+      retain(`large-${index}`, CHAT_AUDIO_WAVEFORM_MAX_BYTES),
     );
     expect(releases.every((retained) => retained !== null)).toBe(true);
-    expect(
-      cacheAndRetainChatAudioBlob("large-overflow", {
-        blobUrl: "blob:large-overflow",
-        sizeBytes: CHAT_AUDIO_WAVEFORM_MAX_BYTES,
-      }),
-    ).toBeNull();
+    expect(retain("large-overflow", CHAT_AUDIO_WAVEFORM_MAX_BYTES)).toBeNull();
     for (const retained of releases) {
       retained?.release();
     }

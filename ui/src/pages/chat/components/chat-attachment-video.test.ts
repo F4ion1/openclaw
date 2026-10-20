@@ -49,6 +49,16 @@ function draft() {
 }
 const video = () => new File([new Uint8Array(200)], "screen.mp4", { type: "video/mp4" });
 
+async function encoding() {
+  const context = draft();
+  const source = video();
+  appendChatAttachmentFiles([source], context.props);
+  const entry = context.reads.project([])[0]!;
+  entry.compress?.();
+  await vi.waitFor(() => expect(EncoderWorker.jobs).toHaveLength(1));
+  return { ...context, source, entry, worker: EncoderWorker.jobs[0]! };
+}
+
 beforeEach(() => {
   EncoderWorker.jobs = [];
   vi.stubGlobal("Worker", EncoderWorker);
@@ -68,8 +78,7 @@ describe("video preparation in the shared attachment owner", () => {
     const source = video();
     expect(appendChatAttachmentFiles([source], props)).toBe(1);
     const entry = reads.project(attachments())[1]!;
-    expect(entry.preparation).toBe("offer");
-    expect(entry.reservedBytes).toBe(70);
+    expect(entry).toMatchObject({ preparation: "offer", reservedBytes: 70 });
     expect(reads.pendingReads).toBe(1);
     expect(EncoderWorker.jobs).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(60_000);
@@ -88,13 +97,8 @@ describe("video preparation in the shared attachment owner", () => {
   });
 
   it("keeps encoding alive beyond the read timeout and publishes only verified bytes", async () => {
-    const { reads, props, attachments } = draft();
-    const source = video();
-    appendChatAttachmentFiles([source], props);
-    reads.project([])[0]!.compress?.();
-    await vi.waitFor(() => expect(EncoderWorker.jobs).toHaveLength(1));
+    const { reads, source, worker, attachments } = await encoding();
     vi.useFakeTimers();
-    const worker = EncoderWorker.jobs[0]!;
     worker.reply({ type: "progress", progress: 0.4 });
     await vi.advanceTimersByTimeAsync(20_000);
     expect(reads.pendingReads).toBe(1);
@@ -118,12 +122,7 @@ describe("video preparation in the shared attachment owner", () => {
   it.each(["remove", "reset"] as const)(
     "terminates an active worker on %s and ignores late completion",
     async (action) => {
-      const { reads, props, attachments } = draft();
-      appendChatAttachmentFiles([video()], props);
-      const entry = reads.project([])[0]!;
-      entry.compress?.();
-      await vi.waitFor(() => expect(EncoderWorker.jobs).toHaveLength(1));
-      const worker = EncoderWorker.jobs[0]!;
+      const { reads, entry, worker, attachments } = await encoding();
       if (action === "remove") {
         reads.remove(entry);
       } else {
@@ -144,12 +143,8 @@ describe("video preparation in the shared attachment owner", () => {
   it.each(["unsupported", "failed", "oversize"] as const)(
     "keeps a recoverable failed slot for %s",
     async (failure) => {
-      const { reads, props, attachments } = draft();
-      appendChatAttachmentFiles([video()], props);
-      const entry = reads.project([])[0]!;
-      entry.compress?.();
-      await vi.waitFor(() => expect(EncoderWorker.jobs).toHaveLength(1));
-      EncoderWorker.jobs[0]!.reply(
+      const { reads, entry, worker, attachments } = await encoding();
+      worker.reply(
         failure === "oversize"
           ? { type: "ready", file: video() }
           : { type: "error", reason: failure },
