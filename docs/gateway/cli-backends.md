@@ -677,7 +677,7 @@ are connected, select one explicitly. When local execution is allowed by policy,
 use managed `exec` for local Claude MCP turns, or the native shell when the backend
 retains it.
 
-`tools.allow` and `tools.deny` also constrain configured native MCP servers.
+`tools.allow` and `tools.deny` also constrain callable tools from configured native MCP servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
 provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,
 and applies the complete layered policy before tools can run. For Claude's local
@@ -686,7 +686,7 @@ Gateway loopback listener. Claude's handshake supplies its capabilities and root
 the session runtime owns the upstream process and its discovery, so Claude does
 not start a second copy. Server map keys and raw tool names are preserved. The
 route mirrors the protocol negotiation requested by Claude when the upstream
-supports it and enforces policy on both discovery and execution. A server that
+supports it and enforces tool policy on both tool discovery and execution. A server that
 does not support Claude's requested mode is omitted with a diagnostic. HTTP
 servers keep their native transport.
 
@@ -700,10 +700,12 @@ operator policy in OpenClaw configuration.
 
 For example, `agents.entries.research.tools.allow: ["docs__read_docs"]`
 exposes only that tool from the safe `docs` namespace, while
-`deny: ["docs__delete_*"]` removes matching siblings. An empty intersection
-omits the affected MCP server. A server whose restrictive catalog cannot be
-established is also omitted and reported instead of being passed through
-unfiltered.
+`deny: ["docs__delete_*"]` removes matching siblings. For projected Claude stdio
+servers, an empty intersection exposes no callable tools. Separately advertised
+resources and prompts remain available under the current turn's grant, including
+servers with no callable tools. Other native transports omit a server when its
+tool intersection is empty. If a restrictive catalog cannot be established, the
+server is reported as unavailable; an unfiltered command is never passed through.
 
 Claude projection routes require the current turn's grant, including when a warm
 Claude process is reused. Reusing the process transfers the new turn's authority;
