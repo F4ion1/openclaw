@@ -98,7 +98,17 @@ async function makeFixture(label: string): Promise<Fixture> {
       workspace: { bootstrapFiles: {}, files: [] },
       packages: [{ kind: "plugin", source: "clawhub", ref: pluginName, version }],
       mcpServers: {},
-      cronJobs: [],
+      cronJobs:
+        label === "allowed"
+          ? [
+              {
+                id: "daily-probe",
+                schedule: { cron: "0 8 * * *", timezone: "UTC" },
+                session: "isolated",
+                message: "Report the synthetic probe status.",
+              },
+            ]
+          : [],
     }),
   });
   const pluginArchive = await createArchive({
@@ -339,7 +349,18 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
         "claws.add.apply",
         applyParams(allowedFixture, allowedPlan),
       );
-      expect(allowed.status).toBe("complete");
+      expect(allowed, JSON.stringify(allowed)).toMatchObject({ status: "complete" });
+      const schedules = await admin.client.request<{
+        jobs: Array<{ agentId: string; declarationKey: string }>;
+      }>("cron.list", { includeDisabled: true });
+      expect(schedules.jobs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            agentId: allowedFixture.agentId,
+            declarationKey: "claw:allowed-claw:daily-probe",
+          }),
+        ]),
+      );
       expect(await installed(allowedFixture)).toMatchObject({
         agent: expect.objectContaining({}),
         plugin: { source: "clawhub" },
