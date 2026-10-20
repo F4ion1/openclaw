@@ -652,7 +652,11 @@ export function createSessionWorkspaceProps(
       loadSessionWorkspace(state, workspace);
       publish();
     },
-    onOpenFile: (path: string, origin: "session" | "workspace") => {
+    onOpenFile: (
+      path: string,
+      origin: "session" | "workspace",
+      _disposition?: "pinned" | "preview",
+    ) => {
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
       // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
       const opts =
@@ -671,7 +675,8 @@ export function createSessionWorkspaceProps(
         loadSessionWorkspace(state, workspace);
       }, 160);
     },
-    onOpenArtifact: (artifactId: string) => openArtifact(state, workspace, artifactId),
+    onOpenArtifact: (artifactId: string, _disposition?: "pinned" | "preview") =>
+      openArtifact(state, workspace, artifactId),
     onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }
