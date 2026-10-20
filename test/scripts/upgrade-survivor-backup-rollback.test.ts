@@ -125,11 +125,7 @@ function fixture(withTranscript = false) {
   if (withTranscript) {
     const history = [
       { type: "session", id: "upgrade-restored-index-history", version: 3 },
-      {
-        type: "message",
-        id: "retained-event",
-        message: { role: "user", content: "Retained restored-index history" },
-      },
+      { type: "message", id: "retained", message: { role: "user", content: "history" } },
     ];
     mkdirSync(dirname(join(state, transcriptRelative)), { recursive: true });
     writeFileSync(
@@ -143,9 +139,8 @@ function fixture(withTranscript = false) {
     );
   }
   agent.close();
-  const shared = new DatabaseSync(join(state, "state", "openclaw.sqlite"));
+  using shared = new DatabaseSync(join(state, "state", "openclaw.sqlite"));
   shared.exec("PRAGMA user_version = 16");
-  shared.close();
   writeJson(join(packageRoot, "package.json"), {
     name: "openclaw",
     version: "2026.9.4",
@@ -279,15 +274,11 @@ describe("published backup rollback proof", () => {
       expect(commands[1].state).toBe(commands[2].state);
       expect(commands[2].state).toBe(commands[3].state);
       expect(commands[1].state).not.toBe(f.state);
-      const source = new DatabaseSync(join(f.state, agentRelative), { readOnly: true });
-      try {
-        expect(source.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
-        expect(source.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()?.count).toBe(
-          withTranscript ? 4 : 2,
-        );
-      } finally {
-        source.close();
-      }
+      using source = new DatabaseSync(join(f.state, agentRelative), { readOnly: true });
+      expect(source.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+      expect(source.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()?.count).toBe(
+        withTranscript ? 4 : 2,
+      );
     },
   );
 
@@ -303,11 +294,10 @@ describe("published backup rollback proof", () => {
       f.mode(mode);
     }
     if (mode === "changed-history") {
-      const db = new DatabaseSync(join(f.state, agentRelative));
+      using db = new DatabaseSync(join(f.state, agentRelative));
       db.exec(
         "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'upgrade-restored-index-history' AND seq = 1",
       );
-      db.close();
     }
     if (mode.startsWith("unqualified")) {
       const schema = readJson(f.beforeFile);

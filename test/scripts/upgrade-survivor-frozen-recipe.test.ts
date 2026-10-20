@@ -72,15 +72,13 @@ function fixture(present: boolean) {
 }
 
 function apply(root: string, mode: string) {
-  const bin = join(root, "bin");
-  mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  writeFileSync(join(root, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const summary = join(root, "recipe.json");
   const result = run(
     root,
     process.execPath,
     [recipe, "apply", "--summary", summary, "--baseline-version", "2026.9.6"],
-    { PATH: bin + ":" + process.env.PATH, [flag]: mode },
+    { PATH: root + ":" + process.env.PATH, [flag]: mode },
   );
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(readFileSync(summary, "utf8")) as {
@@ -89,12 +87,7 @@ function apply(root: string, mode: string) {
   };
 }
 
-function assertToolSearch(
-  root: string,
-  accepted: boolean,
-  toolSearch: unknown,
-  stage = "survival",
-) {
+function checkSearch(root: string, accepted: boolean, toolSearch: unknown, stage = "survival") {
   const config = join(root, "config.json");
   const coverage = join(root, "coverage.json");
   writeFileSync(config, JSON.stringify({ tools: { toolSearch } }));
@@ -133,18 +126,17 @@ describe.skipIf(process.platform === "win32")("frozen survivor Tool Search recip
       newRecipe.acceptedIntents.filter((id) => id !== "tool-search"),
     );
     expect(oldRecipe.steps).toEqual(newRecipe.steps.filter(({ id }) => id !== "tools-tool-search"));
-    expect(assertToolSearch(old.root, false, { mode: "code", codeTimeoutMs: 5000 }).status).toBe(0);
-    expect(
-      assertToolSearch(newer.root, true, { mode: "code", codeTimeoutMs: 5000 }, "baseline").status,
-    ).toBe(0);
-    expect(assertToolSearch(newer.root, true, { mode: "tools" }).status).toBe(0);
+    const legacySearch = { mode: "code", codeTimeoutMs: 5000 };
+    expect(checkSearch(old.root, false, legacySearch).status).toBe(0);
+    expect(checkSearch(newer.root, true, legacySearch, "baseline").status).toBe(0);
+    expect(checkSearch(newer.root, true, { mode: "tools" }).status).toBe(0);
     for (const value of [
-      { mode: "code", codeTimeoutMs: 5000 },
+      legacySearch,
       { mode: "tools", codeTimeoutMs: 5000 },
       { mode: "tools", enabled: false },
       undefined,
     ]) {
-      expect(assertToolSearch(newer.root, true, value).status).not.toBe(0);
+      expect(checkSearch(newer.root, true, value).status).not.toBe(0);
     }
   });
 

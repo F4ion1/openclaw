@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -30,16 +30,12 @@ function runUpdate({
   configureRegistry = false,
 } = {}) {
   const root = tempDirs.make("survivor-extended-selector-");
-  const artifacts = join(root, "artifacts");
-  const bin = join(root, "bin");
-  mkdirSync(artifacts);
-  mkdirSync(bin);
   const calls = join(root, "calls.jsonl");
   const registries = join(root, "registries.jsonl");
   writeFileSync(calls, "");
   writeFileSync(registries, "");
   writeFileSync(
-    join(bin, "openclaw"),
+    join(root, "openclaw"),
     `#!${process.execPath}
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({
@@ -66,7 +62,7 @@ openclaw_prepublish_plugin_registry_start() {
   export NPM_CONFIG_REGISTRY=http://127.0.0.1:4873
 }
 ${harness}
-ARTIFACT_ROOT=${JSON.stringify(artifacts)}
+ARTIFACT_ROOT=${JSON.stringify(root)}
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
 UPDATE_ERR="$ARTIFACT_ROOT/update.err"
 POST_UPDATE_VALIDATE_JSON="$ARTIFACT_ROOT/validate.json"
@@ -89,7 +85,7 @@ update_candidate
     ],
     {
       encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, REGISTRY_LOG: registries },
+      env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}`, REGISTRY_LOG: registries },
       timeout: 30_000,
     },
   );

@@ -51,7 +51,7 @@ function fixture() {
       { completedMoves: [{ kind: "legacy-store", sourcePath: storePath, archivePath: archive }] },
     ],
   });
-  const seedDb = new DatabaseSync(database);
+  using seedDb = new DatabaseSync(database);
   seedDb.exec(`
     CREATE TABLE session_nodes (session_key TEXT, current_session_id TEXT, entry_json TEXT);
     CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT, event_zstd BLOB, event_utf8_bytes INTEGER);
@@ -59,7 +59,6 @@ function fixture() {
   seedDb
     .prepare("INSERT INTO session_nodes VALUES (?, ?, ?)")
     .run(sessionKey, sessionId, JSON.stringify({ sessionId, pendingFinalDelivery: pending }));
-  seedDb.close();
   const updateJson = path.join(artifacts, "update.json");
   const updateErr = path.join(artifacts, "update.err");
   writeFileSync(updateJson, "{}");
@@ -87,43 +86,31 @@ function fixture() {
     verify: (mode = "auto-auth") =>
       invoke("assert-legacy-operator-pending-delivery", [updateJson, updateErr], mode),
     setPending(value: Record<string, unknown>) {
-      const db = new DatabaseSync(database);
-      try {
-        db.prepare("UPDATE session_nodes SET entry_json = ?").run(
-          JSON.stringify({ sessionId, pendingFinalDelivery: value }),
-        );
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(database);
+      db.prepare("UPDATE session_nodes SET entry_json = ?").run(
+        JSON.stringify({ sessionId, pendingFinalDelivery: value }),
+      );
     },
     recover(text = pending.text, sourceSessionKey = sessionKey, targetSessionId = sessionId) {
       this.setPending({ ...pending, text: "OPENCLAW_E2E_OK", intentId: "new-recovery-intent" });
-      const payload = Buffer.from(
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            provenance: {
-              kind: "internal_system",
-              sourceTool: "main_session_restart_recovery",
-              sourceSessionKey,
-            },
-            content: [
-              { type: "text", text: `Note: The interrupted final reply was captured: "${text}"` },
-            ],
-          },
-        }),
+      const message = {
+        role: "user",
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "main_session_restart_recovery",
+          sourceSessionKey,
+        },
+        content: [
+          { type: "text", text: `Note: The interrupted final reply was captured: "${text}"` },
+        ],
+      };
+      const payload = Buffer.from(JSON.stringify({ type: "message", message }));
+      using db = new DatabaseSync(database);
+      db.prepare("INSERT INTO transcript_events VALUES (?, 1, NULL, ?, ?)").run(
+        targetSessionId,
+        zstdCompressSync(payload),
+        payload.byteLength,
       );
-      const db = new DatabaseSync(database);
-      try {
-        db.prepare("INSERT INTO transcript_events VALUES (?, 1, NULL, ?, ?)").run(
-          targetSessionId,
-          zstdCompressSync(payload),
-          payload.byteLength,
-        );
-      } finally {
-        db.close();
-      }
     },
   };
 }

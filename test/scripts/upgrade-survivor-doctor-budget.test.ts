@@ -127,12 +127,10 @@ assert_volume_idempotence
     computedSeconds: testCase.large ? 676 : 60,
     budgetSeconds: testCase.budget,
   });
+  expect(result.stdout.includes("state-preserved")).toBe(testCase.exit === 0);
   if (testCase.exit === 1) {
     expect(result.stderr).toContain(
       `idempotence exceeded budget: ${testCase.elapsed}s > ${testCase.budget}s`,
     );
-    expect(result.stdout).not.toContain("state-preserved");
-  } else {
-    expect(result.stdout).toContain("state-preserved");
   }
 });
