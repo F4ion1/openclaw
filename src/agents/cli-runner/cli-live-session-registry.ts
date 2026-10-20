@@ -21,6 +21,8 @@ type CliLiveSessionOwner = {
 
 type CliLiveSessionRecord = {
   handle: CliBackendLiveSessionHandle;
+  agentId?: string;
+  sessionId: string;
   owner: PreparedCliRunContext["preparedBackend"];
   approvalGrants: Set<string>;
   cleanup?: () => Promise<void>;
@@ -33,7 +35,10 @@ type CliLiveSessionRecord = {
 };
 
 const liveSessions = new Map<string, CliLiveSessionRecord>();
-const retiredSessionCleanup = new Map<string, Promise<void>>();
+const retiredSessionCleanup = new Map<
+  string,
+  { agentId?: string; sessionId: string; promise: Promise<void> }
+>();
 const retiringSessionHandles = new WeakSet<CliBackendLiveSessionHandle>();
 
 function buildCliLiveRegistryKey(owner: CliLiveSessionOwner): string {
@@ -96,7 +101,7 @@ export async function restartCliLiveSession(
   assertActive();
   const key = buildCliLiveSessionKey(context);
   const record = liveSessions.get(key);
-  const pendingCleanup = retiredSessionCleanup.get(key);
+  const pendingCleanup = retiredSessionCleanup.get(key)?.promise;
   await runCliCleanup(
     context.params,
     "cli-live-session-close",
@@ -132,16 +137,37 @@ async function closeRecord(
   await (record.cleanupPromise ?? record.handle.waitForExit());
 }
 
-/** Retire warm processes and join resources already waiting for their exit. */
-export async function disposeAllCliLiveSessions(): Promise<void> {
+async function disposeCliLiveSessions(session?: {
+  agentId: string;
+  sessionId: string;
+}): Promise<void> {
+  const matches = (record: { agentId?: string; sessionId: string }) =>
+    !session || (record.agentId === session.agentId && record.sessionId === session.sessionId);
   const results = await Promise.allSettled([
-    ...retiredSessionCleanup.values(),
-    ...Array.from(liveSessions.values()).map((record) => closeRecord(record, "abort")),
+    ...Array.from(retiredSessionCleanup.values())
+      .filter(matches)
+      .map((record) => record.promise),
+    ...Array.from(liveSessions.values())
+      .filter(matches)
+      .map((record) => closeRecord(record, "abort")),
   ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure) {
     throw failure.reason;
   }
+}
+
+/** Retire warm processes and join resources already waiting for their exit. */
+export function disposeAllCliLiveSessions(): Promise<void> {
+  return disposeCliLiveSessions();
+}
+
+/** Reset and deletion retire only the selected conversation's retained processes. */
+export function disposeCliLiveSessionsForSession(session: {
+  agentId: string;
+  sessionId: string;
+}): Promise<void> {
+  return disposeCliLiveSessions(session);
 }
 
 function retainCleanup(context: PreparedCliRunContext, record: CliLiveSessionRecord): void {
@@ -369,6 +395,8 @@ export function createCliLiveSessionCapability(params: {
       const cleanup = params.claimResources?.();
       const record: CliLiveSessionRecord = {
         handle,
+        agentId: context.params.agentId,
+        sessionId: context.params.sessionId,
         owner: params.context.preparedBackend,
         approvalGrants: new Set(),
         ...(cleanup ? { cleanup } : {}),
@@ -417,12 +445,16 @@ export function createCliLiveSessionCapability(params: {
         .then(() => record.cleanup?.())
         .then(() => {
           retiringSessionHandles.delete(handle);
-          if (retiredSessionCleanup.get(ownerKey) === record.cleanupPromise) {
+          if (retiredSessionCleanup.get(ownerKey)?.promise === record.cleanupPromise) {
             retiredSessionCleanup.delete(ownerKey);
           }
         });
       // A fresh prepared context must still join the retired owner after a timeout.
-      retiredSessionCleanup.set(ownerKey, record.cleanupPromise);
+      retiredSessionCleanup.set(ownerKey, {
+        agentId: record.agentId,
+        sessionId: record.sessionId,
+        promise: record.cleanupPromise,
+      });
       void record.cleanupPromise.catch((error: unknown) => {
         cliBackendLog.warn(`cli live session cleanup failed: ${String(error)}`);
       });

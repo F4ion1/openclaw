@@ -2,6 +2,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
+import { disposeCliLiveSessionsForSession } from "../agents/cli-runner/cli-live-session-registry.js";
 import {
   clearSessionResetRuntimeState,
   prepareSessionResetCleanupGuard,
@@ -111,6 +112,8 @@ export async function ensureSessionRuntimeCleanup(params: {
   };
   // The controller mutation already joined the actual turn and effect producers.
   // Retire resources only after that settlement, before admitting a successor.
+  await disposeCliLiveSessionsForSession({ agentId: params.target.agentId, sessionId });
+  assertCurrent();
   await retireSessionMcpRuntime({
     sessionId,
     reason: "gateway-session-cleanup",

@@ -225,6 +225,8 @@ refreshes, or forwards native tokens, or sends synthesized Anthropic API
 requests. Compatible agent turns share one warm Claude Code subprocess.
 Gateway shutdown closes these warm subprocesses and waits for their process trees
 and retained runtime resources to finish cleanup.
+Session reset and deletion also wait for the affected session's warm process and
+retained resources to close.
 A changed model, system prompt, or configured tool surface starts a
 new subprocess. Persisted Claude session IDs still provide
 conversation continuity when the Gateway or subprocess restarts.
