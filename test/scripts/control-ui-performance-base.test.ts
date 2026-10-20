@@ -7,7 +7,7 @@ import { expect } from "vitest";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
-const it = createCommandTest();
+const test = createCommandTest();
 const repoRoot = process.cwd();
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const cliNames = [
@@ -24,16 +24,6 @@ import path from "node:path";
 import { brotliCompressSync } from "node:zlib";
 import { gzip } from "pako";
 const outDir = path.resolve(import.meta.dirname, "../dist/control-ui");
-function recordBuildIdentity(bundle) {
-  const identityCapture = process.env.OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE;
-  if (!identityCapture) return;
-  fs.appendFileSync(identityCapture, JSON.stringify({
-    identity: ["GIT_COMMIT", "OPENCLAW_BUILD_TIMESTAMP", "GIT_BRANCH", "OPENCLAW_CONTROL_UI_BUILD_ID", "OPENCLAW_CONTROL_UI_RELEASE_BUILD"].map((key) => process.env[key]),
-    gitDisabled: !fs.existsSync(process.env.GIT_DIR ?? "") && spawnSync("git", ["rev-parse", "HEAD"]).status !== 0,
-    packageVersion: JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "../package.json"), "utf8")).version,
-    entryCode: Object.values(bundle).find((output) => output.type === "chunk" && output.isEntry).code,
-  }) + "\\n");
-}
 export function createControlUiPrecompressedAssetVariants(fileName, source) {
   return [
     { fileName: fileName + ".gz", source: gzip(source, { level: 0, legacyHash: true }) },
@@ -43,7 +33,12 @@ export function createControlUiPrecompressedAssetVariants(fileName, source) {
 export default {
   build: { outDir, emptyOutDir: true },
   plugins: [{ name: "fixture-precompression", writeBundle(_options, bundle) {
-    recordBuildIdentity(bundle);
+    fs.appendFileSync(process.env.OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE, JSON.stringify({
+      identity: ["GIT_COMMIT", "OPENCLAW_BUILD_TIMESTAMP", "GIT_BRANCH", "OPENCLAW_CONTROL_UI_BUILD_ID", "OPENCLAW_CONTROL_UI_RELEASE_BUILD"].map((key) => process.env[key]),
+      gitDisabled: !fs.existsSync(process.env.GIT_DIR ?? "") && spawnSync("git", ["rev-parse", "HEAD"]).status !== 0,
+      packageVersion: JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "../package.json"), "utf8")).version,
+      entryCode: Object.values(bundle).find((output) => output.type === "chunk" && output.isEntry).code,
+    }) + "\\n");
     for (const output of Object.values(bundle)) {
       if (!/\\.(css|js)$/.test(output.fileName)) continue;
       for (const variant of createControlUiPrecompressedAssetVariants(output.fileName, fs.readFileSync(path.join(outDir, output.fileName)))) {
@@ -75,17 +70,20 @@ async function createComparisonRepo(
   diagnostics.stage("fixture");
   const temporaryRoot = fs.realpathSync(command.createTempDir("ui-budget-proof-"));
   const root = path.join(temporaryRoot, "repo");
+  const at = (...parts: string[]) => path.join(root, ...parts);
   const scratch = path.join(temporaryRoot, "scratch");
   const identityCapture = path.join(temporaryRoot, "build-identities.jsonl");
   const env = createNestedGitEnv();
+  const run = (bin: string, args: string[], runEnv = env) =>
+    command.run(bin, args, { cwd: root, env: runEnv });
   const gitIdentity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"];
   const write = (file: string, text: string) => {
-    const target = path.join(root, file);
+    const target = at(file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, text);
   };
   const git = async (...args: string[]) => {
-    const result = await command.run("git", [...gitIdentity, ...args], { cwd: root, env });
+    const result = await run("git", [...gitIdentity, ...args]);
     expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
     return result.stdout.trim();
   };
@@ -97,7 +95,7 @@ async function createComparisonRepo(
   };
   fs.mkdirSync(scratch, { recursive: true });
   for (const directory of ["scripts/lib", "extensions"]) {
-    fs.mkdirSync(path.join(root, directory), { recursive: true });
+    fs.mkdirSync(at(directory), { recursive: true });
   }
   for (const script of [
     ...cliNames.map((name) => `${name}.mts`),
@@ -109,7 +107,7 @@ async function createComparisonRepo(
     "lib/record-shared.mjs",
     "lib/regexp.mjs",
   ]) {
-    fs.copyFileSync(path.join(repoRoot, "scripts", script), path.join(root, "scripts", script));
+    fs.copyFileSync(path.join(repoRoot, "scripts", script), at("scripts", script));
   }
   write(
     "src/gateway/control-ui-route-preloads.ts",
@@ -152,8 +150,8 @@ async function createComparisonRepo(
     write(file, source);
   }
   fs.symlinkSync(
-    path.join(root, "packages/workspace-value"),
-    path.join(root, "packages/styles/node_modules/fixture-workspace-value"),
+    at("packages/workspace-value"),
+    at("packages/styles/node_modules/fixture-workspace-value"),
     "junction",
   );
   manifest("config/control-ui-startup-budget-baseline.json", {
@@ -163,11 +161,13 @@ async function createComparisonRepo(
   });
   if (baseOnlyDependency) {
     diagnostics.stage("lockfile");
-    const lockfile = await command.run(
-      "pnpm",
-      ["install", "--lockfile-only", "--no-frozen-lockfile", "--ignore-scripts", "--offline"],
-      { cwd: root, env },
-    );
+    const lockfile = await run("pnpm", [
+      "install",
+      "--lockfile-only",
+      "--no-frozen-lockfile",
+      "--ignore-scripts",
+      "--offline",
+    ]);
     expect(lockfile, `${lockfile.stdout}${lockfile.stderr}`).toMatchObject({
       error: undefined,
       status: 0,
@@ -177,9 +177,9 @@ async function createComparisonRepo(
   await git("init", "--quiet");
   const base = await commit(brokenSource ? "broken base" : "base");
   for (const directory of ["node_modules", "ui/node_modules"]) {
-    fs.rmSync(path.join(root, directory), { recursive: true, force: true });
+    fs.rmSync(at(directory), { recursive: true, force: true });
   }
-  const uiDependencies = path.join(root, "ui/node_modules");
+  const uiDependencies = at("ui/node_modules");
   fs.mkdirSync(uiDependencies);
   for (const name of ["vite", "pako"]) {
     fs.symlinkSync(
@@ -216,34 +216,23 @@ async function createComparisonRepo(
   }
   // Keep the real CLI's source-relative subprocess paths and direct-run guards.
   for (const name of cliNames) {
-    fs.copyFileSync(
-      path.join(root, "scripts", `${name}.js`),
-      path.join(root, "scripts", `${name}.mts`),
-    );
+    fs.copyFileSync(at("scripts", `${name}.js`), at("scripts", `${name}.mts`));
   }
 
   const runComparison = async (baseRef: string, status: number) => {
     diagnostics.stage("compare");
     fs.rmSync(identityCapture, { force: true });
-    const result = await command.run(
+    const result = await run(
       process.execPath,
-      [
-        "--import",
-        tsxImport,
-        path.join(root, "scripts/check-control-ui-performance-base.mts"),
-        baseRef,
-      ],
+      ["--import", tsxImport, at("scripts/check-control-ui-performance-base.mts"), baseRef],
       {
-        cwd: root,
-        env: {
-          ...env,
-          GITHUB_ACTIONS: "",
-          GITHUB_STEP_SUMMARY: "",
-          OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE: identityCapture,
-          TMPDIR: scratch,
-          TMP: scratch,
-          TEMP: scratch,
-        },
+        ...env,
+        GITHUB_ACTIONS: "",
+        GITHUB_STEP_SUMMARY: "",
+        OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE: identityCapture,
+        TMPDIR: scratch,
+        TMP: scratch,
+        TEMP: scratch,
       },
     );
     const output = `${result.stdout}${result.stderr}`;
@@ -264,99 +253,95 @@ async function createComparisonRepo(
       packageVersion: string;
       entryCode: string;
     }>;
-  return { temporaryRoot, root, base, write, commit, runComparison, readIdentities };
+  return { temporaryRoot, at, base, write, commit, runComparison, readIdentities };
 }
 
-it("builds the archived base with the candidate toolchain and keeps candidate artifacts after a growth failure", async ({
-  command,
-}) => {
-  await command.lifetime.run(async () => {
-    const repo = await createComparisonRepo(command, { baseOnlyDependency: true });
-    repo.write("ui/style.css", css(1_400));
-    const head = await repo.commit("candidate");
-    expect(head).not.toBe(repo.base);
-    const dependencyLinks = () =>
-      ["vite", "pako"].map((name) =>
-        fs.readlinkSync(path.join(repo.root, "ui/node_modules", name)),
-      );
-    const links = dependencyLinks();
-    const { output } = await repo.runComparison(repo.base, 1);
-    expect(output).toContain(`head ${head}; base ${repo.base}; Node ${process.version}; Vite `);
-    expect(output).toContain("Pako ");
-    expect(output).toMatch(/startup CSS gzip vs base: \d+ B -> \d+ B \(\+\d+ B/u);
-    expect(output).toContain("startup CSS gzip growth:");
-    const identities = repo.readIdentities();
-    expect(
-      identities.map(({ packageVersion, gitDisabled }) => ({ packageVersion, gitDisabled })),
-    ).toEqual([
-      { packageVersion: "1.0.1", gitDisabled: true },
-      { packageVersion: "1.0.0", gitDisabled: true },
-    ]);
-    expect(identities[0]?.identity).toEqual(identities[1]?.identity);
-    expect(
-      identities.map(({ entryCode }) => {
-        const document = {
-          createElement: () => ({ relList: { supports: () => true } }),
-          body: { textContent: "" },
-        };
-        runInNewContext(entryCode, { document });
-        return document.body.textContent;
-      }),
-    ).toEqual(["candidate workspace", "base workspace/base dependency"]);
-    // The base lockfile installs into the private archive, never the candidate checkout.
-    expect(dependencyLinks()).toEqual(links);
-    for (const directory of ["node_modules", "ui/node_modules"]) {
-      expect(fs.existsSync(path.join(repo.root, directory, "base-only-library"))).toBe(false);
-    }
-    expect(fs.existsSync(path.join(repo.root, "dist/control-ui/index.html"))).toBe(true);
-  });
-}, 60_000);
+function it(
+  name: string,
+  options: Parameters<typeof createComparisonRepo>[1],
+  verify: (repo: Awaited<ReturnType<typeof createComparisonRepo>>) => Promise<void>,
+) {
+  test(
+    name,
+    ({ command }) =>
+      command.lifetime.run(async () => verify(await createComparisonRepo(command, options))),
+    60_000,
+  );
+}
 
-it("falls back to absolute budgets only when the base source fails to build, not when its build is signaled", async ({
-  command,
-}) => {
-  await command.lifetime.run(async () => {
-    const repo = await createComparisonRepo(command, { brokenSource: true });
-    const signalMarker = path.join(repo.temporaryRoot, "signaled-base-config");
-    repo.write(
-      "ui/vite.config.ts",
-      `import fs from "node:fs";
+it("compares archived source revisions", { baseOnlyDependency: true }, async (repo) => {
+  repo.write("ui/style.css", css(1_400));
+  const head = await repo.commit("candidate");
+  expect(head).not.toBe(repo.base);
+  const dependencyLinks = () =>
+    ["vite", "pako"].map((name) => fs.readlinkSync(repo.at("ui/node_modules", name)));
+  const links = dependencyLinks();
+  const { output } = await repo.runComparison(repo.base, 1);
+  expect(output).toContain(`head ${head}; base ${repo.base}; Node ${process.version}; Vite `);
+  expect(output).toContain("Pako ");
+  expect(output).toMatch(/startup CSS gzip vs base: \d+ B -> \d+ B \(\+\d+ B/u);
+  expect(output).toContain("startup CSS gzip growth:");
+  const identities = repo.readIdentities();
+  expect(identities).toMatchObject([
+    { packageVersion: "1.0.1", gitDisabled: true },
+    { packageVersion: "1.0.0", gitDisabled: true },
+  ]);
+  expect(identities[0]?.identity).toEqual(identities[1]?.identity);
+  expect(
+    identities.map(({ entryCode }) => {
+      const document = {
+        createElement: () => ({ relList: { supports: () => true } }),
+        body: { textContent: "" },
+      };
+      runInNewContext(entryCode, { document });
+      return document.body.textContent;
+    }),
+  ).toEqual(["candidate workspace", "base workspace/base dependency"]);
+  // The base lockfile installs into the private archive, never the candidate checkout.
+  expect(dependencyLinks()).toEqual(links);
+  for (const directory of ["node_modules", "ui/node_modules"]) {
+    expect(fs.existsSync(repo.at(directory, "base-only-library"))).toBe(false);
+  }
+  expect(fs.existsSync(repo.at("dist/control-ui/index.html"))).toBe(true);
+});
+
+it("distinguishes failure from signal", { brokenSource: true }, async (repo) => {
+  const signalMarker = path.join(repo.temporaryRoot, "signaled-base-config");
+  repo.write(
+    "ui/vite.config.ts",
+    `import fs from "node:fs";
 fs.writeFileSync(${JSON.stringify(signalMarker)}, "loaded");
 export default { plugins: [{ name: "signal", buildStart() { process.kill(process.pid, "SIGTERM"); } }] };
 `,
-    );
-    const signaledBase = await repo.commit("signaled base");
-    repo.write("ui/vite.config.ts", candidateConfig);
-    const { output: brokenBaseOutput } = await repo.runComparison(repo.base, 0);
-    expect(brokenBaseOutput).toContain(
-      "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
-    );
-    expect(brokenBaseOutput).not.toContain("startup CSS gzip vs base:");
-    expect(repo.readIdentities()).toHaveLength(1);
-    const { output: signaledBaseOutput } = await repo.runComparison(signaledBase, 1);
-    expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
-    expect(signaledBaseOutput).toContain(`${path.basename(process.execPath)} failed (SIGTERM)`);
-    expect(signaledBaseOutput).not.toContain(
-      "Base Control UI source does not build with the candidate toolchain",
-    );
-  });
-}, 60_000);
+  );
+  const signaledBase = await repo.commit("signaled base");
+  repo.write("ui/vite.config.ts", candidateConfig);
+  const { output: brokenBaseOutput } = await repo.runComparison(repo.base, 0);
+  expect(brokenBaseOutput).toContain(
+    "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
+  );
+  expect(brokenBaseOutput).not.toContain("startup CSS gzip vs base:");
+  expect(repo.readIdentities()).toHaveLength(1);
+  const { output: signaledBaseOutput } = await repo.runComparison(signaledBase, 1);
+  expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
+  expect(signaledBaseOutput).toContain(`${path.basename(process.execPath)} failed (SIGTERM)`);
+  expect(signaledBaseOutput).not.toContain(
+    "Base Control UI source does not build with the candidate toolchain",
+  );
+});
 
-it("refuses symlinked output roots without mutating their targets", async ({ command }) => {
-  await command.lifetime.run(async () => {
-    const repo = await createComparisonRepo(command);
-    const protectedRoot = path.join(repo.temporaryRoot, "protected");
-    fs.mkdirSync(protectedRoot);
-    fs.writeFileSync(path.join(protectedRoot, "sentinel"), "keep");
-    for (const outputRoot of ["dist", "dist/control-ui"]) {
-      const target = path.join(repo.root, outputRoot);
-      fs.rmSync(target, { recursive: true, force: true });
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.symlinkSync(protectedRoot, target, "junction");
-      const { stderr } = await repo.runComparison(repo.base, 1);
-      expect(stderr).toContain("is a symbolic link; refusing to mutate it");
-      expect(fs.readFileSync(path.join(protectedRoot, "sentinel"), "utf8")).toBe("keep");
-      fs.unlinkSync(target);
-    }
-  });
-}, 60_000);
+it("refuses symlinked output roots without mutating targets", {}, async (repo) => {
+  const protectedRoot = path.join(repo.temporaryRoot, "protected");
+  fs.mkdirSync(protectedRoot);
+  fs.writeFileSync(path.join(protectedRoot, "sentinel"), "keep");
+  for (const outputRoot of ["dist", "dist/control-ui"]) {
+    const target = repo.at(outputRoot);
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.symlinkSync(protectedRoot, target, "junction");
+    const { stderr } = await repo.runComparison(repo.base, 1);
+    expect(stderr).toContain("is a symbolic link; refusing to mutate it");
+    expect(fs.readFileSync(path.join(protectedRoot, "sentinel"), "utf8")).toBe("keep");
+    fs.unlinkSync(target);
+  }
+});

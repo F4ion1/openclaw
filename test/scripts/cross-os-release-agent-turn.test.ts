@@ -11,17 +11,17 @@ import { runInstalledAgentTurn } from "../../scripts/lib/cross-os-release-checks
 import { runAgentTurn } from "../../scripts/lib/cross-os-release-checks/runtime.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const command = vi.hoisted(() => ({
-  run: vi.fn<(invocation: CommandInvocation, options: CommandOptions) => Promise<CommandResult>>(),
-}));
+const runCommand = vi.hoisted(() =>
+  vi.fn<(invocation: CommandInvocation, options: CommandOptions) => Promise<CommandResult>>(),
+);
 
 vi.mock("../../scripts/lib/cross-os-release-checks/process.ts", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../scripts/lib/cross-os-release-checks/process.ts")
   >()),
   runCommand: (executable: string, args: string[], options: CommandOptions) =>
-    command.run({ command: executable, args, shell: false }, options),
-  runCommandInvocation: command.run,
+    runCommand({ command: executable, args, shell: false }, options),
+  runCommandInvocation: runCommand,
 }));
 
 let dir: string;
@@ -33,7 +33,7 @@ const success = { exitCode: 0, stdout: "OK", stderr: "" };
 beforeEach(() => {
   dir = temporary.make("cross-os-release-agent-");
   logPath = join(dir, "agent.log");
-  command.run.mockReset();
+  runCommand.mockReset().mockResolvedValue(success);
 });
 
 function run(adapter: "packaged" | "installed" = "packaged") {
@@ -56,54 +56,51 @@ function run(adapter: "packaged" | "installed" = "packaged") {
 }
 
 it.each(["packaged", "installed"] as const)("uses the exact %s invocation", async (adapter) => {
-  command.run.mockResolvedValue(success);
   await expect(run(adapter)).resolves.toBe(success);
-  expect(command.run).toHaveBeenCalledTimes(1);
-  const [invocation, options] = command.run.mock.calls[0]!;
   const prefix = process.platform === "win32" ? "prefix" : "prefix/lib";
   const entry = join(dir, prefix, "node_modules/openclaw/openclaw.mjs");
-  expect(invocation).toEqual({
-    command: adapter === "packaged" ? process.execPath : join(dir, "openclaw"),
-    shell: false,
-    args: [
-      ...(adapter === "packaged" ? [entry] : []),
-      ..."agent --agent main --session-id".split(" "),
-      expect.stringMatching(/^cross-os-release-check-probe-[0-9a-f-]{36}$/u),
-      "--message",
-      "Reply with exact ASCII text OK only.",
-      ..."--thinking off --timeout".split(" "),
-      String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS),
-      "--json",
-    ],
-  });
-  expect(options).toEqual({
-    cwd: dir,
-    env,
-    logPath,
-    timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
-    check: true,
-  });
-  expect(options.env).toBe(env);
+  expect(runCommand).toHaveBeenCalledExactlyOnceWith(
+    {
+      command: adapter === "packaged" ? process.execPath : join(dir, "openclaw"),
+      shell: false,
+      args: [
+        ...(adapter === "packaged" ? [entry] : []),
+        ..."agent --agent main --session-id".split(" "),
+        expect.stringMatching(/^cross-os-release-check-probe-[0-9a-f-]{36}$/u),
+        "--message",
+        "Reply with exact ASCII text OK only.",
+        ..."--thinking off --timeout".split(" "),
+        String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS),
+        "--json",
+      ],
+    },
+    {
+      cwd: dir,
+      env,
+      logPath,
+      timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
+      check: true,
+    },
+  );
+  expect(runCommand.mock.calls[0]![1].env).toBe(env);
 });
 
 it.each([false, true])("accepts only current-command log output: %s", async (current) => {
   const loggedSuccess = { ...success, stdout: "" };
   writeFileSync(logPath, JSON.stringify({ payloads: [{ text: current ? "stale" : "OK" }] }) + "\n");
-  command.run
-    .mockImplementationOnce(async () => {
-      if (current) {
-        appendFileSync(logPath, '{"payloads":[{"text":"OK"}]}\n');
-      }
-      return loggedSuccess;
-    })
-    .mockResolvedValueOnce(success);
+  runCommand.mockImplementationOnce(async () => {
+    if (current) {
+      appendFileSync(logPath, '{"payloads":[{"text":"OK"}]}\n');
+    }
+    return loggedSuccess;
+  });
   const result = run();
   if (current) {
     await expect(result).resolves.toBe(loggedSuccess);
   } else {
     await expect(result).rejects.toThrow("Agent output did not contain the expected OK marker.");
   }
-  expect(command.run).toHaveBeenCalledTimes(1);
+  expect(runCommand).toHaveBeenCalledTimes(1);
 });
 
 it.each([
@@ -111,7 +108,7 @@ it.each([
   "HTTP 503: upstream connect error",
 ])("preserves the first failure without another command: %s", async (message) => {
   const error = new Error(message);
-  command.run.mockRejectedValueOnce(error).mockResolvedValueOnce(success);
+  runCommand.mockRejectedValueOnce(error);
   await expect(run()).rejects.toBe(error);
-  expect(command.run).toHaveBeenCalledTimes(1);
+  expect(runCommand).toHaveBeenCalledTimes(1);
 });

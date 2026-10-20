@@ -53,8 +53,7 @@ function response(
       }
       return options.code ?? 1;
     } finally {
-      streams.stdout.destroy();
-      streams.stderr.destroy();
+      Object.values(streams).forEach((stream) => stream.destroy());
     }
   });
 }
@@ -81,9 +80,9 @@ function fileRecord(path: string) {
   return `f11\nD0x${stat.dev.toString(16)}\ni${stat.ino}\n`;
 }
 
-it.each([0, 1].flatMap((code) => ["own", "extra", "foreign"].map((user) => ({ code, user }))))(
-  "exempts only its own exact lock without disclosing paths (exit $code, $user)",
-  async ({ code, user }) => {
+it.each([0, 1].flatMap((code) => ["own", "extra", "foreign"].map((user) => [code, user] as const)))(
+  "exempts only its own exact lock without disclosing paths (%i, %s)",
+  async (code, user) => {
     const extra = user === "extra";
     const pid = process.pid + Number(user === "foreign");
     response({ stdout: `p${pid}\n${fileRecord(lock)}${extra ? fileRecord(stage) : ""}`, code });
@@ -109,13 +108,22 @@ it.each([
   { reason: "invalid pid", stdout: "p9007199254740999\nf3\nD0x1\ni2\n", code: 0 },
   { reason: "orphan pid", stdout: "p123\np124\nf3\nD0x1\ni2\n", code: 0 },
   { reason: "nul output", stdout: "p123\0f3\0D0x1\0i2\0\n", code: 0 },
+  {
+    reason: "missing executable",
+    error: Object.assign(new Error("missing lsof"), { code: "ENOENT" }),
+  },
+  { reason: "timeout", error: new Error("managed command timed out") },
 ])("refuses $reason", async (options) => {
   response(options);
-  await expect(verify()).resolves.toMatchObject({ ok: false });
+  await expect(verify()).resolves.toEqual(
+    "error" in options
+      ? { ok: false, reason: "lsof could not verify the absence of staging users." }
+      : expect.objectContaining({ ok: false }),
+  );
 });
 
 it.each(["stdout", "stderr"] as const)(
-  "bounds %s while retaining unjoined cleanup evidence",
+  "bounds %s and preserves unjoined cleanup",
   async (stream) => {
     response({
       [stream]: Buffer.alloc(stream === "stdout" ? 1024 * 1024 + 1 : 64 * 1024 + 1, 120),
@@ -129,20 +137,6 @@ it.each(["stdout", "stderr"] as const)(
     expect(command.mock.calls[0]![0].signal.aborted).toBe(true);
   },
 );
-
-it.each([
-  {
-    reason: "missing executable",
-    error: Object.assign(new Error("missing lsof"), { code: "ENOENT" }),
-  },
-  { reason: "timeout", error: new Error("managed command timed out") },
-])("refuses $reason instead of inferring no users", async ({ error }) => {
-  response({ error });
-  await expect(verify()).resolves.toEqual({
-    ok: false,
-    reason: "lsof could not verify the absence of staging users.",
-  });
-});
 
 it("refuses an already aborted request without spawning a scan", async () => {
   await expect(verify([stage], undefined, AbortSignal.abort())).resolves.toMatchObject({

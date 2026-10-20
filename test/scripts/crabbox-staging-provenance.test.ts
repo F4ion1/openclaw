@@ -51,34 +51,31 @@ vi.mock("node:child_process", async (importOriginal) => ({
 const bootId = "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff";
 const hostId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const machineId = "abcdef0123456789abcdef0123456789";
-const provenance = () => import("../../scripts/crabbox-staging-provenance.mts");
 const hostFile = "/etc/machine-id";
 const bootFile = "/proc/sys/kernel/random/boot_id";
 
-function platform(name: string) {
+function provenance(name: string) {
   vi.stubGlobal(
     "process",
     new Proxy(process, {
       get: (target, key) => (key === "platform" ? name : Reflect.get(target, key)),
     }),
   );
+  return import("../../scripts/crabbox-staging-provenance.mts");
 }
 
 beforeEach(() => {
   vi.resetModules();
-  native.input.clear();
   native.handles.clear();
-  for (const [key, value] of Object.entries({
-    [hostFile]: machineId + "\n",
-    [bootFile]: bootId + "\n",
-    "/proc/stat": "cpu 1 2 3 4\nbtime 1700000000\nprocesses 123\n",
-    namespace: "pid:[4026531836]",
-    hardware: `"IOPlatformUUID" = "${hostId.toUpperCase()}"`,
-    "kern.bootsessionuuid": bootId.toUpperCase() + "\n",
-    "kern.boottime": "{ sec = 1700000000, usec = 123456 } Tue Nov 14 22:13:20 2023",
-  })) {
-    native.input.set(key, value);
-  }
+  native.input = new Map([
+    [hostFile, machineId + "\n"],
+    [bootFile, bootId + "\n"],
+    ["/proc/stat", "cpu 1 2 3 4\nbtime 1700000000\nprocesses 123\n"],
+    ["namespace", "pid:[4026531836]"],
+    ["hardware", `"IOPlatformUUID" = "${hostId.toUpperCase()}"`],
+    ["kern.bootsessionuuid", bootId.toUpperCase() + "\n"],
+    ["kern.boottime", "{ sec = 1700000000, usec = 123456 } Tue Nov 14 22:13:20 2023"],
+  ]);
 });
 afterEach(() => {
   expect(native.handles.size).toBe(0);
@@ -94,8 +91,7 @@ it.each([
     "74017c22ccf4955a2014f6dbbad1d16092cbbc83f0111748a25653c7a0d50568",
   ],
 ])("caches immutable %s provenance with its legacy digest", async (os, host, namespace, digest) => {
-  platform(os);
-  const { currentProcessProvenance, processDomain } = await provenance();
+  const { currentProcessProvenance, processDomain } = await provenance(os);
   const observed = currentProcessProvenance()!;
   const expected = { platform: os, hostId: host, bootId, pidNamespace: namespace };
   expect(observed).toEqual(expected);
@@ -118,9 +114,8 @@ it.each([
   ["linux", "namespace", "pid:[unknown]"],
   ["win32", "unsupported", undefined],
 ] as const)("fails closed for %s %s provenance (%s)", async (os, key, value) => {
-  platform(os);
   native.input.set(key, value);
-  const { currentProcessProvenance, processDomain } = await provenance();
+  const { currentProcessProvenance, processDomain } = await provenance(os);
   expect(currentProcessProvenance()).toBeUndefined();
   expect(processDomain()).toBeUndefined();
 });
@@ -135,11 +130,9 @@ it.each([
   ["linux", "btime -1\n", undefined],
   ["linux", "btime 1700000000\n" + " ".repeat(1024 * 1024), undefined],
 ] as const)("parses %s boot time (%s)", async (os, output, time) => {
-  platform(os);
   if (output !== undefined) {
-    native.input.set("kern.boottime", output);
-    native.input.set("/proc/stat", output);
+    native.input.set(os === "darwin" ? "kern.boottime" : "/proc/stat", output);
   }
-  const { currentBootTimeNs } = await provenance();
+  const { currentBootTimeNs } = await provenance(os);
   expect(currentBootTimeNs()).toBe(time);
 });
