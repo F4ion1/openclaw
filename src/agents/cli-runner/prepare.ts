@@ -971,19 +971,18 @@ async function prepareCliRunContextWithinReadFence(
       }
     };
     const mcpClientGrantCapture =
-      mcpClientGrant && mcpLoopbackRuntime
+      mcpClient && mcpLoopbackRuntime
         ? (() => {
-            let activeToken = mcpClientGrant.token;
+            const { grant } = mcpClient;
+            let activeToken = grant.token;
             let activeCapture: ReturnType<typeof activateMcpLoopbackClientGrantCapture> = false;
             return {
-              transportToken: mcpClientGrant.token,
+              transportToken: grant.token,
               adoptProcessToken: (processToken: string) => {
-                if (activeToken === processToken) {
-                  return;
-                }
                 if (
+                  activeToken !== processToken &&
                   !transferMcpLoopbackClientGrant({
-                    sourceToken: mcpClientGrant.token,
+                    sourceToken: grant.token,
                     targetToken: processToken,
                     runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
                   })
@@ -993,6 +992,7 @@ async function prepareCliRunContextWithinReadFence(
                   );
                 }
                 activeToken = processToken;
+                mcpClient.retainForProcess();
               },
               revokeProcessToken: () => {
                 revokeMcpLoopbackClientGrant(activeToken);

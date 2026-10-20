@@ -2,6 +2,15 @@
 
 Keep existing insertion anchors when extending these patches: pnpm 12 can apply a zero-context, zero-length insertion one line early. After regeneration and installation, verify installed files against the patch's target blob hashes before testing.
 
+`@modelcontextprotocol/client@2.3.1` dispatches progress before a following result retires its request callback. Without this backport, a single stdio read containing progress and result frames loses the progress event. Both ESM and CommonJS runtime chunks are patched; notification schema validation and error reporting remain intact. Remove the patch, registration, and exact-version guard when an upstream release delivers batched progress before its response. This is separate from the server notification-parameter fix below.
+
+The client patch SHA-256 is `0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d`.
+
+| Target | Patched SHA-256 |
+| --- | --- |
+| `dist/src-WCy6ifGf.mjs` | `43522e69fd1abd1c572fdd0138e1512db22cf8c7ce8912d453c04a0d890d70b2` |
+| `dist/src-DpAS0jfg.cjs` | `6dcba70c88cac677b4ba7dcb572630018602b850e02cb72f3da59c3178d1af1c` |
+
 `@modelcontextprotocol/server@2.3.1` temporarily preserves forwarded notification params through its subscription bus and supports explicit modern protocol binding through `Server.connect` and `McpServer.connect`. The router retains custom metadata and extension params, replaces the downstream subscription ID, and uses the event URI for both resource filtering and delivery. Both ESM and CommonJS runtime chunks and declarations are patched. Upstream tracking: [issue #3055](https://github.com/modelcontextprotocol/typescript-sdk/issues/3055). Remove this patch and its exact-version guard entry when an upstream release preserves these fields and admits a classified modern request through the public low-level transport.
 
 The patch SHA-256 is `a75fe671e9738ef5a54a49bd5a447a5df59164937e2eb1e1a1171ad02aa85014`. Installed target files were verified byte for byte against the pnpm edit directory.

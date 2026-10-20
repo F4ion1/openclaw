@@ -11,14 +11,18 @@ type CliMcpClientGrantParams = Omit<
 
 /**
  * Mint the run-bound loopback grant for one admitted CLI turn, carrying that turn's
- * host memory audience. The returned cleanup revokes the grant and releases the
- * audience's session leases together; it runs once, at run end or failed preparation.
+ * host memory audience. Turn cleanup always releases the audience's session leases.
+ * A registered live process owns its bearer until removal; otherwise cleanup revokes it.
  */
 export async function mintCliMcpClientGrant(
   run: Parameters<typeof resolveCliMcpMemoryAudience>[0],
   agentId: string,
   params: CliMcpClientGrantParams,
-): Promise<{ grant: ReturnType<typeof mintMcpLoopbackClientGrant>; cleanup: () => Promise<void> }> {
+): Promise<{
+  grant: ReturnType<typeof mintMcpLoopbackClientGrant>;
+  retainForProcess: () => void;
+  cleanup: () => Promise<void>;
+}> {
   const { memoryAudience, release } = await resolveCliMcpMemoryAudience(run, {
     agentId,
     sessionKey: params.context.sessionKey,
@@ -33,15 +37,21 @@ export async function mintCliMcpClientGrant(
     release();
     throw error;
   }
-  let revoked = false;
+  let processOwned = false;
+  let cleanedUp = false;
   return {
     grant,
+    retainForProcess: () => {
+      processOwned = true;
+    },
     cleanup: async () => {
-      if (revoked) {
+      if (cleanedUp) {
         return;
       }
-      revoked = true;
-      revokeMcpLoopbackClientGrant(grant.token);
+      cleanedUp = true;
+      if (!processOwned) {
+        revokeMcpLoopbackClientGrant(grant.token);
+      }
       release();
     },
   };

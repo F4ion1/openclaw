@@ -212,6 +212,7 @@ overrides:
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
 patchedDependencies:
+  '@modelcontextprotocol/client@2.3.1': 0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d
   '@modelcontextprotocol/server@2.3.1': a75fe671e9738ef5a54a49bd5a447a5df59164937e2eb1e1a1171ad02aa85014
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
@@ -262,7 +263,7 @@ importers:
         version: 1.2.0-beta.15
       '@modelcontextprotocol/client':
         specifier: 2.3.1
-        version: 2.3.1
+        version: 2.3.1(patch_hash=0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d)
       '@modelcontextprotocol/core':
         specifier: 2.3.1
         version: 2.3.1
@@ -834,7 +835,7 @@ importers:
     dependencies:
       '@modelcontextprotocol/client':
         specifier: 2.3.1
-        version: 2.3.1
+        version: 2.3.1(patch_hash=0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d)
       chrome-devtools-mcp:
         specifier: 1.10.1
         version: 1.10.1(patch_hash=d31d6e7e187ea9fd4dad87ed3ad08073c77ffcfddd52bc4761b39a2dfce0ac1e)
@@ -2109,7 +2110,7 @@ importers:
         version: 1.45.0(vitest@5.0.3)
       '@modelcontextprotocol/client':
         specifier: 2.3.1
-        version: 2.3.1
+        version: 2.3.1(patch_hash=0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d)
       '@openclaw/crabline':
         specifier: 0.1.29
         version: 0.1.29
@@ -3036,13 +3037,13 @@ importers:
         version: 1.2.5
       '@modelcontextprotocol/client':
         specifier: 2.3.1
-        version: 2.3.1
+        version: 2.3.1(patch_hash=0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d)
       '@modelcontextprotocol/core':
         specifier: 2.3.1
         version: 2.3.1
       '@modelcontextprotocol/ext-apps':
         specifier: 2.0.3
-        version: 2.0.3(@modelcontextprotocol/client@2.3.1)(@modelcontextprotocol/core@2.3.1)(@modelcontextprotocol/server@2.3.1(patch_hash=a75fe671e9738ef5a54a49bd5a447a5df59164937e2eb1e1a1171ad02aa85014))(zod@4.6.6)
+        version: 2.0.3(@modelcontextprotocol/client@2.3.1(patch_hash=0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d))(@modelcontextprotocol/core@2.3.1)(@modelcontextprotocol/server@2.3.1(patch_hash=a75fe671e9738ef5a54a49bd5a447a5df59164937e2eb1e1a1171ad02aa85014))(zod@4.6.6)
       '@noble/ed25519':
         specifier: 3.2.0
         version: 3.2.0
@@ -13200,7 +13201,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@modelcontextprotocol/client@2.3.1':
+  '@modelcontextprotocol/client@2.3.1(patch_hash=0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d)':
     dependencies:
       '@modelcontextprotocol/core': 2.3.1
       cross-spawn: 7.0.6
@@ -13214,9 +13215,9 @@ snapshots:
     dependencies:
       zod: 4.6.6
 
-  '@modelcontextprotocol/ext-apps@2.0.3(@modelcontextprotocol/client@2.3.1)(@modelcontextprotocol/core@2.3.1)(@modelcontextprotocol/server@2.3.1(patch_hash=a75fe671e9738ef5a54a49bd5a447a5df59164937e2eb1e1a1171ad02aa85014))(zod@4.6.6)':
+  '@modelcontextprotocol/ext-apps@2.0.3(@modelcontextprotocol/client@2.3.1(patch_hash=0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d))(@modelcontextprotocol/core@2.3.1)(@modelcontextprotocol/server@2.3.1(patch_hash=a75fe671e9738ef5a54a49bd5a447a5df59164937e2eb1e1a1171ad02aa85014))(zod@4.6.6)':
     dependencies:
-      '@modelcontextprotocol/client': 2.3.1
+      '@modelcontextprotocol/client': 2.3.1(patch_hash=0321f176f24b22ad00c0cbb5090cf94bd65edeb1547f65a3b540e2915677861d)
       '@modelcontextprotocol/core': 2.3.1
       '@standard-schema/spec': 1.1.0
       zod: 4.6.6

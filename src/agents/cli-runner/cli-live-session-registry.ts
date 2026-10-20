@@ -410,6 +410,8 @@ export function createCliLiveSessionCapability(params: {
             }
           : {}),
       };
+      // The first turn transfers bearer lifetime before its normal cleanup runs.
+      grant?.adoptProcessToken(grant.transportToken);
       liveSessions.set(ownerKey, record);
       retainCleanup(params.context, record);
       cliBackendLog.info(

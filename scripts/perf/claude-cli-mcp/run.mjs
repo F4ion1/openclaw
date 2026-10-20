@@ -104,48 +104,54 @@ export async function inspectBuild(root) {
     );
   }
   const require = createRequire(path.join(root, "package.json"));
-  const packageRoot = path.dirname(path.dirname(require.resolve("@modelcontextprotocol/server")));
-  const pkg = await read(path.join(packageRoot, "package.json"));
-  const names = [];
-  async function visit(directory) {
-    for (const entry of await fs.readdir(path.join(packageRoot, directory), {
-      withFileTypes: true,
-    })) {
-      const file = `${directory}/${entry.name}`;
-      if (entry.isDirectory()) {
-        await visit(file);
-      } else {
-        assert(entry.isFile(), `SDK distribution contains a non-regular entry: ${file}`);
-        names.push(file);
+  async function inspectSdkPackage(name, expected) {
+    const packageRoot = path.dirname(path.dirname(require.resolve(name)));
+    const pkg = await read(path.join(packageRoot, "package.json"));
+    const names = [];
+    async function visit(directory) {
+      for (const entry of await fs.readdir(path.join(packageRoot, directory), {
+        withFileTypes: true,
+      })) {
+        const file = `${directory}/${entry.name}`;
+        if (entry.isDirectory()) {
+          await visit(file);
+        } else {
+          assert(entry.isFile(), `SDK distribution contains a non-regular entry: ${file}`);
+          names.push(file);
+        }
       }
     }
-  }
-  await visit("dist");
-  const files = names.toSorted(comparePaths).map((file) => ({
-    file,
-    sha256: sha256(readFileSync(path.join(packageRoot, file))),
-  }));
-  const sdk = { name: pkg.name, version: pkg.version, files };
-  if (snapshot?.sdk) {
-    assert.equal(sdk.name, snapshot.sdk.name);
-    assert.equal(sdk.version, snapshot.sdk.version);
-    const hashes = new Map(files.map((file) => [file.file, file.sha256]));
-    for (const expected of snapshot.sdk.files) {
-      assert.equal(
-        hashes.get(expected.file),
-        expected.sha256,
-        `installed SDK differs from qualified build: ${expected.file}`,
-      );
+    await visit("dist");
+    const files = names.toSorted(comparePaths).map((file) => ({
+      file,
+      sha256: sha256(readFileSync(path.join(packageRoot, file))),
+    }));
+    if (expected) {
+      assert.equal(pkg.name, expected.name);
+      assert.equal(pkg.version, expected.version);
+      const hashes = new Map(files.map((file) => [file.file, file.sha256]));
+      for (const target of expected.files) {
+        assert.equal(
+          hashes.get(target.file),
+          target.sha256,
+          `installed SDK differs from qualified build: ${name}/${target.file}`,
+        );
+      }
+      if (expected.patchSha256) {
+        const patchSha256 = sha256(
+          await fs.readFile(
+            path.join(root, "patches", `${name.replace("/", "__")}@${pkg.version}.patch`),
+          ),
+        );
+        assert.equal(patchSha256, expected.patchSha256, "SDK patch differs from qualified build");
+      }
     }
-    if (snapshot.sdk.patchSha256) {
-      const patchSha256 = sha256(
-        await fs.readFile(
-          path.join(root, "patches", `@modelcontextprotocol__server@${pkg.version}.patch`),
-        ),
-      );
-      assert.equal(patchSha256, snapshot.sdk.patchSha256, "SDK patch differs from qualified build");
-    }
+    return { name: pkg.name, version: pkg.version, files };
   }
+  const sdk = {
+    ...(await inspectSdkPackage("@modelcontextprotocol/server", snapshot?.sdk)),
+    client: await inspectSdkPackage("@modelcontextprotocol/client", snapshot?.sdk?.client),
+  };
   let sourceIdentity;
   if (snapshot?.sourceCapsule) {
     assert(snapshot.sdk, "Source capsule snapshot must identify its SDK");

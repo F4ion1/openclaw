@@ -1,0 +1,40 @@
+diff --git a/dist/src-DpAS0jfg.cjs b/dist/src-DpAS0jfg.cjs
+index e2ffe6482e0d8eed88082215547ccde7b5ef2d37..25a2085175c43152de39b8ec92e9d5937211834e 100644
+--- a/dist/src-DpAS0jfg.cjs
++++ b/dist/src-DpAS0jfg.cjs
+@@ -5901,6 +5901,15 @@ var Protocol = class {
+ 		const handler = this._notificationHandlers.get(notification.method);
+ 		const fallback = this.fallbackNotificationHandler;
+ 		if (handler === void 0 && fallback === void 0) return;
++		// Progress must be dispatched before a following result removes its request handler.
++		if (notification.method === "notifications/progress") {
++			try {
++				Promise.resolve(handler === void 0 ? fallback(notification) : handler(notification, codec)).catch((error) => this._onerror(/* @__PURE__ */ new Error(`Uncaught error in notification handler: ${error}`)));
++			} catch (error) {
++				this._onerror(/* @__PURE__ */ new Error(`Uncaught error in notification handler: ${error}`));
++			}
++			return;
++		}
+ 		Promise.resolve().then(() => handler === void 0 ? fallback(notification) : handler(notification, codec)).catch((error) => this._onerror(/* @__PURE__ */ new Error(`Uncaught error in notification handler: ${error}`)));
+ 	}
+ 	_onrequest(rawRequest, extra) {
+diff --git a/dist/src-WCy6ifGf.mjs b/dist/src-WCy6ifGf.mjs
+index 7a40fb418c402ffc6cac3e71192313a79c63be27..4b11ece3bba0abcb9a2e8f66f9ce80bdd656fdb2 100644
+--- a/dist/src-WCy6ifGf.mjs
++++ b/dist/src-WCy6ifGf.mjs
+@@ -5900,6 +5900,15 @@ var Protocol = class {
+ 		const handler = this._notificationHandlers.get(notification.method);
+ 		const fallback = this.fallbackNotificationHandler;
+ 		if (handler === void 0 && fallback === void 0) return;
++		// Progress must be dispatched before a following result removes its request handler.
++		if (notification.method === "notifications/progress") {
++			try {
++				Promise.resolve(handler === void 0 ? fallback(notification) : handler(notification, codec)).catch((error) => this._onerror(/* @__PURE__ */ new Error(`Uncaught error in notification handler: ${error}`)));
++			} catch (error) {
++				this._onerror(/* @__PURE__ */ new Error(`Uncaught error in notification handler: ${error}`));
++			}
++			return;
++		}
+ 		Promise.resolve().then(() => handler === void 0 ? fallback(notification) : handler(notification, codec)).catch((error) => this._onerror(/* @__PURE__ */ new Error(`Uncaught error in notification handler: ${error}`)));
+ 	}
+ 	_onrequest(rawRequest, extra) {

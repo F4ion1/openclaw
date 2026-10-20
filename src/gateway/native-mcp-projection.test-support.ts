@@ -107,9 +107,14 @@ export async function writeProjectionFixture(
       .replace('params.name === "url"', 'params.arguments?.operation === "url"')
       .replace('params.name === "completeUrl"', 'params.arguments?.operation === "completeUrl"')
       .replace('params.name === "elicitCustom"', 'params.arguments?.operation === "elicitCustom"')
+      .replace("let value;", "let value; let finalProgress;")
       .replace(
         'record("finished " + releaseToken);',
-        'record("finished " + releaseToken); send({ method: "notifications/progress", params: { progressToken: params._meta.progressToken, progress: 2, total: 2, message: "finished" } });',
+        'record("finished " + releaseToken); finalProgress = { jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: params._meta.progressToken, progress: 2, total: 2, message: "finished" } };',
+      )
+      .replace(
+        "send({ id: message.id, result: value });",
+        'if (finalProgress) process.stdout.write(JSON.stringify(finalProgress) + "\\n" + JSON.stringify({ jsonrpc: "2.0", id: message.id, result: value }) + "\\n"); else send({ id: message.id, result: value });',
       )
       .replace(
         'text: "Catalog request" } }], maxTokens: 1',

@@ -1,7 +1,17 @@
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  bindMcpLoopbackClientGrantAdmission,
+  mintMcpLoopbackClientGrant,
+  registerMcpLoopbackClientGrantRevocationListener,
+  resolveMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrant,
+} from "../../gateway/mcp-grant-store.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
-import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendLiveSessionHandle,
+  CliBackendPlugin,
+} from "../../plugins/cli-backend.types.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -13,6 +23,7 @@ import {
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import { createCliLiveSessionCapability } from "./cli-live-session-registry.js";
 import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -23,6 +34,11 @@ const nodeConfig = (): OpenClawConfig => ({ tools: { exec: { host: "node" } } })
 const runtimeOwnerToken = "loopback-owner-token";
 const token = "loopback-token";
 const processToken = "stable-loopback-token";
+const realGrantOperations = {
+  mintMcpLoopbackClientGrant,
+  bindMcpLoopbackClientGrantAdmission,
+  revokeMcpLoopbackClientGrant,
+};
 const loopbackRuntime = () => ({
   port: 31783,
   ownerToken: runtimeOwnerToken,
@@ -194,8 +210,7 @@ export function registerCliMcpPreparationTests({
     expect(systemPrompt).toContain("`send`: `target` + `message`; target required this turn");
     expect(systemPrompt).not.toContain("current source is default target");
     await preparedBackend.cleanup?.();
-    expect(revoke).toHaveBeenCalledTimes(2);
-    expect(revoke).toHaveBeenLastCalledWith(token);
+    expect(revoke).toHaveBeenCalledExactlyOnceWith(processToken);
   });
 
   it.each<[name: string, managed: boolean, overrides?: McpRunOverrides]>([
@@ -281,6 +296,70 @@ export function registerCliMcpPreparationTests({
     expect(revoke).toHaveBeenCalledWith(token);
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it.each([true, false])(
+    "keeps the bearer only when live-process registration succeeds: %s",
+    async (registered) => {
+      const release = vi.fn();
+      mockCliMcpPreparation({
+        ...realGrantOperations,
+        resolveCliMcpMemoryAudience: async () => ({ release }),
+      });
+      const context = await getFixture().prepare({ config: createConfig() });
+      const capture = context.preparedBackend.mcpClientGrantCapture!;
+      const captureKey = "live-process-capture";
+      const authority = { token: capture.transportToken, runtimeOwnerToken, captureKey };
+      const removed: string[] = [];
+      const stop = registerMcpLoopbackClientGrantRevocationListener((event) => {
+        if (event.kind === "removed") {
+          removed.push(event.token);
+        }
+      });
+      const capability = createCliLiveSessionCapability({
+        context,
+        argv: ["test-cli"],
+        env: context.preparedBackend.env ?? {},
+        captureKey,
+        beginCapture: (key) => capture.activate(key!, () => {}),
+        abortSignal: new AbortController().signal,
+      });
+      const handle: CliBackendLiveSessionHandle = {
+        generation: "live-process-generation",
+        fingerprint: registered ? capability.fingerprint : "wrong-fingerprint",
+        isIdle: () => true,
+        close: () => capability.remove(handle),
+        waitForExit: async () => {},
+      };
+      try {
+        if (registered) {
+          capability.register(handle);
+          capability.activate(handle);
+          expect(resolveMcpLoopbackClientGrant(authority)?.isCurrent()).toBe(true);
+          capture.deactivate(captureKey);
+        } else {
+          expect(() => capability.register(handle)).toThrow("admitted owner");
+        }
+
+        await context.preparedBackend.cleanup?.();
+        await context.preparedBackend.cleanup?.();
+        expect(release).toHaveBeenCalledOnce();
+        expect(resolveMcpLoopbackClientGrant(authority)).toBeUndefined();
+        if (registered) {
+          expect(removed).not.toContain(capture.transportToken);
+          capability.activate(handle);
+          expect(resolveMcpLoopbackClientGrant(authority)?.isCurrent()).toBe(true);
+          capability.remove(handle);
+          expect(resolveMcpLoopbackClientGrant(authority)).toBeUndefined();
+        }
+        expect(removed.filter((value) => value === capture.transportToken)).toHaveLength(1);
+      } finally {
+        capability.remove(handle);
+        realGrantOperations.revokeMcpLoopbackClientGrant(capture.transportToken);
+        await context.preparedBackend.cleanup?.();
+        stop();
+      }
+    },
+  );
 
   it("binds one live prepared admission to tool projection and the CLI MCP grant", async () => {
     const bindAdmission = vi.fn(() => true);
