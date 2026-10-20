@@ -94,6 +94,36 @@ describe("release:prepush", () => {
     expect(pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });
 
+  it("validates and pushes an orchestrator-supplied exact cut to its canonical branch", async () => {
+    const pushValidatedHead = vi.fn();
+    const currentBranch = vi.fn();
+    const resolveCommit = vi.fn((ref) => (ref === "origin/main" ? BASE_SHA : HEAD_SHA));
+    const status = await runReleasePrepush(
+      {
+        base: "origin/main",
+        branch: "release/2026.10.6",
+        dryRun: false,
+        head: HEAD_SHA,
+        push: true,
+      },
+      {
+        assertCleanWorktree: vi.fn(),
+        assertAuditBounds: vi.fn(),
+        createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
+        currentBranch,
+        pushValidatedHead,
+        refreshMain: vi.fn(),
+        removeValidationCheckout: vi.fn(),
+        resolveCommit,
+        runCommand: vi.fn().mockResolvedValue(0),
+      },
+    );
+    expect(status).toBe(0);
+    expect(resolveCommit).toHaveBeenCalledWith(HEAD_SHA);
+    expect(currentBranch).not.toHaveBeenCalled();
+    expect(pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
+  });
+
   it("refuses a custom comparison base for a release push", async () => {
     const refreshMain = vi.fn();
     await expect(

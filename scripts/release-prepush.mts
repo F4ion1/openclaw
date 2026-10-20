@@ -61,6 +61,10 @@ export function assertAuditBounds(baseSha: string, headSha: string): void {
 
 export function currentBranch(): string {
   const branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  return canonicalReleaseBranch(branch);
+}
+
+export function canonicalReleaseBranch(branch: string): string {
   if (!/^release\/\d{4}\.\d{1,2}\.\d+$/u.test(branch)) {
     throw new Error("release:push requires a canonical release/YYYY.M.PATCH branch");
   }
@@ -166,11 +170,19 @@ const defaultDependencies: ReleasePrepushDependencies = {
 };
 
 export async function runReleasePrepush(
-  options: { base: string; dryRun: boolean; push: boolean },
+  options: { base: string; branch?: string; dryRun: boolean; head?: string; push: boolean },
   dependencies: ReleasePrepushDependencies = defaultDependencies,
 ): Promise<number> {
   dependencies.assertCleanWorktree();
-  const branch = options.push ? dependencies.currentBranch() : undefined;
+  if (!options.push && (options.branch !== undefined || options.head !== undefined)) {
+    throw new Error("release:prepush --branch and --head require --push");
+  }
+  const branch = options.push
+    ? options.branch === undefined
+      ? dependencies.currentBranch()
+      : canonicalReleaseBranch(options.branch)
+    : undefined;
+  const headRef = options.head ?? "HEAD";
   if (options.push) {
     if (options.base !== "origin/main") {
       throw new Error("release:push requires the authoritative origin/main comparison base");
@@ -178,7 +190,7 @@ export async function runReleasePrepush(
     dependencies.refreshMain();
   }
   const baseSha = dependencies.resolveCommit(options.base);
-  const headSha = dependencies.resolveCommit("HEAD");
+  const headSha = dependencies.resolveCommit(headRef);
   dependencies.assertAuditBounds(baseSha, headSha);
 
   if (options.dryRun) {
@@ -202,12 +214,12 @@ export async function runReleasePrepush(
   }
 
   dependencies.assertCleanWorktree();
-  if (dependencies.resolveCommit("HEAD") !== headSha) {
+  if (dependencies.resolveCommit(headRef) !== headSha) {
     throw new Error(
-      "HEAD changed while release:prepush was running; rerun against the new exact SHA",
+      `${headRef} changed while release:prepush was running; rerun against the new exact SHA`,
     );
   }
-  if (branch && dependencies.currentBranch() !== branch) {
+  if (branch && options.branch === undefined && dependencies.currentBranch() !== branch) {
     throw new Error("release branch changed while release:prepush was running");
   }
   console.error(`\n[release:prepush] passed for ${headSha}`);
@@ -222,9 +234,18 @@ function parseArgs(argv: string[]) {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
   return parseFlagArgs(
     normalizedArgv,
-    { base: "origin/main", dryRun: false, help: false, push: false },
+    {
+      base: "origin/main",
+      branch: undefined,
+      dryRun: false,
+      head: undefined,
+      help: false,
+      push: false,
+    },
     [
       stringFlag("--base", "base", { rejectShortOptions: true }),
+      stringFlag("--branch", "branch", { rejectShortOptions: true }),
+      stringFlag("--head", "head", { rejectShortOptions: true }),
       booleanFlag("--dry-run", "dryRun", true, { repeatable: true }),
       booleanFlag("--push", "push", true, { repeatable: true }),
       booleanFlag("--help", "help", true, { repeatable: true }),
@@ -242,7 +263,7 @@ function parseArgs(argv: string[]) {
 function usage(): string {
   return [
     "Usage: pnpm release:prepush -- [--base <ref>] [--dry-run]",
-    "       pnpm release:push",
+    "       pnpm release:push [-- --head <sha> --branch <release/YYYY.M.PATCH>]",
     "",
     "Runs exact-HEAD changed static/type gates, production dead-code analysis, and changed tests.",
     "The default comparison base is origin/main.",
@@ -259,7 +280,9 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     process.exitCode = await runReleasePrepush({
       base: args.base,
+      branch: args.branch,
       dryRun: args.dryRun,
+      head: args.head,
       push: args.push,
     });
   } catch (error) {
