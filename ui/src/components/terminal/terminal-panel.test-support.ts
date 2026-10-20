@@ -10,7 +10,10 @@ const viewportFactories = new WeakMap<HTMLElement, CreateGhosttyTerminalMock>();
 
 // mock-isolation: Panel lifecycle tests replace WASM emulation at its module boundary.
 vi.mock("./terminal-runtime.ts", () => ({
-  async createIsolatedGhosttyTerminal(options: CreateGhosttyTerminalOptions) {
+  async createIsolatedGhosttyTerminal(
+    options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
+  ) {
     for (
       let container = options.parent.parentElement;
       container;
@@ -18,7 +21,7 @@ vi.mock("./terminal-runtime.ts", () => ({
     ) {
       const factory = viewportFactories.get(container) ?? factories.get(container.localName);
       if (factory) {
-        return factory(options);
+        return factory(options, shouldFocusOnOpen);
       }
     }
     throw new Error("Terminal fixture has not been registered");
@@ -54,7 +57,10 @@ export type CreateOptions = {
 };
 
 export type CreateGhosttyTerminalMock = Mock<
-  (options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>
+  (
+    options: CreateOptions,
+    shouldFocusOnOpen?: () => boolean,
+  ) => Promise<ReturnType<typeof createTerminalController>>
 >;
 
 export function terminalOpenResult(sessionId: string) {
