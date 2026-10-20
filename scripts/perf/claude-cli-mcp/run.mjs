@@ -8,7 +8,9 @@ import http from "node:http";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { readPhaseTimings } from "./timing.mjs";
 
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const json = (value) => JSON.stringify(value, null, 2) + "\n";
@@ -292,6 +294,11 @@ export async function run({ root, directory, role, signal }) {
   let beforeStop;
   let remaining;
   let rescuedRemaining;
+  let invocationAt;
+  let nativeSessionId;
+  let nativeProcessIdentity;
+  let fixtureProcessIdentities;
+  let phaseTimings;
   function launch(args, name) {
     signal?.throwIfAborted();
     const child = spawn(
@@ -536,6 +543,8 @@ export async function run({ root, directory, role, signal }) {
   });
   try {
     signal?.throwIfAborted();
+    const require = createRequire(path.join(root, "package.json"));
+    const { readProcessIdentity } = await import(require.resolve("@openclaw/proc-safe/identity"));
     provider.listen(0, "127.0.0.1");
     await once(provider, "listening", { signal });
     const providerBase = `http://127.0.0.1:${provider.address().port}`;
@@ -649,8 +658,22 @@ export async function run({ root, directory, role, signal }) {
       "Gateway readiness",
       { signal },
     );
+    const loadWaitStartedAt = Date.now();
+    for (;;) {
+      signal?.throwIfAborted();
+      const loadAverage = os.loadavg();
+      record("load-gate", { loadAverage, waitedMs: Date.now() - loadWaitStartedAt });
+      if (loadAverage[0] < 30) {
+        break;
+      }
+      assert(
+        Date.now() - loadWaitStartedAt < 3_600_000,
+        "Host load did not fall below 30 in one hour",
+      );
+      await delay(60_000, undefined, { signal });
+    }
     record("host-load", { platform: process.platform, loadAverage: os.loadavg() });
-    const invocationAt = Date.now();
+    invocationAt = Date.now();
     agent = launch(
       [
         "agent",
@@ -681,6 +704,18 @@ export async function run({ root, directory, role, signal }) {
     await write(path.join(directory, "active-census.json"), snapshot);
     const nativeRows = await nativeSessionRows(snapshot);
     assert.equal(nativeRows.length, 1, "exactly one session-bearing native Claude process");
+    nativeProcessIdentity = readProcessIdentity(nativeRows[0].pid);
+    assert(
+      nativeProcessIdentity && !nativeProcessIdentity.exited,
+      "Native Claude identity is live",
+    );
+    assert.equal(nativeProcessIdentity.pid, nativeRows[0].pid);
+    assert.equal(nativeProcessIdentity.parentPid, nativeRows[0].parentPid);
+    assert(nativeProcessIdentity.startTimeMicros / 1_000 >= invocationAt);
+    assert(nativeProcessIdentity.startTimeMicros / 1_000 <= catalogReceipt.at);
+    nativeSessionId = /(?:^| )--session-id ([^ ]+)(?: |$)/.exec(nativeRows[0].command)?.[1];
+    assert(nativeSessionId, "Fresh native Claude session ID is recorded");
+    record("native-process-identity", nativeProcessIdentity);
     if (role === "candidate") {
       const config = await read(nativeRows[0].configPath);
       const ordinaryUrl = new URL(config.mcpServers.openclaw.url);
@@ -731,6 +766,13 @@ export async function run({ root, directory, role, signal }) {
       ...new Set(wire.filter((event) => event.kind === "start").map((event) => event.pid)),
     ];
     const fixtureRows = snapshot.filter((row) => fixturePids.includes(row.pid));
+    fixtureProcessIdentities = fixtureRows.map((row) => {
+      const identity = readProcessIdentity(row.pid);
+      assert(identity && !identity.exited, "Fixture identity is live");
+      assert.equal(identity.parentPid, row.parentPid);
+      return identity;
+    });
+    record("fixture-process-identities", fixtureProcessIdentities);
     assert.equal(fixturePids.length, role === "baseline" ? 6 : 3);
     assert.equal(
       fixtureRows.length,
@@ -918,11 +960,30 @@ export async function run({ root, directory, role, signal }) {
       budgetRemainingMs: budget(),
     });
   }
+  try {
+    if (invocationAt !== undefined && nativeSessionId) {
+      phaseTimings = await readPhaseTimings({
+        directory,
+        invocationAt,
+        nativeSessionId,
+        nativeProcessIdentity,
+        fixtureProcessIdentities,
+      });
+      assert.deepEqual(
+        phaseTimings.issues,
+        [],
+        "Phase timing logs must parse without missing data",
+      );
+    }
+  } catch (error) {
+    failure ??= error;
+  }
   const result = {
     directory,
     role,
     measurement,
     effect,
+    phaseTimings,
     events,
     remainingPids: remaining?.map((row) => row.pid) ?? null,
     pass: !failure,

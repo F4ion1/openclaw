@@ -13,6 +13,7 @@ const { values } = parseArgs({
     baseline: { type: "string" },
     candidate: { type: "string" },
     output: { type: "string" },
+    pairs: { type: "string", default: "5" },
   },
 });
 for (const name of ["baseline", "candidate", "output"]) {
@@ -23,12 +24,14 @@ const roots = {
   candidate: path.resolve(values.candidate),
 };
 const directory = path.resolve(values.output);
+const pairCount = Number(values.pairs);
+assert(Number.isSafeInteger(pairCount) && pairCount > 0, "--pairs must be a positive integer");
 await fs.mkdir(directory);
 const workloadDirectory = path.dirname(fileURLToPath(import.meta.url));
 const workloadHashes = async () =>
   Object.fromEntries(
     await Promise.all(
-      ["measure.mjs", "run.mjs", "fixture.mjs"].map(async (file) => [
+      ["measure.mjs", "run.mjs", "fixture.mjs", "timing.mjs"].map(async (file) => [
         file,
         sha256(await fs.readFile(path.join(workloadDirectory, file))),
       ]),
@@ -47,10 +50,15 @@ const rows = [];
 let failure;
 const statistics = (samples) => {
   const sorted = samples.toSorted((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
   return {
     count: sorted.length,
     values: samples,
-    median: sorted[Math.floor(sorted.length / 2)] ?? null,
+    median: sorted.length
+      ? sorted.length % 2
+        ? sorted[middle]
+        : (sorted[middle - 1] + sorted[middle]) / 2
+      : null,
     p95: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     min: sorted[0] ?? null,
     max: sorted.at(-1) ?? null,
@@ -76,7 +84,7 @@ try {
     builds.candidate.dependencyInputs,
     "AB pairs require identical dependency inputs",
   );
-  for (let sample = 1; sample <= 5; sample++) {
+  for (let sample = 1; sample <= pairCount; sample++) {
     for (const role of ["baseline", "candidate"]) {
       signal.throwIfAborted();
       const inspected = await inspectBuild(roots[role]);
@@ -153,7 +161,7 @@ for (const metric of [
   }
   metrics[metric] = entry;
 }
-if (rows.length === 10 && !failure) {
+if (rows.length === pairCount * 2 && !failure) {
   if (metrics.fixtureRssKiB.medianChangePercent >= 0) {
     failure = new Error("Duplicate-server population RSS did not fall");
   }
@@ -173,10 +181,11 @@ const summary = {
   identity,
   builds,
   workload,
+  pairCount,
   rows,
   metrics,
-  rule: "Five serial AB pairs; cold first turn in fresh isolated state, no cache flush. Hold the first provider response for census/RSS; invocation-to-catalog ends at the first real Claude provider request containing all three fixture tools. Last fixture catalog timing is diagnostic only. Six baseline versus three projected servers; one effect and native permission callback; zero survivors. Full dependency inputs and SDK distribution bytes must match. Any >=20% worsening stops. Remaining per-server supervisor wrappers are not measured as savings.",
-  complete: rows.length === 10 && !failure,
+  rule: `${pairCount} serial AB pairs; cold first turn in fresh isolated state, no cache flush. Hold the first provider response for census/RSS; invocation-to-catalog ends at the first real Claude provider request containing all three fixture tools. Last fixture catalog timing is diagnostic only. Six baseline versus three projected servers; one effect and native permission callback; zero survivors. Full dependency inputs and SDK distribution bytes must match. Any >=20% worsening stops. Remaining per-server supervisor wrappers are not measured as savings.`,
+  complete: rows.length === pairCount * 2 && !failure,
   error: failure?.stack,
 };
 try {

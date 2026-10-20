@@ -614,7 +614,6 @@ extensions/qa-lab/src/fixture-utils.ts	1
 extensions/qa-lab/src/gateway-child-artifacts.ts	1
 extensions/qa-lab/src/gateway-process-boundary.ts	1
 extensions/qa-lab/src/harness-runtime.ts	2
-extensions/qa-lab/src/lab-server-capture.ts	1
 extensions/qa-lab/src/lab-server.ts	2
 extensions/qa-lab/src/live-transports/discord/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/discord/scenario-environment.ts	3
@@ -1150,7 +1149,6 @@ src/agents/embedded-agent-runner/extra-params.ts	4
 src/agents/embedded-agent-runner/google-prompt-cache.ts	5
 src/agents/embedded-agent-runner/history.ts	2
 src/agents/embedded-agent-runner/message-visibility.ts	1
-src/agents/embedded-agent-runner/model.configured-fallback.ts	1
 src/agents/embedded-agent-runner/model.configured-overrides.ts	1
 src/agents/embedded-agent-runner/model.provider-hooks.ts	8
 src/agents/embedded-agent-runner/model.registry-resolution.ts	2
@@ -1342,7 +1340,7 @@ src/agents/tools/conversation-tools.ts	2
 src/agents/tools/cron-tool-context.ts	1
 src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
-src/agents/tools/cron-tool.ts	5
+src/agents/tools/cron-tool.ts	4
 src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	2
@@ -1843,7 +1841,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	1
-src/gateway/server-methods/cron.ts	2
+src/gateway/server-methods/cron.ts	1
 src/gateway/server-methods/doctor.ts	2
 src/gateway/server-methods/exec-approvals.ts	1
 src/gateway/server-methods/memory-search.ts	3
@@ -2227,7 +2225,6 @@ src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	3
-src/plugins/manifest-install-owner.ts	1
 src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	5
