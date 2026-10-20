@@ -7,30 +7,27 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 
 it.concurrent.for([
-  { mode: "complete", exitCode: 0, disposed: true },
-  { mode: "requested", exitCode: 7, disposed: true },
-  { mode: "deferred", exitCode: 7, disposed: true },
-  { mode: "failure", exitCode: 9, disposed: true },
-  { mode: "runtime", exitCode: 7, disposed: true },
+  { mode: "complete", exitCode: 0 },
+  { mode: "requested", exitCode: 7 },
+  { mode: "deferred", exitCode: 7 },
+  { mode: "failure", exitCode: 9 },
+  { mode: "runtime", exitCode: 7 },
 ])(
   "joins native cleanup and preserves the $mode outcome",
-  async ({ mode, exitCode, disposed }, { expect, signal, onTestFinished }) => {
+  async ({ mode, exitCode }, { expect, signal, onTestFinished }) => {
     const fixture = createFixtureLifetime();
     onTestFinished(() => fixture.cleanup());
     await fixture.run(async () => {
       const directory = fixture.createTempDir("openclaw-cli-cleanup-exit-");
       const databasePath = path.join(directory, "observations.sqlite");
       const exitPath = path.join(directory, "exit.json");
-      const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
-      const cleanupUrl = new URL("./runtime-cleanup.ts", import.meta.url).href;
-      const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
       const script = `
     import fs from "node:fs";
     import { DatabaseSync } from "node:sqlite";
     import { setTimeout as delay } from "node:timers/promises";
-    import { runCliDisposer } from ${JSON.stringify(cleanupUrl)};
-    import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
-    import { defaultRuntime, ExitError } from ${JSON.stringify(runtimeUrl)};
+    import { runCliDisposer } from ${JSON.stringify(new URL("./runtime-cleanup.ts", import.meta.url).href)};
+    import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(new URL("./one-shot-exit.ts", import.meta.url).href)};
+    import { defaultRuntime, ExitError } from ${JSON.stringify(new URL("../runtime.ts", import.meta.url).href)};
 
     const mode = ${JSON.stringify(mode)};
     const database = new DatabaseSync(${JSON.stringify(databasePath)});
@@ -110,17 +107,18 @@ it.concurrent.for([
       expect(result.stderr).toContain("CLI cleanup timed out: native-write after 100ms");
       expect(JSON.parse(fs.readFileSync(exitPath, "utf8"))).toEqual({
         code: exitCode,
-        disposals: disposed ? 1 : 0,
-        nativeOpen: !disposed,
+        disposals: 1,
+        nativeOpen: false,
         returnedBeforeCleanup: true,
         finalizationReturnedBeforeCleanup: false,
         reportedErrors: mode === "failure" ? 1 : 0,
       });
       const database = new DatabaseSync(databasePath, { readOnly: true });
       try {
-        expect(database.prepare("SELECT value FROM observations ORDER BY value").all()).toEqual(
-          (disposed ? [42, 99] : [42]).map((value) => ({ value })),
-        );
+        expect(database.prepare("SELECT value FROM observations ORDER BY value").all()).toEqual([
+          { value: 42 },
+          { value: 99 },
+        ]);
       } finally {
         database.close();
       }

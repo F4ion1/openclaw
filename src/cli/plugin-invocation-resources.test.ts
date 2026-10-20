@@ -15,6 +15,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type ResourceEvent = { event: string; database: string; mode: string };
+const expectedRows = [{ value: "registrar" }, { value: "action" }];
 
 it("keeps native plugin resources through registration and action, then disposes at CLI completion", async () => {
   const root = tempDirs.make("openclaw-cli-registration-resources-");
@@ -24,35 +25,25 @@ it("keeps native plugin resources through registration and action, then disposes
   const eventsPath = path.join(root, "resource-events.jsonl");
   fs.mkdirSync(pluginDir);
   fs.mkdirSync(stateDir);
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
+  const files = {
+    "openclaw.plugin.json": JSON.stringify({
       id: "cli-native-resource",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "descriptor.cjs"),
-    `module.exports = {
+    "descriptor.cjs": `module.exports = {
   name: "native-resource",
   description: "Synthetic native resource command",
   hasSubcommands: false,
   machineOutput: ({ argv }) => argv.includes("--rows"),
 };
 `,
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "cli-metadata.cjs"),
-    `const descriptor = require("./descriptor.cjs");
+    "cli-metadata.cjs": `const descriptor = require("./descriptor.cjs");
 module.exports = {
   id: "cli-native-resource",
   register(api) { api.registerCli(() => {}, { descriptors: [descriptor] }); },
 };
 `,
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "index.cjs"),
-    `const fs = require("node:fs");
+    "index.cjs": `const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 let sequence = 0;
@@ -97,7 +88,10 @@ module.exports = {
   },
 };
 `,
-  );
+  };
+  for (const [name, contents] of Object.entries(files)) {
+    fs.writeFileSync(path.join(pluginDir, name), contents);
+  }
   fs.writeFileSync(
     configPath,
     JSON.stringify({
@@ -159,10 +153,7 @@ module.exports = {
   const diagnostics = formatCliProcessFailure({ reason: "Native plugin CLI result", ...result });
   expect(result.code, diagnostics).toBe(0);
   expect(result.signal, diagnostics).toBeNull();
-  expect(JSON.parse(result.stdout), diagnostics).toEqual([
-    { value: "registrar" },
-    { value: "action" },
-  ]);
+  expect(JSON.parse(result.stdout), diagnostics).toEqual(expectedRows);
   expect(result.stderr).toContain("native-resource diagnostic");
   expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
 
@@ -174,10 +165,9 @@ module.exports = {
   expect(completed, diagnostics).toBeDefined();
   const reopened = new DatabaseSync(completed!.database);
   try {
-    expect(reopened.prepare("SELECT value FROM observations ORDER BY rowid").all()).toEqual([
-      { value: "registrar" },
-      { value: "action" },
-    ]);
+    expect(reopened.prepare("SELECT value FROM observations ORDER BY rowid").all()).toEqual(
+      expectedRows,
+    );
   } finally {
     reopened.close();
   }

@@ -1,4 +1,3 @@
-// Plugin registry loader tests cover CLI plugin registry loading and cache reset behavior.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -127,20 +126,13 @@ describe("plugin-registry-loader", () => {
   });
 
   it("forwards explicit config snapshots to plugin loading", async () => {
-    const config = { channels: { quietchat: { enabled: true } } } as never;
-    const activationSourceConfig = { channels: { quietchat: { enabled: true } } } as never;
-
-    await ensureCliPluginRegistryLoaded({
-      scope: "configured-channels",
-      config,
-      activationSourceConfig,
-    });
-
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      config,
-      activationSourceConfig,
-    });
+    const params = {
+      scope: "configured-channels" as const,
+      config: { channels: { quietchat: { enabled: true } } },
+      activationSourceConfig: { channels: { quietchat: { enabled: true } } },
+    };
+    await ensureCliPluginRegistryLoaded(params);
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith(params);
   });
 
   it("includes persisted runtime owners when loading sandbox managers", async () => {
@@ -163,9 +155,7 @@ describe("plugin-registry-loader", () => {
     vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
 
     await measureCliCommandStartup("plugin-registry", () =>
-      ensureCliPluginRegistryLoaded({
-        scope: "all",
-      }),
+      ensureCliPluginRegistryLoaded({ scope: "all" }),
     );
 
     flushDiagnosticsTimeline();

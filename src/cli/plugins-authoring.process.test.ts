@@ -11,18 +11,14 @@ const invalidConfig = '{"gateway":{"port":"invalid"}}\n';
 async function createAuthoringFixture(root: string) {
   const project = path.join(root, "project");
   await fs.mkdir(project, { recursive: true });
-  await fs.writeFile(
-    path.join(project, "package.json"),
-    JSON.stringify({
+  const files = {
+    "package.json": JSON.stringify({
       name: "openclaw-plugin-authoring-proof",
       version: "1.0.0",
       type: "module",
       openclaw: { extensions: ["./index.ts"] },
     }),
-  );
-  await fs.writeFile(
-    path.join(project, "index.ts"),
-    `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+    "index.ts": `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 export default defineToolPlugin({
   id: "authoring-proof", name: "Authoring Proof", description: "Authoring fixture.",
   tools: (tool) => [tool({
@@ -32,10 +28,7 @@ export default defineToolPlugin({
   })],
 });
 `,
-  );
-  await fs.writeFile(
-    path.join(project, "openclaw.plugin.json"),
-    JSON.stringify({
+    "openclaw.plugin.json": JSON.stringify({
       id: pluginId,
       name: "Authoring Proof",
       description: "Authoring fixture.",
@@ -44,7 +37,10 @@ export default defineToolPlugin({
       activation: { onStartup: true },
       contracts: { tools: ["echo"] },
     }),
-  );
+  };
+  for (const [name, contents] of Object.entries(files)) {
+    await fs.writeFile(path.join(project, name), contents);
+  }
   return project;
 }
 
