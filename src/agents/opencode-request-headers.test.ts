@@ -17,11 +17,7 @@ import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-type Protocol =
-  | "openai-completions"
-  | "openai-responses"
-  | "anthropic-messages"
-  | "google-generative-ai";
+type Protocol = (typeof protocolPaths)[number][0];
 type Route = {
   api: Protocol;
   provider: string;
@@ -30,8 +26,7 @@ type Route = {
   suffix?: string;
 };
 
-// Independent wire fixtures exercise real adapters and SDK decoding, not policy mocks.
-// No upstream account, inference, DNS, or socket is involved in this proof.
+// Independent wire fixtures exercise real adapters and SDK decoding without network access.
 function sse(events: readonly unknown[]): Response {
   return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join(""), {
     headers: { "content-type": "text/event-stream" },
@@ -44,15 +39,11 @@ function responseFor(api: Protocol): Response {
       return sse([
         {
           id: "chatcmpl_fixture",
-          object: "chat.completion.chunk",
-          created: 1,
           model: "fixture-model",
           choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
         },
         {
           id: "chatcmpl_fixture",
-          object: "chat.completion.chunk",
-          created: 1,
           model: "fixture-model",
           choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
           usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
@@ -60,7 +51,7 @@ function responseFor(api: Protocol): Response {
       ]);
     case "openai-responses":
       return sse([
-        completedResponse("resp_fixture", [wireMessage("msg_fixture", "ok")], {
+        completedResponse("resp", [wireMessage("msg", "ok")], {
           usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
         }),
       ]);
@@ -70,10 +61,7 @@ function responseFor(api: Protocol): Response {
           type: "message_start",
           message: {
             id: "msg_fixture",
-            type: "message",
-            role: "assistant",
             model: "fixture-model",
-            content: [],
             usage: { input_tokens: 3, output_tokens: 0 },
           },
         },
@@ -104,31 +92,30 @@ const protocolPaths = [
   ["google-generative-ai", "google/v1beta"],
 ] as const;
 
+function route(
+  api: Protocol,
+  provider: string,
+  baseUrl: string,
+  native = true,
+  suffix?: string,
+): Route {
+  return { api, provider, baseUrl, native, suffix };
+}
+
 // Both native manifest owners must recognize the new paths. Each proxy sibling
 // protects a different adapter's header merge; old Zen routes cover its two URL shapes.
 const routes: Route[] = [
   ...protocolPaths.flatMap(([api, path]) => [
-    {
-      api,
-      provider: "opencode-go",
-      baseUrl: "https://opencode.ai/inference/go/" + path,
-      native: true,
-    },
-    { api, provider: "opencode", baseUrl: "https://opencode.ai/inference/" + path, native: true },
-    { api, provider: "opencode-go", baseUrl: "https://proxy.example/" + path, native: false },
+    route(api, "opencode-go", "https://opencode.ai/inference/go/" + path),
+    route(api, "opencode", "https://opencode.ai/inference/" + path),
+    route(api, "opencode-go", "https://proxy.example/" + path, false),
   ]),
   ...(["opencode-go", "opencode"] as const).flatMap((provider) => {
     const baseUrl =
       provider === "opencode-go" ? "https://opencode.ai/zen/go" : "https://opencode.ai/zen";
     return [
-      { api: "openai-completions" as const, provider, baseUrl: baseUrl + "/v1", native: true },
-      {
-        api: "anthropic-messages" as const,
-        provider,
-        baseUrl,
-        native: true,
-        suffix: "/v1/messages",
-      },
+      route("openai-completions", provider, baseUrl + "/v1"),
+      route("anthropic-messages", provider, baseUrl, true, "/v1/messages"),
     ];
   }),
 ];
@@ -178,9 +165,7 @@ it.each(routes)(
           ...(callerSession ? { "x-opencode-session": "model-session" } : {}),
         },
       });
-      const context: Context = {
-        messages: [{ role: "user", content: "Reply ok", timestamp: 1 }],
-      };
+      const context: Context = { messages: [{ role: "user", content: "Reply ok", timestamp: 1 }] };
       const options: SimpleStreamOptions = {
         apiKey: "synthetic-key",
         sessionId: "conversation-123",
@@ -216,17 +201,18 @@ it.each(routes)(
     // One physical request per turn; no rejected response or retry is hidden.
     expect(requests).toHaveLength(4);
     for (const [index, request] of requests.entries()) {
+      const header = (name: string) => request.headers.get(name);
       expect(request.method).toBe("POST");
       expect(request.url).toBe(baseUrl + (suffix ?? requestSuffix[api]));
-      expect(request.headers.get("x-model")).toBe("keep-model");
-      expect(request.headers.get("x-custom")).toBe("keep-caller");
+      expect(header("x-model")).toBe("keep-model");
+      expect(header("x-custom")).toBe("keep-caller");
       if (native) {
-        expect(request.headers.get("user-agent")).toMatch(/^openclaw\/[^\s,]+$/);
+        expect(header("user-agent")).toMatch(/^openclaw\/[^\s,]+$/);
       } else {
-        expect(request.headers.get("user-agent")).not.toMatch(/(?:^|[ ,])openclaw\//);
-        expect(request.headers.get("user-agent")).toContain("fixture-caller/1");
+        expect(header("user-agent")).not.toMatch(/(?:^|[ ,])openclaw\//);
+        expect(header("user-agent")).toContain("fixture-caller/1");
       }
-      expect(request.headers.get("x-opencode-session")).toBe(
+      expect(header("x-opencode-session")).toBe(
         index >= 2 ? "caller-session" : native ? "conversation-123" : null,
       );
       const payload: unknown = await request.json();
@@ -234,13 +220,13 @@ it.each(routes)(
       expect(payload).not.toHaveProperty("cachedContent");
       expect(JSON.stringify(payload)).not.toContain('"cache_control"');
       if (api === "google-generative-ai") {
-        expect(request.headers.get("x-goog-api-key")).toBe("synthetic-key");
+        expect(header("x-goog-api-key")).toBe("synthetic-key");
         expect(payload).toMatchObject({ contents: expect.any(Array) });
       } else {
         expect(payload).toMatchObject({ model: "fixture-model", stream: true });
-        expect(
-          request.headers.get(api === "anthropic-messages" ? "x-api-key" : "authorization"),
-        ).toBe(api === "anthropic-messages" ? "synthetic-key" : "Bearer synthetic-key");
+        expect(header(api === "anthropic-messages" ? "x-api-key" : "authorization")).toBe(
+          api === "anthropic-messages" ? "synthetic-key" : "Bearer synthetic-key",
+        );
       }
     }
   },
