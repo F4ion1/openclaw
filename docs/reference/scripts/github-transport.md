@@ -52,7 +52,10 @@ from pinned published commits or the PR body and leaves the title to GitHub.
 Choose the transport before dispatch; never replay an uncertain mutation through
 another API. Completion comments use the receipt observation's transport and keep
 their one-attempt marker. Auto-merge, queues, admin admission, and non-squash merges
-require GraphQL; GitHub has no REST auto-merge endpoint. Legacy hosted workflow
+require GraphQL; GitHub has no REST auto-merge endpoint. The explicit
+[failing-CI override](/reference/scripts/merge-admission#maintainer-approved-failing-ci)
+uses REST admission plus GraphQL review checks and protected native CLI admin
+dispatch instead. Legacy hosted workflow
 proof requires REST. Fallback never waives a required gate.
 API failures preserve safe quota and retry metadata from the original response.
 When that response has no usable HTTP framing, a separate GraphQL/core quota

@@ -11,6 +11,7 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 ## Maintainer authority
 
 - **Red `main` is an emergency, not an unrelated landing prerequisite.** Push proven red-`main` fixes directly to `main` within repair scope. For a scoped maintainer instruction to land despite unrelated/pre-existing CI, select the [inherited-failure exception](references/landing.md#authorized-pre-existing-failures); do not demand special wording, renewed approval, or repair/rerun unrelated main CI first. Human authorization, failure evidence, and the protected writer's execution capability are separate checks.
+- `scripts/pr merge-run <pr> --override-failing-ci` is the supported simple flag for maintainer-approved, definitely unrelated CI failures. It runs head-pinned `gh pr merge --admin --squash` without a separate evidence file or second confirmation; retain attribution in the review/PR and follow the [landing contract](references/landing.md#maintainer-approved-failing-ci-override).
 - Repair-and-land authority covers internal scheduling, database admission, lifecycle design, risk, verification. In-task bug fixes (including compatible SDK fixes) and backed-up repairs removing only invalid or unreachable data need no renewed approval.
 - Bulk close/reopen above 50 items needs explicit count and scope.
 - Advisory workflows need explicit security request.

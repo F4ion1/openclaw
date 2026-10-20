@@ -569,7 +569,15 @@ describePosix("explicit prior-CI admin landing", () => {
     f.save(state);
     writeFileSync(f.path, JSON.stringify(f.evidence));
     const result = fault === "changed-evidence" ? f.adminPriorCi(f.path) : f.verifyPriorCi(f.path);
-    expectResult(f, result, "Prior-CI admin admission:");
+    expectResult(
+      f,
+      result,
+      fault === "threads"
+        ? "required review threads must all be resolved"
+        : fault === "review" || fault === "null-review"
+          ? "current enforced reviews must be satisfied"
+          : "Prior-CI admin admission:",
+    );
     expectNoIntent(f);
   });
 });

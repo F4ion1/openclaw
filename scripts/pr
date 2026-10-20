@@ -804,7 +804,7 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr ci-dispatch <PR> [--backend crabbox]
   scripts/pr merge-verify <PR>
-  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-run <PR> [--auto-merge | --override-failing-ci] [--body-file <path>] [--admin-evidence <path> --confirmed-operator-admin]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
     --auto-merge selects pinned immediate squash for CLEAN, auto for BEHIND/BLOCKED (MERGEABLE only).
     OPENCLAW_PR_GATES_REMOTE=github prepare-run defers required CI to this auto-merge handoff.
@@ -814,6 +814,7 @@ Usage:
     --admin-evidence admits reviewed prior-green conflict repairs or attributed pre-existing CI failures, with active organization-admin authority.
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
+    --override-failing-ci uses pinned gh pr merge --admin for maintainer-approved, definitely unrelated CI failures; no evidence file or second confirmation flag. Reviews, security statuses, conflicts, and head guards remain.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
   scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> --auto-merge] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
@@ -949,7 +950,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
-      local merge_pr="${1-}" auto_merge=false recovery_oid="" merged_head="" observed_head="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" merged_head="" observed_head="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false override_failing_ci=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
       if [ "$cmd" = merge-recover ]; then
@@ -960,6 +961,11 @@ main() {
       fi
       while [ "$#" -gt 0 ]; do
         case "$1" in
+          --override-failing-ci)
+            [ "$cmd" = merge-run ] && [ "$override_failing_ci" = false ] || { usage; exit 2; }
+            override_failing_ci=true
+            shift
+            ;;
           --cancel-auto)
             [ "$cmd" = merge-recover ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
             cancel_auto=true
@@ -1018,6 +1024,10 @@ main() {
       done
       if [ "$cmd" = merge-run ] && [ "${OPENCLAW_PR_AUTO_MERGE:-}" = 1 ]; then
         auto_merge=true
+      fi
+      if [ "$override_failing_ci" = true ]; then
+        [ "$auto_merge" = false ] && [ -z "$admin_evidence" ] && [ "$confirmed_admin" = false ] &&
+          [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || { usage; exit 2; }
       fi
       if [ -n "$admin_evidence" ] || [ "$confirmed_admin" = true ]; then
         [ -n "$admin_evidence" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge" = false ] &&
@@ -1214,7 +1224,7 @@ main() {
       merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head" "$observed_head"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head" "$observed_head" "$override_failing_ci"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

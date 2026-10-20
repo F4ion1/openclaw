@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhAsync, execPrGhJson } from "./github.mjs";
@@ -17,6 +20,109 @@ const RULE_TYPES = new Set([
   "pull_request",
   "required_status_checks",
 ]);
+
+export const MERGE_REVIEW_QUERY =
+  "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}";
+
+export function verifyMergeReviews(policy, head, response) {
+  let requireReviews = false;
+  let requireThreads = false;
+  for (const rule of policy.rules.filter((candidate) => candidate.type === "pull_request")) {
+    const parameters = rule.parameters;
+    requireEvidence(
+      parameters &&
+        Number.isSafeInteger(parameters.required_approving_review_count) &&
+        parameters.required_approving_review_count >= 0 &&
+        typeof parameters.require_code_owner_review === "boolean" &&
+        typeof parameters.require_last_push_approval === "boolean" &&
+        typeof parameters.required_review_thread_resolution === "boolean",
+      "effective review requirements are incomplete",
+    );
+    // GitHub's per-PR decision owns conditional code-owner applicability.
+    requireReviews ||=
+      parameters.required_approving_review_count > 0 || parameters.require_last_push_approval;
+    requireThreads ||= parameters.required_review_thread_resolution;
+  }
+  const review = response.body?.data?.repository?.pullRequest;
+  requireEvidence(
+    response.status === "200" &&
+      !response.body.errors &&
+      review?.headRefOid === head &&
+      (review.reviewDecision === "APPROVED" || (!requireReviews && review.reviewDecision === null)),
+    "current enforced reviews must be satisfied; admin CI authority does not waive reviews",
+  );
+  if (requireThreads) {
+    requireEvidence(
+      review.reviewThreads?.pageInfo?.hasNextPage === false &&
+        Array.isArray(review.reviewThreads.nodes) &&
+        review.reviewThreads.nodes.every((thread) => thread.isResolved === true),
+      "required review threads must all be resolved (more than 100 threads require ordinary landing)",
+    );
+  }
+}
+
+function verifyOverrideReviews(repo, pr, head, policy) {
+  const response = execPrGh(
+    [
+      "api",
+      "graphql",
+      "--hostname",
+      repo.host,
+      "--include",
+      "-H",
+      "Cache-Control: max-age=0",
+      "-f",
+      `owner=${repo.nameWithOwner.split("/")[0]}`,
+      "-f",
+      `name=${repo.nameWithOwner.split("/")[1]}`,
+      "-F",
+      `number=${pr}`,
+      "-f",
+      `query=${MERGE_REVIEW_QUERY}`,
+    ],
+    { encoding: "utf8" },
+    "plain",
+  );
+  verifyMergeReviews(policy, head, parseGithubResponse(response));
+}
+
+async function verifyOverrideChecks(repo, pr, snapshot, checks, dispatching) {
+  const failed = checks.filter((check) => check.bucket !== "pass");
+  if (failed.length === 0) {
+    return;
+  }
+  const combined = checks.filter(
+    (check) => check.name === "openclaw/ci-gate" && check.statusId !== undefined,
+  );
+  requireEvidence(
+    failed.every(
+      (check) =>
+        check.name === "openclaw/ci-gate" &&
+        ["fail", "cancel"].includes(check.bucket) &&
+        (check.publisherId === 15368 || check === combined[0]),
+    ),
+    "only failed CI gate checks may be overridden; other required checks must pass",
+  );
+  requireEvidence(
+    repo.host === "github.com" && combined.length === 1,
+    "the CI override requires the current combined CI/security status",
+  );
+  // The required status combines CI and security. Reuse its security owner;
+  // accepting the CI failure alone must not bypass missing or revoked clearance.
+  const { verifyPriorCiSecurity, verifyPriorCiSecurityMainSources } =
+    await import("./merge-prior-ci-security.mjs");
+  const security = await verifyPriorCiSecurity({
+    repository: repo.nameWithOwner,
+    repositoryId: snapshot.authority.id,
+    pr,
+    head: snapshot.record.head.sha,
+    main: snapshot.main,
+    statusId: combined[0].statusId,
+  });
+  if (dispatching) {
+    verifyPriorCiSecurityMainSources(security, snapshot.main);
+  }
+}
 
 function requireEvidence(condition, message) {
   if (!condition) {
@@ -343,16 +449,16 @@ function samePullRequestIdentity(current, previous) {
   return JSON.stringify(identity(current)) === JSON.stringify(identity(previous));
 }
 
-function finishRead(repo, pr, snapshot, requireStableMain, priorCiObservation) {
+function finishRead(repo, pr, snapshot, requireStableMain, recheckPolicy) {
   const current = readPullRequest(repo, snapshot.authority, pr);
   const sameIdentity = samePullRequestIdentity(current, snapshot.record);
   const { requiredChecks: _checks, ...policy } = snapshot.policy ?? {};
   const samePolicy =
-    !priorCiObservation ||
+    !recheckPolicy ||
     current.merged ||
     JSON.stringify(readMergePolicy(repo)) === JSON.stringify(policy);
   const mainSha = readMain(repo);
-  if (priorCiObservation || mainSha !== snapshot.main || !sameIdentity || !samePolicy) {
+  if (recheckPolicy || mainSha !== snapshot.main || !sameIdentity || !samePolicy) {
     const finishedAtMs = Date.now();
     console.error(
       `REST merge observation: ${JSON.stringify({
@@ -509,7 +615,12 @@ export function readRequiredMergeChecksAsync(repo, head, policy, options = {}) {
   return runReadStepsAsync(requiredMergeChecksSteps(repo, head, policy, options));
 }
 
-function* requiredMergeChecksSteps(repo, head, policy, { includeCheckIdentity = false } = {}) {
+function* requiredMergeChecksSteps(
+  repo,
+  head,
+  policy,
+  { includeCheckIdentity = false, allowFailedSuites = false } = {},
+) {
   const requirements = new Map();
   for (const rule of policy.rules) {
     if (rule.type !== "required_status_checks") {
@@ -646,11 +757,15 @@ function* requiredMergeChecksSteps(repo, head, policy, { includeCheckIdentity = 
       continue;
     }
     const suite = suites.find((value) => value.id === check.check_suite?.id);
+    // A passing required job can share a completed suite with an approved
+    // unrelated failure. An in-progress rerun still cannot supply fresh proof.
     requireEvidence(
       suite?.head_sha === head &&
         suite.app?.id === check.app.id &&
         suite.status === "completed" &&
-        suite.conclusion === "success",
+        (suite.conclusion === "success" ||
+          (allowFailedSuites &&
+            ["fail", "cancel"].includes(bucket((suite.conclusion ?? "UNKNOWN").toUpperCase())))),
       "required check suite is not freshly successful",
     );
   }
@@ -882,15 +997,15 @@ function asyncMergeResponse(repo, pr, head, uuid, payload) {
   };
 }
 
-async function main([
-  mode,
-  repository,
-  prValue,
-  head,
-  bodySnapshot,
-  expectedObservation,
-  ...extra
-]) {
+async function main(args) {
+  const overrideFailingCi = args.at(-1) === "--override-failing-ci";
+  const [mode, repository, prValue, head, bodySnapshot, expectedObservation, ...extra] =
+    overrideFailingCi ? args.slice(0, -1) : args;
+  requireEvidence(
+    !overrideFailingCi ||
+      ["observe", "observe-admission", "checks", "preview", "merge"].includes(mode),
+    "--override-failing-ci requires an ordinary observation or immediate squash merge",
+  );
   if (mode === "merge-result") {
     requireEvidence(
       /^[1-9][0-9]*$/.test(prValue ?? "") &&
@@ -967,11 +1082,17 @@ async function main([
   const snapshot = beginRead(repo, pr, observing, priorCiObservation);
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
-      ? readRequiredMergeChecks(repo, snapshot.record.head.sha, snapshot.policy)
+      ? readRequiredMergeChecks(repo, snapshot.record.head.sha, snapshot.policy, {
+          includeCheckIdentity: overrideFailingCi,
+          allowFailedSuites: overrideFailingCi,
+        })
       : undefined;
+  if (overrideFailingCi && checks !== undefined) {
+    await verifyOverrideChecks(repo, pr, snapshot, checks, mode === "merge");
+  }
   if (mode !== "checks" && checks !== undefined) {
     requireEvidence(
-      priorCiObservation || checks.every((check) => check.bucket === "pass"),
+      priorCiObservation || overrideFailingCi || checks.every((check) => check.bucket === "pass"),
       "required checks are not passing",
     );
     snapshot.policy.requiredChecks = checks;
@@ -981,13 +1102,16 @@ async function main([
     pr,
     snapshot,
     observing && mode !== "observe-admission" && !priorCiObservation,
-    priorCiObservation,
+    priorCiObservation || overrideFailingCi,
   );
   if (observing && !priorCiObservation && current.state === "open") {
     // REST can still be calculating after GraphQL is ready. Select the alternate
     // reader before retaining intent; mutation dispatch never changes transports.
     requireRestSupport(
-      current.mergeable === true && current.mergeable_state === "clean",
+      current.mergeable === true &&
+        (current.mergeable_state === "clean" ||
+          (overrideFailingCi &&
+            ["blocked", "behind", "unstable"].includes(current.mergeable_state))),
       "merge projection requires GraphQL admission",
     );
   }
@@ -1017,6 +1141,9 @@ async function main([
       transport: "rest",
     };
   } else if (observing) {
+    if (overrideFailingCi && current.state === "open") {
+      verifyOverrideReviews(repo, pr, current.head.sha, snapshot.policy);
+    }
     result = observationResult(repo, snapshot, current, priorCiObservation);
   } else {
     // The async endpoint also merges downstack PRs. This owner admits one PR;
@@ -1030,7 +1157,9 @@ async function main([
         !current.draft &&
         current.head.sha === head &&
         current.mergeable === true &&
-        current.mergeable_state === "clean" &&
+        (current.mergeable_state === "clean" ||
+          (overrideFailingCi &&
+            ["blocked", "behind", "unstable"].includes(current.mergeable_state))) &&
         nonemptyString(current.title),
       "immediate squash requires the prepared open, non-draft, clean PR head",
     );
@@ -1045,6 +1174,38 @@ async function main([
       ) === JSON.stringify(canonical(expectedFacts)),
       "PR or policy changed before merge dispatch",
     );
+    if (overrideFailingCi) {
+      verifyOverrideReviews(repo, pr, head, snapshot.policy);
+      const directory = mkdtempSync(join(tmpdir(), "openclaw-pr-admin-"));
+      try {
+        const bodyPath = join(directory, "body");
+        writeFileSync(bodyPath, body, { mode: 0o600 });
+        console.error(
+          "Merging with maintainer-approved unrelated CI failures; no CI success is claimed.",
+        );
+        execPrGh(
+          [
+            "pr",
+            "merge",
+            String(pr),
+            "--repo",
+            repo.url,
+            "--admin",
+            "--squash",
+            "--match-head-commit",
+            head,
+            "--body-file",
+            bodyPath,
+          ],
+          { encoding: "utf8" },
+          "plain",
+        );
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+      process.stdout.write('{"admin":true}\n');
+      return;
+    }
     const payload = {
       sha: head,
       merge_method: "squash",

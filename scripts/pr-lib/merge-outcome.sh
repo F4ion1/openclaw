@@ -217,7 +217,10 @@ merge_outcome_load_local() {
         (.method == "squash" or .method == "merge" or .method == "rebase") and
         (.route == "immediate" or .route == "admin" or .route == "auto" or .route == "queue") and
         (if has("transport") then .transport == "rest" and .method == "squash" and
-          (.route == "immediate" or (.route == "admin" and .priorCiAdmin.dispatchTransport == "rest")) else true end) and
+          (.route == "immediate" or (.route == "admin" and
+            (.priorCiAdmin.dispatchTransport == "rest" or .overrideFailingCi == true))) else true end) and
+        (if has("overrideFailingCi") then .overrideFailingCi == true and .route == "admin" and
+          .method == "squash" and .transport == "rest" and (has("priorCiAdmin") | not) else true end) and
         (if has("priorCiAdmin") then . as $record | .route == "admin" and .method == "squash" and
           (.priorCiAdmin | .version == 1 and .head == $record.head and .pr == $record.pr and
             .repository == $record.repo.nameWithOwner and (.priorHead | oid) and
@@ -567,6 +570,11 @@ merge_rest() {
     fi
   fi
   [ -n "$repo" ] || repo=$(pr_gh_plain repo view --json id,nameWithOwner,url) || return 1
+  if { [ "${MERGE_OVERRIDE_FAILING_CI:-false}" = true ] ||
+    { [ -n "${MERGE_OUTCOME_RECORD:-}" ] && printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.overrideFailingCi == true' >/dev/null; }; } &&
+    { [ "$mode" = observe ] || [ "$mode" = observe-admission ] || [ "$mode" = checks ] || [ "$mode" = preview ] || [ "$mode" = merge ]; }; then
+    set -- "$@" --override-failing-ci
+  fi
   node "${BASH_SOURCE[0]%/*}/merge-rest.mjs" "$mode" "$repo" "$pr" "$@"
 }
 
@@ -613,6 +621,7 @@ merge_outcome_dispatch_prior_ci_squash() (
 
 merge_read() {
   local mode="$1" pr="$2" repo="${3:-${MERGE_REPO_URL:-}}" first="${MERGE_TRANSPORT:-rest}" second response status query checks_err checks_error
+  if [ "${MERGE_OVERRIDE_FAILING_CI:-false}" = true ]; then first=rest; fi
   if [ "$mode" = projection ] && [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" = true ]; then
     first=rest
   fi
@@ -639,6 +648,10 @@ merge_read() {
     if [ "$transport" = rest ]; then
       response=$(merge_rest "$mode" "$pr") || return 1
       if printf '%s\n' "$response" | jq -e '. == {restUnavailable:true}' >/dev/null 2>&1; then
+        if [ "${MERGE_OVERRIDE_FAILING_CI:-false}" = true ] && [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ]; then
+          merge_outcome_stop "failing-CI override requires supported REST admission; no merge was dispatched" >&2
+          return 1
+        fi
         continue
       fi
     else
@@ -1364,7 +1377,9 @@ merge_outcome_comment_body() {
   route=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .route) || return 1
   case "$route:$method" in
     admin:*)
-      if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("priorCiAdmin")' >/dev/null; then
+      if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.overrideFailingCi == true' >/dev/null; then
+        label="admin squash with maintainer-approved unrelated CI failures"
+      elif printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("priorCiAdmin")' >/dev/null; then
         if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .priorCiAdmin.changeKind)" = pre-existing-failure ]; then
           label="explicitly authorized admin squash with attributed pre-existing CI failures"
         else
@@ -1381,6 +1396,9 @@ merge_outcome_comment_body() {
   esac
   printf 'Merged via %s.\n\n- Prepared head SHA: [%s](%s/pull/%s/commits/%s)\n- Landed commit: [%s](%s/commit/%s)' \
     "$label" "$head" "$MERGE_REPO_URL" "$pr" "$head" "$landed" "$MERGE_REPO_URL" "$landed"
+  if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.overrideFailingCi == true' >/dev/null; then
+    printf '\n- Maintainer-approved failing-CI override. No current-head CI success is claimed.'
+  fi
   if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("headDrift")' >/dev/null; then
     local merged_head
     merged_head=$(merge_outcome_receipt_head) || return 1
@@ -1483,7 +1501,7 @@ merge_complete() {
     return 0
   fi
   if [ "$phase" = merged ] && [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .route)" = admin ]; then
-    if ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("priorCiAdmin")' >/dev/null; then
+    if ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("priorCiAdmin") or .overrideFailingCi == true' >/dev/null; then
       echo "Delayed admin completion requires retained prior-CI evidence; preserve the original audit and receipt for owner review." >&2
       return 1
     fi

@@ -433,7 +433,7 @@ const restCheckSuites=()=>{
   const suites=restCheckRuns().map(check=>{
     const running=check.status!=="completed"||s.restSuite==="rerunning"||(s.restUnseenSuite==="partial-pending"&&check.check_suite.id===2);
     return {id:check.check_suite.id,head_sha:s.pr.headRefOid,app:check.app,
-      status:running?"in_progress":"completed",conclusion:running?null:check.conclusion};
+      status:running?"in_progress":"completed",conclusion:running?null:s.restSuite==="failed"?"failure":check.conclusion};
   });
   if(s.restUnseenSuite&&s.restUnseenSuite!=="partial-pending") {
     const empty=s.restUnseenSuite.startsWith("queued-empty");
@@ -945,7 +945,7 @@ if [ "\${9:-}" = verify ]; then
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}" "\${13:-}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}" "\${13:-}" "\${14:-false}"
 fi
 `,
       true,
@@ -999,6 +999,7 @@ fi
       confirmedAdmin = false,
       mergedHead = "",
       observedHead = "",
+      overrideFailingCi = false,
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -1020,6 +1021,7 @@ fi
           String(confirmedAdmin),
           mergedHead,
           observedHead,
+          String(overrideFailingCi),
         ],
         {
           cwd,
@@ -1167,6 +1169,8 @@ fi
           confirmed,
         ),
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
+      overrideFailingCi: () =>
+        run(false, repo, "squash", "", "", "", "", "", false, "", false, "", false, "", "", true),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string, observedHead = "") =>
         run(

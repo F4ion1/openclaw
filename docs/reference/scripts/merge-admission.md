@@ -18,6 +18,32 @@ title: "PR merge admission"
 - Before recording intent, `--auto-merge` selects immediate pinned squash for `MERGEABLE/CLEAN` or auto for `MERGEABLE/BEHIND` or `MERGEABLE/BLOCKED`, subject to all admission gates and queue policy. Accepted auto/queue requests are visible pending outcomes, not completion. The request carries `--match-head-commit`; confirmation still requires the exact attempted head. This is a submission-time head precondition, not a server-side freeze against later collaborator pushes; if GitHub merged the pushed head, use the explicit `merge-recover --merged-head <SHA>` [receipt route](/reference/scripts/merge-recovery). Existing or ambiguous requests are never automatically cancelled, re-armed, or followed by an immediate fallback; an explicitly investigated accepted auto request uses the [cancellation recovery](/reference/scripts/merge-recovery). Ordinary `gh pr merge` can enqueue when queue policy applies.
 - `--auto-merge` selects immediate squash for `MERGEABLE/UNSTABLE` only after one fresh `scripts/watch-pr-ci.mjs --completion rollup --once` pass at the exact prepared head exits GREEN; `--once` evaluates one attach and one rollup observation without waiting, and `--timeout` bounds only that pass's evidence reads. GitHub's rollup and merge projection retain runs superseded by a newer same workflow/event/job-name run on that head, such as a draft `opened` ClawSweeper Dispatch run after `ready_for_review`. The watcher's `classifyRollup` owns supersession; the pass also requires the attached `ci.yml` run to succeed. Any unsuperseded failure, hidden or paginated context, missing run identity, pending check, moved head, conflict, or watcher error refuses admission; the watcher's existing `auto-response` exclusion applies unchanged. This is a one-shot admission predicate, not a pinned snapshot fact: GitHub still enforces required checks at dispatch, the exact-head mutation pins the head, and the final stability reread pins the UNSTABLE projection. Pinning rollup contexts would extend the Octopool-allowlisted landing snapshot query and retained-outcome schema for a risk server enforcement already bounds. Accepted edge case: a new non-required failure on the same head between the pass and dispatch is not rechecked. Retained intents never rerun the predicate or redispatch; explicit recovery reruns admission.
 
+## Maintainer-approved failing CI
+
+`scripts/pr merge-run <PR> --override-failing-ci` is an explicit immediate admin
+squash for maintainer-approved, definitely unrelated CI failures. It uses protected
+`gh pr merge --admin --squash --match-head-commit <prepared-head> --body-file <file>`.
+Record attribution in the existing review/PR; no separate evidence file or second
+confirmation flag is required. A readiness question or an unexplained "ignore CI"
+does not authorize this route.
+
+Normal exact-head review, preparation, source, merge-tree, and retained-outcome
+guards remain. Admission requires current writer admin access, supported REST
+branch policy and satisfied enforced reviews. Only failed/cancelled GitHub Actions
+`openclaw/ci-gate` checks may be overridden; every other required check must pass.
+The combined CI/security status is independently revalidated through the existing
+security-clearance owner, so failed CI never waives security review. Completed
+mixed-result suites may be admitted; pending/skipped required checks and
+in-progress reruns may not.
+It cannot be combined with auto-merge, queues, non-squash methods, or the separate
+[structured prior-CI evidence route](/reference/scripts/prior-ci).
+
+Outcomes retain `route: "admin"` and `overrideFailingCi: true`. Comments and delayed
+completion preserve the failing-CI caveat rather than claiming green CI. Repeated
+invocations reconcile an existing outcome and never replay an uncertain dispatch.
+The protected writer must support the exact CLI shape; a refusal is a capability
+blocker, not permission to select a raw binary or another transport.
+
 ## Complete check-suite reads
 
 Required-check admission keeps the complete suite inventory bounded to 1,000

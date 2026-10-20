@@ -263,7 +263,7 @@ merge_verify() {
   require_prepared_review "$pr" || return 1
   local prepared_ci_failure
   prepared_ci_failure=$(read_prepared_ci_failure) || return 1
-  if [ -n "$prepared_ci_failure" ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ]; then
+  if [ -n "$prepared_ci_failure" ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] && [ "${MERGE_OVERRIDE_FAILING_CI:-false}" != true ]; then
     echo "A prepared review with pre-existing CI failures requires explicit confirmed admin admission." >&2
     return 1
   fi
@@ -284,7 +284,12 @@ merge_verify() {
     echo "Prior-CI admin admission requires exact-head github_pending preparation." >&2
     return 1
   fi
-  if [ "${GATES_MODE:-}" = github_pending ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ]; then
+  if [ "${MERGE_OVERRIDE_FAILING_CI:-false}" = true ] && [ "${GATES_MODE:-}" = github_pending ] &&
+    [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$PREP_HEAD_SHA" ]; then
+    echo "Failing-CI override requires gates bound to the exact prepared head." >&2
+    return 1
+  fi
+  if [ "${GATES_MODE:-}" = github_pending ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] && [ "${MERGE_OVERRIDE_FAILING_CI:-false}" != true ]; then
     if { [ "$qualified_refusal" != true ] && [ "$qualified_immediate_recovery" != true ] &&
       { [ "$auto_merge_requested" != true ] ||
         { [ -n "$replacement_head" ] && [ "$qualified_stale_head_retirement" != true ]; }; }; } ||
@@ -340,6 +345,8 @@ merge_verify() {
   mark_pr_operation_side_effects_started || return 1
   if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+  elif [ "${MERGE_OVERRIDE_FAILING_CI:-false}" = true ]; then
+    echo "Maintainer-approved unrelated CI override: validating current checks without waiting for green CI."
   elif [ "$github_pending" = true ]; then
     echo "GitHub will enforce required checks; submitting without a CI watcher."
   elif [ "${GATES_MODE:-}" = "hosted_exact_or_recent_parent" ]; then
@@ -431,7 +438,7 @@ merge_verify() {
       (.name == "openclaw/ci-gate" and
         (if $proof.changeKind == "pre-existing-failure" then (.bucket == "fail" or .bucket == "cancel")
          else (.bucket == "pending" or .bucket == "skipping") end)))' >/dev/null || return 1
-  elif [ "$failed_required" -gt 0 ]; then
+  elif [ "$failed_required" -gt 0 ] && [ "${MERGE_OVERRIDE_FAILING_CI:-false}" != true ]; then
     if [ "$github_pending" = true ]; then
       echo "Required checks are failing; fix them before requesting auto-merge." >&2
       return 1
@@ -625,9 +632,15 @@ merge_run() {
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
+  local MERGE_OVERRIDE_FAILING_CI="${13:-false}"
   local MERGE_PRIOR_CI_REST_OBSERVATION=false
   local MERGE_PRIOR_CI_RECALCULATED=false
   local MERGE_PRIOR_CI_REMATERIALIZE_MAIN="" MERGE_PRIOR_CI_IMMUTABLE="" MERGE_PRIOR_CI_QUALIFIED_RESPONSE=""
+  if [ "$MERGE_OVERRIDE_FAILING_CI" = true ]; then
+    [ "$auto_merge_requested" = false ] && [ -z "$recovery_oid$MERGE_ADMIN_EVIDENCE$legacy_directory$refusal_directory$replacement_head$merged_head$observed_head" ] &&
+      [ "$confirmed_admin" = false ] && [ "$cancel_auto" = false ] &&
+      [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || return 2
+  fi
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
       [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
@@ -912,7 +925,7 @@ merge_run() {
       '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
       admission_start=$admission_observed_at; admission_deadline=$((admission_start + 60))
     fi
-    if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
+    if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] && [ "$MERGE_OVERRIDE_FAILING_CI" = false ] &&
       { [ "$merge_method" != squash ] || [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; }; then
       merge_outcome_stop "REST fallback supports ordinary immediate squash only; auto, queue, and admin routes require GraphQL"
       return 1
@@ -985,7 +998,7 @@ merge_run() {
     merge_wait_for_projection "$pr" "$admission_deadline" "$admission_delay" || return 1
     admission_delay="$MERGE_PROJECTION_DELAY"
   done
-  if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
+  if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] && [ "$MERGE_OVERRIDE_FAILING_CI" = false ] &&
     [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeStateStatus)" != CLEAN ]; then
     merge_outcome_stop "REST fallback requires a CLEAN merge projection without bypass"
     return 1
@@ -1000,7 +1013,7 @@ merge_run() {
     fi
     merge_body_snapshot=$(snapshot_merge_body "$merge_body_file") || return 1
   fi
-  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] || [ "$MERGE_OVERRIDE_FAILING_CI" = true ]; then
     route="admin"
     merge_args=(--admin "${merge_args[@]}")
   elif [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.isMergeQueueEnabled)" = true ]; then
@@ -1081,7 +1094,9 @@ merge_run() {
   # A final stability read can exhaust GraphQL after route/body selection.
   # Revalidate the selected route before retaining any REST mutation intent.
   if [ "$MERGE_TRANSPORT" = rest ]; then
-    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
+    if [ "$MERGE_OVERRIDE_FAILING_CI" = true ]; then
+      [ "$route" = admin ] && [ "$merge_method" = squash ] && [ "$auto_merge_requested" = false ] || return 1
+    elif [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
       [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ] &&
         [ "$route" = admin ] && [ "$merge_method" = squash ] && [ "$auto_merge_requested" = false ] || return 1
     elif [ "$merge_method" != squash ] || [ "$route" != immediate ] ||
@@ -1089,7 +1104,7 @@ merge_run() {
       merge_outcome_stop "REST fallback supports ordinary immediate squash only; auto, queue, and admin routes require GraphQL"
       return 1
     fi
-    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] && [ "$MERGE_OVERRIDE_FAILING_CI" = false ] &&
       { [ -z "$merge_body_snapshot" ] || ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e '
       .pr.mergeable == "MERGEABLE" and .pr.mergeStateStatus == "CLEAN"
     ' >/dev/null; }; then
@@ -1112,7 +1127,9 @@ merge_run() {
     [ "$correction_gates_oid" = "$(pr_git hash-object --no-filters .local/gates.env)" ] || return 1
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
-  if [ "$route" = admin ]; then
+  if [ "$MERGE_OVERRIDE_FAILING_CI" = true ]; then
+    crabbox_final_main_sha="$observed_main"
+  elif [ "$route" = admin ]; then
     local authority_round=0 authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF" crabbox_main_sha
     local authority_start authority_deadline round_start authority_ready=false qualified_observation snapshot_main
     local MERGE_PRIOR_CI_UNKNOWN_START="" MERGE_PRIOR_CI_UNKNOWN_DELAY=2 MERGE_PRIOR_CI_SETTLING=false
@@ -1243,7 +1260,7 @@ merge_run() {
     fi
     GIT_NO_LAZY_FETCH=1 verify_prep_branch_matches_prepared_head "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
   fi
-  if [ "$route" = admin ] && [ "$(pr_merge_now)" -ge "$authority_deadline" ]; then
+  if [ "$route" = admin ] && [ "$MERGE_OVERRIDE_FAILING_CI" = false ] && [ "$(pr_merge_now)" -ge "$authority_deadline" ]; then
     merge_outcome_stop "admin authority deadline expired before intent/dispatch"
     return 1
   fi
@@ -1260,6 +1277,9 @@ merge_run() {
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
     intent=$(printf '%s\n%s\n' "$intent" "$MERGE_PRIOR_CI_PROOF" | jq -cse '
       select(length == 2) | .[1] as $proof | .[0] | .priorCiAdmin=$proof') || return 1
+  fi
+  if [ "$MERGE_OVERRIDE_FAILING_CI" = true ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c '.overrideFailingCi=true') || return 1
   fi
   local async_dispatch=false
   if [ "$MERGE_TRANSPORT" = rest ] && [ "$route" = immediate ]; then
@@ -1306,6 +1326,8 @@ merge_run() {
     export OCTOPOOL_DIAGNOSTICS=1
     if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
       merge_outcome_dispatch_prior_ci_squash "$merge_body_snapshot" "$MERGE_SUBJECT"
+    elif [ "$MERGE_OVERRIDE_FAILING_CI" = true ]; then
+      merge_rest merge "$pr" "$PREP_HEAD_SHA" "$merge_body_snapshot" "$MERGE_OBSERVATION"
     elif [ "$MERGE_TRANSPORT" = rest ]; then
       merge_outcome_dispatch_async "$pr" "$PREP_HEAD_SHA" "$merge_body_snapshot"
     elif [ "$route" = immediate ] && [ "$merge_method" = squash ]; then

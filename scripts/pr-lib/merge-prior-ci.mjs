@@ -19,6 +19,8 @@ import {
   readMergePolicyAsync,
   readRequiredMergeChecksAsync,
   withPriorCiObservation,
+  MERGE_REVIEW_QUERY,
+  verifyMergeReviews,
 } from "./merge-rest.mjs";
 
 const oid = /^[0-9a-f]{40}$/;
@@ -153,7 +155,9 @@ function qualifyProviderRejection(recordJson, outcome, source) {
     !priorCaptures.some((entry) => entry.name === capture),
     "provider rejection must name a new attempt capture",
   );
-  const expected = [capture, ...priorCaptures.map((entry) => entry.name)].toSorted();
+  const expected = [capture, ...priorCaptures.map((entry) => entry.name)].toSorted((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
   // The request reached GitHub. This exact response qualifies provider rejection,
   // never a claim that dispatch did not happen or permission for an automatic retry.
   const response = Buffer.from(
@@ -729,28 +733,6 @@ async function verifyPriorCiAdmin({
     return response.body;
   };
   const policy = sharedSnapshot?.policy ?? (await readMergePolicyAsync(repo));
-  const reviewRules = policy.rules.filter((rule) => rule.type === "pull_request");
-  let requireReviews = false;
-  let requireThreads = false;
-  for (const rule of reviewRules) {
-    const parameters = rule.parameters;
-    requireEvidence(
-      parameters &&
-        Number.isSafeInteger(parameters.required_approving_review_count) &&
-        parameters.required_approving_review_count >= 0 &&
-        typeof parameters.require_code_owner_review === "boolean" &&
-        typeof parameters.require_last_push_approval === "boolean" &&
-        typeof parameters.required_review_thread_resolution === "boolean",
-      "effective review requirements are incomplete",
-    );
-    // Code-owner review is conditional on changed paths; GitHub's per-PR
-    // reviewDecision below owns that applicability, including REVIEW_REQUIRED.
-    requireReviews ||=
-      parameters.required_approving_review_count > 0 || parameters.require_last_push_approval;
-    requireThreads ||= parameters.required_review_thread_resolution;
-  }
-  const query =
-    "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}";
   const authorityRead = readWriterAuthority(repository, actor, evidence, policy, writerRead);
   const readReview = () =>
     execPrGhAsync(
@@ -769,7 +751,7 @@ async function verifyPriorCiAdmin({
         "-F",
         `number=${pr}`,
         "-f",
-        `query=${query}`,
+        `query=${MERGE_REVIEW_QUERY}`,
       ],
       { encoding: "utf8" },
       "plain",
@@ -794,24 +776,7 @@ async function verifyPriorCiAdmin({
     );
   }
   const verifyReview = (raw) => {
-    const reviewResponse = parseGithubResponse(raw);
-    const review = reviewResponse.body?.data?.repository?.pullRequest;
-    requireEvidence(
-      reviewResponse.status === "200" &&
-        !reviewResponse.body.errors &&
-        review?.headRefOid === head &&
-        (review.reviewDecision === "APPROVED" ||
-          (!requireReviews && review.reviewDecision === null)),
-      "current enforced reviews must be satisfied; admin CI authority does not waive reviews",
-    );
-    if (requireThreads) {
-      requireEvidence(
-        review.reviewThreads?.pageInfo?.hasNextPage === false &&
-          Array.isArray(review.reviewThreads.nodes) &&
-          review.reviewThreads.nodes.every((thread) => thread.isResolved === true),
-        "required review threads must all be resolved (more than 100 threads require ordinary landing)",
-      );
-    }
+    verifyMergeReviews(policy, head, parseGithubResponse(raw));
   };
   if (!deferFinalAuthority) {
     verifyReview(reviewRaw);

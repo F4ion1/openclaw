@@ -670,6 +670,7 @@ exit "$status"
     confirmed: "false",
     merged: "",
     observed: "",
+    overrideFailingCi: "false",
   };
   function expectedDispatch(fields: Partial<typeof dispatchFields>) {
     return Object.values({ ...dispatchFields, ...fields })
@@ -695,6 +696,11 @@ exit "$status"
     main?: boolean;
     nested?: boolean;
   }>([
+    {
+      name: "maintainer-approved unrelated CI override",
+      args: ["merge-run", "123", "--override-failing-ci"],
+      fields: { overrideFailingCi: "true" },
+    },
     {
       name: "body relative to caller",
       args: ["merge-run", "123", "--body-file", "operator body.md"],
@@ -787,6 +793,17 @@ exit "$status"
       ["merge-run", "123", "--body-file", ""],
       ["merge-run", "123", "--body-file", "one", "--body-file", "two"],
       ["merge-run", "123", "--auto-merge", "--auto-merge"],
+      ["merge-run", "123", "--override-failing-ci", "--override-failing-ci"],
+      ["merge-run", "123", "--override-failing-ci", "--auto-merge"],
+      [
+        "merge-run",
+        "123",
+        "--override-failing-ci",
+        "--admin-evidence",
+        "proof.json",
+        "--confirmed-operator-admin",
+      ],
+      [...recoveryArgs, "--override-failing-ci"],
       ["merge-recover", "123", outcomeOid, "--body-file", "one"],
       ...[
         ["--admin-evidence", "proof.json"],

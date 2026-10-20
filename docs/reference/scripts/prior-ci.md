@@ -9,6 +9,10 @@ title: "Prior-CI admin admission"
 
 PR CI is the default broad proof. Do not rerun or re-push just for green. Fix real failures and read CI's published failure classification before attributing a red. The exception below still requires exact evidence and live authority.
 
+For maintainer-approved, definitely unrelated CI failures without a separate
+evidence file, use the [failing-CI override](/reference/scripts/merge-admission#maintainer-approved-failing-ci).
+The rest of this page describes the structured `--admin-evidence` alternative.
+
 The explicit `merge-run --admin-evidence <file> --confirmed-operator-admin` mode
 is a separate immediate-squash admission, not a fallback from auto/queue or a
 failed request. It verifies a prior successful CI attempt and its PR/head
