@@ -36,8 +36,6 @@ it("sanitizes terminal controls without flattening logical lines", () => {
       stdout: "recovery",
       stderr: " \t\u001b[31mstale\r\tfinal\tfield\u0007\u007f\u0085\nnext\u001b[0m\t \n",
     }),
-    "worktree setup",
-    120_000,
   );
   const detail = error.message.slice(error.message.indexOf(":\n") + 2);
   expect(detail).toBe("stderr: final\\tfield\nnext\nstdout: recovery");

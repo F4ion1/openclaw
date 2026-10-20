@@ -47,11 +47,9 @@ const execNode = (source: string, options?: RunExecOptions) =>
   runExec(process.execPath, ["-e", source], options);
 async function advanceTime(...steps: (number | "next")[]) {
   for (const step of steps) {
-    if (step === "next") {
-      await vi.advanceTimersToNextTimerAsync();
-    } else {
-      await vi.advanceTimersByTimeAsync(step);
-    }
+    await (step === "next"
+      ? vi.advanceTimersToNextTimerAsync()
+      : vi.advanceTimersByTimeAsync(step));
   }
 }
 
@@ -365,6 +363,7 @@ describe("runCommandBuffered", () => {
     { timeout: 5_000 },
     async ({ exitCode, escaped, timeoutMs }, { signal }) =>
       withTempDir("openclaw-exec-descendant-", async (dir) => {
+        const bounded = <T>(work: PromiseLike<T>) => withinTest(work, signal);
         const pidPath = path.join(dir, "descendant.pid");
         const termPath = path.join(dir, "sigterm");
         // Stay quiet so inherited-pipe release cannot kill the descendant through EPIPE.
@@ -404,16 +403,12 @@ describe("runCommandBuffered", () => {
           if (!parent) {
             throw new Error("command did not expose a child process");
           }
-          expect(
-            await withinTest(
-              awaitGateBeforeSettlement(
-                once(parent, "exit", { signal }),
-                command,
-                "command settled before root exit",
-              ),
-              signal,
-            ),
-          ).toEqual([exitCode, null]);
+          const rootExit = awaitGateBeforeSettlement(
+            once(parent, "exit", { signal }),
+            command,
+            "command settled before root exit",
+          );
+          expect(await bounded(rootExit)).toEqual([exitCode, null]);
           descendantPid = await readPidFile(pidPath);
           expect(isPidAlive(descendantPid)).toBe(true);
           expect(settled).toBe(false);
@@ -434,8 +429,8 @@ describe("runCommandBuffered", () => {
             await advanceTime(timeoutMs - 101, "next", 100, "next", 100);
             // Give Node/Bun pipe I/O its poll turn before release.
             await vi.advanceTimersByTimeAsync(1);
-            await withinTest(closed, signal);
-            expect(await withinTest(command, signal)).toMatchObject({
+            await bounded(closed);
+            expect(await bounded(command)).toMatchObject({
               code: null,
               termination: "timeout",
             });
@@ -449,14 +444,13 @@ describe("runCommandBuffered", () => {
             await advanceTime(50, "next", 100, "next");
           }
           // The durable marker precedes the receipt and arbitrates completion races.
-          await withinTest(
+          await bounded(
             Promise.race([
               receipts.waitFor(termPath, "handled"),
               command.then(() => {
                 expect(existsSync(termPath)).toBe(true);
               }),
             ]),
-            signal,
           );
           expect(existsSync(termPath)).toBe(true);
           expect(isPidAlive(descendantPid)).toBe(true);
@@ -465,14 +459,13 @@ describe("runCommandBuffered", () => {
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           // Force delivery now has a separate bounded exit-observation phase.
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
-          expect(await withinTest(command, signal)).toMatchObject(
+          expect(await bounded(command)).toMatchObject(
             exitCode === 0
               ? { code: null, termination: "timeout" }
               : { code: exitCode, termination: "exit" },
           );
           vi.useRealTimers();
           await waitForDead(descendantPid, signal);
-          expect(isPidAlive(descendantPid)).toBe(false);
         } finally {
           try {
             // Recover ownership even after an early root/IPC failure.
@@ -504,7 +497,6 @@ describe("runCommandBuffered", () => {
           if (descendantPid !== undefined) {
             // Escaped descendants outlive the root handle; no owner exposes their exit event.
             await waitForDead(descendantPid, signal);
-            expect(isPidAlive(descendantPid)).toBe(false);
           }
         }
       }),
@@ -545,22 +537,17 @@ describe("runExec", () => {
         timeoutMs: 3_000,
       },
     );
-    expect(stdout).toBe("input");
-    expect(stderr).toBe("base");
+    expect({ stdout, stderr }).toEqual({ stdout: "input", stderr: "base" });
   });
 
   it("supports an inherited file descriptor as stdin", async () => {
     const descriptor = openSync(fileURLToPath(import.meta.url), "r");
-    let running: ReturnType<typeof runExec>;
-    try {
-      running = execNode("process.stdin.pipe(process.stdout)", {
-        stdinFileDescriptor: descriptor,
-        timeoutMs: 3_000,
-      });
-    } finally {
-      // The child must own stdin before control returns to the caller.
-      closeSync(descriptor);
-    }
+    const running = execNode("process.stdin.pipe(process.stdout)", {
+      stdinFileDescriptor: descriptor,
+      timeoutMs: 3_000,
+    });
+    // runExec is async; even startup errors reject, so close before awaiting it.
+    closeSync(descriptor);
     const { stdout } = await running;
     expect(stdout).toContain("// Exec tests cover command execution");
   });
@@ -585,40 +572,38 @@ describe("runExec", () => {
   });
 });
 
-describe("attachChildProcessBridge", () => {
-  it("forwards SIGTERM until child exit and detaches only after close", () => {
-    const beforeSigterm = new Set(process.listeners("SIGTERM"));
-    const child = new EventEmitter() as EventEmitter & ChildProcess;
-    const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
-    child.kill = kill as ChildProcess["kill"];
-    const observedSignals: NodeJS.Signals[] = [];
+it("attachChildProcessBridge forwards SIGTERM until exit and detaches after close", () => {
+  const beforeSigterm = new Set(process.listeners("SIGTERM"));
+  const child = new EventEmitter() as EventEmitter & ChildProcess;
+  const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
+  child.kill = kill as ChildProcess["kill"];
+  const observedSignals: NodeJS.Signals[] = [];
 
-    const { detach } = attachChildProcessBridge(child, (signal) => observedSignals.push(signal));
-    try {
-      const addedSigterm = process
-        .listeners("SIGTERM")
-        .find((listener) => !beforeSigterm.has(listener));
-      if (!addedSigterm) {
-        throw new Error("expected SIGTERM listener");
-      }
-
-      addedSigterm("SIGTERM");
-      expect(observedSignals).toEqual(["SIGTERM"]);
-      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-
-      child.emit("exit", 0, null);
-      expect(process.listeners("SIGTERM")).toContain(addedSigterm);
-      addedSigterm("SIGTERM");
-      expect(observedSignals).toEqual(["SIGTERM"]);
-      expect(kill).toHaveBeenCalledOnce();
-
-      child.emit("close", 0, null);
-      expect(process.listeners("SIGTERM")).not.toContain(addedSigterm);
-      expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
-    } finally {
-      detach();
+  const { detach } = attachChildProcessBridge(child, (signal) => observedSignals.push(signal));
+  try {
+    const addedSigterm = process
+      .listeners("SIGTERM")
+      .find((listener) => !beforeSigterm.has(listener));
+    if (!addedSigterm) {
+      throw new Error("expected SIGTERM listener");
     }
-  });
+
+    addedSigterm("SIGTERM");
+    expect(observedSignals).toEqual(["SIGTERM"]);
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+
+    child.emit("exit", 0, null);
+    expect(process.listeners("SIGTERM")).toContain(addedSigterm);
+    addedSigterm("SIGTERM");
+    expect(observedSignals).toEqual(["SIGTERM"]);
+    expect(kill).toHaveBeenCalledOnce();
+
+    child.emit("close", 0, null);
+    expect(process.listeners("SIGTERM")).not.toContain(addedSigterm);
+    expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
+  } finally {
+    detach();
+  }
 });
 
 describe("package manager runtime", () => {
@@ -699,9 +684,11 @@ describe("package manager runtime", () => {
         env,
         platform: "win32",
       });
-      expect(result.Path).toBe("C:\\private;C:\\system");
+      expect(result).toMatchObject({
+        Path: "C:\\private;C:\\system",
+        npm_config_node: "operator-choice",
+      });
       expect(result.PATH).toBeUndefined();
-      expect(result.npm_config_node).toBe("operator-choice");
       expect(env.Path).toBe("C:\\system;C:\\private");
     },
   );
@@ -709,7 +696,6 @@ describe("package manager runtime", () => {
   it("keeps the caller's runtime selection for plain npm", () => {
     const env = { PATH: "/selected/bin:/system/bin", npm_config_node: "operator-choice" };
     const result = resolveCommandEnv({ argv: ["npm", "install"], baseEnv: {}, env });
-    expect(result.PATH).toBe(env.PATH);
-    expect(result.npm_config_node).toBe(env.npm_config_node);
+    expect(result).toMatchObject(env);
   });
 });

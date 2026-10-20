@@ -1,6 +1,4 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { requireNodeTool } from "../../test/helpers/node-toolchain.js";
@@ -19,10 +17,7 @@ it.skipIf(process.platform !== "linux")(
     const loader = execUrl.pathname.endsWith(".ts")
       ? new URL("../../scripts/tsx.mjs", import.meta.url).href
       : undefined;
-    const driver = path.join(directory, "driver.mjs");
-    await writeFile(
-      driver,
-      `
+    const driver = `
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -97,10 +92,10 @@ try {
     const remaining = existsSync(descendantPath) ? readFileSync(descendantPath, "utf8") : undefined;
     const fields = remaining?.slice(remaining.lastIndexOf(")") + 2).split(" ");
     try {
-      assert.equal(pids.ready, true, "descendant must be ready before root exit");
-      assert.equal(failure, undefined, mode);
-      assert.equal(mode === "runner" ? result?.code : result?.exitCode, 0, mode);
-      assert.equal(result?.signal ?? null, null, mode);
+      assert.deepEqual({ ready: pids.ready, failure,
+        code: mode === "runner" ? result?.code : result?.exitCode,
+        signal: result?.signal ?? null },
+        { ready: true, failure: undefined, code: 0, signal: null }, mode);
       if (mode === "runner") assert.equal(result?.cleanup, "cooperative");
       assert.equal(fields, undefined, mode + ": descendant must be reaped");
       assert.equal(existsSync(marker), mode === "runner", mode + ": cooperative stop");
@@ -137,13 +132,12 @@ try {
   if (unrelated.exitCode === null && unrelated.signalCode === null) unrelated.kill("SIGKILL");
   await unrelatedExit;
 }
-`,
+`;
+    const { stdout } = await promisify(execFile)(
+      requireNodeTool("node"),
+      ["--input-type=module", "-e", driver],
+      { timeout: 15_000 },
     );
-    const { stdout } = await promisify(execFile)(requireNodeTool("node"), [driver], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      timeout: 15_000,
-    });
     expect(stdout).toBe("reaped");
   },
 );

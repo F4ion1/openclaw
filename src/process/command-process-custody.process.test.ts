@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
@@ -112,10 +113,7 @@ it.skipIf(process.platform === "win32")(
           },
         },
       );
-      expect(ready, result.stderr).toBeDefined();
-      if (!ready) {
-        throw new Error("Custody fixture did not reach its busy operation");
-      }
+      assert.ok(ready, result.stderr || "Custody fixture did not reach its busy operation");
       expect(result.cleanup).toBe("forced");
       expect(isChildProcessTreeAlive({ pid: ready.root })).toBe(false);
       expect(readReceipt()).toEqual({ state: "spawned", identity: ready.identity });

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import process from "node:process";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -10,6 +9,7 @@ import { runCommandWithTimeout, type CommandOptions } from "./exec.js";
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const digestStdin = `const input=require('node:fs').readFileSync(0);
 process.stdout.write(require('node:crypto').createHash('sha256').update(input).digest('hex'));`;
+const spawnMarker = "require('node:fs').writeFileSync(process.argv[1], 'spawned')";
 
 function inputFixture() {
   const file = path.join(temporary.make("openclaw-command-stdin-"), "input");
@@ -28,14 +28,9 @@ function inputFixture() {
 
 it("inherits binary file input before the caller closes its descriptor", async () => {
   const { descriptor, digest, run } = inputFixture();
-  let running: ReturnType<typeof runCommandWithTimeout>;
-  try {
-    running = run();
-  } finally {
-    fs.closeSync(descriptor);
-  }
-  const result = await running;
-  expect(result).toMatchObject({ code: 0, termination: "exit", stdout: digest, stderr: "" });
+  const running = run();
+  fs.closeSync(descriptor);
+  expect(await running).toMatchObject({ code: 0, termination: "exit", stdout: digest, stderr: "" });
 });
 
 it("settles cancellation without closing the caller's file descriptor", async () => {
@@ -46,11 +41,9 @@ it("settles cancellation without closing the caller's file descriptor", async ()
     const result = await run(`setInterval(()=>{},1000);${digestStdin}`, {
       signal: controller.signal,
       onOutputChunk: (chunk, stream) => {
-        if (stream === "stdout") {
-          outputBytes += chunk.length;
-          if (outputBytes === digest.length) {
-            controller.abort();
-          }
+        outputBytes += stream === "stdout" ? chunk.length : 0;
+        if (outputBytes === digest.length) {
+          controller.abort();
         }
       },
     });
@@ -72,18 +65,12 @@ it.each<[CommandOptions, string]>([
   [{ stdinFileDescriptor: -1 }, "nonnegative integer"],
   [{ stdinFileDescriptor: 0.5 }, "nonnegative integer"],
 ])("rejects ambiguous or invalid file input before spawning: %j", async (options, message) => {
-  const root = temporary.make("openclaw-command-stdin-rejected-");
-  const marker = path.join(root, "spawned");
+  const marker = path.join(temporary.make("openclaw-command-stdin-rejected-"), "spawned");
   await expect(
-    runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        "require('node:fs').writeFileSync(process.argv[1], 'spawned')",
-        marker,
-      ],
-      { ...options, timeoutMs: 5_000 },
-    ),
+    runCommandWithTimeout([process.execPath, "-e", spawnMarker, marker], {
+      ...options,
+      timeoutMs: 5_000,
+    }),
   ).rejects.toThrow(message);
   expect(fs.existsSync(marker)).toBe(false);
 });
