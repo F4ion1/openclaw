@@ -47,7 +47,10 @@ import {
   summarizeColdLoadTrace,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
-import { installWidgetReadiness } from "./lib/control-ui-dashboard-probe.ts";
+import {
+  installRotatingBoardTickets,
+  installWidgetReadiness,
+} from "./lib/control-ui-dashboard-probe.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 
@@ -221,6 +224,7 @@ const { values } = parseArgs({
     "chat-dashboard-route": { type: "boolean", default: false },
     "closed-menu-members": { type: "boolean", default: false },
     "capture-ms": { type: "string", default: "0" },
+    "screenshot-at-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
     port: { type: "string" },
@@ -303,6 +307,7 @@ if (values["chat-dashboard-route"] && face !== "dashboard") {
 }
 const frameGapMs = Number(values["frame-gap-ms"]);
 const captureMs = Number(values["capture-ms"]);
+const screenshotAtMs = Number(values["screenshot-at-ms"]);
 const transcriptMessages =
   values["transcript-messages"] === undefined ? undefined : Number(values["transcript-messages"]);
 const sessionEventDurationMs = Number(values["session-event-duration-ms"]);
@@ -338,6 +343,8 @@ if (
   frameGapMs < 0 ||
   !Number.isFinite(captureMs) ||
   captureMs < 0 ||
+  !Number.isFinite(screenshotAtMs) ||
+  screenshotAtMs < 0 ||
   (transcriptMessages !== undefined &&
     (!Number.isSafeInteger(transcriptMessages) || transcriptMessages < 1)) ||
   !Number.isSafeInteger(sessionEventDurationMs) ||
@@ -529,8 +536,12 @@ try {
     ...fixture.assets,
     ...prepared.assets,
   ]);
-  await page.route("**/__openclaw__/**", (route) => {
-    const asset = assets.get(new URL(route.request().url()).pathname);
+  await page.route("**/__openclaw__/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    const asset = assets.get(pathname);
+    if (asset && values["dashboard-widget"] && pathname.startsWith("/__openclaw__/board/")) {
+      await new Promise((resolve) => setTimeout(resolve, latencyMs));
+    }
     return asset
       ? route.fulfill({
           status: 200,
@@ -588,8 +599,11 @@ try {
     },
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
+  const boardTickets = values["dashboard-widget"]
+    ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
+    : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, methodLatencyMs, connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); if (window !== window.top) return; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, methodLatencyMs, connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   const url = values["full-uuid-route"]
     ? new URL(
@@ -797,6 +811,12 @@ try {
     }
     sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
     await page.reload({ waitUntil: "domcontentloaded" });
+    if (screenshotAtMs) {
+      await page.waitForFunction((at) => performance.now() >= at, screenshotAtMs);
+      await page.screenshot({
+        path: path.join(artifactDir, `run-${run + 1}.at-${screenshotAtMs}.png`),
+      });
+    }
     await settle();
     if (captureMs) {
       await page.waitForFunction((duration) => performance.now() >= duration, captureMs);
@@ -1415,6 +1435,7 @@ try {
         fullUuidRoute: values["full-uuid-route"],
         frameGapMs,
         captureMs,
+        screenshotAtMs,
         sessionEventDurationMs,
         sessionEventAncestorRefs: values["session-event-ancestor-refs"],
         fixtureNowMs,

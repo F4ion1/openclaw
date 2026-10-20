@@ -661,6 +661,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   }
   return {
     scenario,
+    board,
     selectedSessionKey,
     pinnedKeys,
     sidebarEntries,

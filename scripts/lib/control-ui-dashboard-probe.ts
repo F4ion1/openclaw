@@ -1,9 +1,52 @@
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
+import type { BoardSnapshot } from "../../ui/src/lib/board/types.ts";
+import type { ControlUiMockGateway } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
+
+/** Fresh replies renew tickets without changing the saved document generation. */
+export function installRotatingBoardTickets(
+  snapshot: BoardSnapshot,
+  gateway: Pick<ControlUiMockGateway, "setRequestHandler">,
+) {
+  let generation = 0;
+  gateway.setRequestHandler("board.get", ({ respond }) => {
+    const board = structuredClone(snapshot);
+    for (const widget of board.widgets) {
+      if (widget.viewTicket && widget.frameUrl) {
+        widget.viewTicket = `fixture-ticket-${performance.timeOrigin}-${++generation}`;
+        const url = new URL(widget.frameUrl);
+        url.searchParams.set("bt", widget.viewTicket);
+        widget.frameUrl = url.href;
+      }
+    }
+    respond(board);
+  });
+}
 
 /** Serialized before app modules; all timestamps use the host document's clock. */
 export function installWidgetReadiness() {
+  if (window !== window.top) {
+    if (location.pathname === "/mcp-app-sandbox") {
+      window.addEventListener("message", (event) => {
+        if (
+          event.source === parent &&
+          event.data?.method === "ui/notifications/sandbox-resource-ready"
+        ) {
+          parent.postMessage({ type: "openclaw:bench-document-delivered" }, "*");
+        }
+      });
+    }
+    return;
+  }
   const ready = new Map<string, number>();
   const boardFrames = new Map<HTMLIFrameElement, number>();
+  const frameEvents: Array<{ id: number; stage: string; at: number; active: unknown }> = [];
+  const recordFrame = (frame: HTMLIFrameElement, stage: string) =>
+    frameEvents.push({
+      id: [...boardFrames.keys()].indexOf(frame) + 1,
+      stage,
+      at: performance.now(),
+      active: Reflect.get(frame.closest("openclaw-board-widget-cell") ?? {}, "active"),
+    });
   let helloObserverAttachedMs: number | null = null;
   let helloPublishedMs: number | null = null;
   let helloHandledMs: number | null = null;
@@ -79,13 +122,23 @@ export function installWidgetReadiness() {
       return;
     }
     boardFrames.set(frame, performance.now());
+    recordFrame(frame, "inserted");
     stages.iframeInsertedMs ??= performance.now();
     frame.addEventListener("load", () => {
+      recordFrame(frame, "load");
       stages.sandboxDocLoadedMs ??= performance.now();
     });
   };
   new MutationObserver((records) => {
     for (const record of records) {
+      if (
+        record.type === "attributes" &&
+        record.target instanceof HTMLIFrameElement &&
+        boardFrames.has(record.target) &&
+        !record.target.style.opacity
+      ) {
+        recordFrame(record.target, "revealed");
+      }
       for (const node of record.addedNodes) {
         if (node instanceof HTMLIFrameElement) {
           observeFrame(node);
@@ -98,7 +151,12 @@ export function installWidgetReadiness() {
         }
       }
     }
-  }).observe(document, { childList: true, subtree: true });
+  }).observe(document, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["style"],
+  });
   window.addEventListener("message", (event) => {
     const method = event.data?.method;
     const type = event.data?.type;
@@ -107,6 +165,7 @@ export function installWidgetReadiness() {
       method !== "ui/notifications/initialized" &&
       method !== "ui/notifications/sandbox-proxy-ready" &&
       type !== "openclaw:widget-size" &&
+      type !== "openclaw:bench-document-delivered" &&
       type !== "openclaw:bench-dashboard-ready"
     ) {
       return;
@@ -116,6 +175,7 @@ export function installWidgetReadiness() {
     );
     if (boardFrame) {
       const at = performance.now();
+      recordFrame(boardFrame, method ?? type);
       if (method === "ui/notifications/sandbox-proxy-ready") {
         stages.sandboxProxyReadyMs ??= at;
       } else if (method === "ui/notifications/sandbox-resource-loaded") {
@@ -177,6 +237,7 @@ export function installWidgetReadiness() {
         boardGetResponseMs: response("board.get", "start"),
         discoverResponseMs: response("mcp.app.discover", "start"),
         ...stages,
+        frameEvents,
         iframeInsertions: boardFrames.size,
         boardFetchCount: boardFetches.length,
         boardFetchStartMs: boardFetches[0]?.startMs ?? null,

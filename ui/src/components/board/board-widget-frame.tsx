@@ -240,6 +240,17 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     return !snapshot || isGatewayAvailable(snapshot);
   }
 
+  function documentAvailable(): boolean {
+    const snapshot = host.context()?.gateway.snapshot;
+    // A restored ticket authorizes HTTP independently of the first socket handshake.
+    return (
+      gatewayAvailable() ||
+      (snapshot?.phase === "connecting" &&
+        !snapshot.hello &&
+        (remainingBoardWidgetTicketTtlMs(host.widget() ?? {}) ?? 0) > 0)
+    );
+  }
+
   function suspend(): void {
     stopWork();
     sandboxHost?.setActive(false);
@@ -334,6 +345,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       bridgeEnabled: host.bridgeEnabled?.() ?? true,
       // A lifecycle pause does not retire this authenticated connection or its ticket.
       connected: !context || context.gateway.snapshot.phase === "connected",
+      documentActive: documentAvailable(),
       sandboxOrigin,
       sandboxUrl: frame.src,
       sourceOrigin: resolveGatewayHttpOrigin(
@@ -433,7 +445,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     if (!options) {
       return undefined;
     }
-    const active = host.active() && gatewayAvailable();
+    const active = host.active() && documentAvailable();
     // Pause before updating options, then resume only under current availability.
     // Reuse the existing inactive lifecycle so pending work is fenced without
     // requiring a new authorization ticket after suspension is canceled.
@@ -482,7 +494,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     activityChanged(): void {
       if (host.active()) {
         api.connect();
-        sandboxHost?.setActive(gatewayAvailable());
+        sandboxHost?.setActive(documentAvailable());
         // The inner document may have finished loading while this tab was hidden.
         const frame = frameElement;
         if (frame?.isConnected) {

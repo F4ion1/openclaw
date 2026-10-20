@@ -71,6 +71,7 @@ import {
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
@@ -99,47 +100,47 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     if (!store) {
       return;
     }
-    const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
+    const target = { sessionKey };
+    const cache = state.chatMessagesBySession;
+    const cacheKey = resolveChatSnapshotKey(state, target);
     const requests = chatHistoryRequests(state);
-    const reading = store.read(cacheKey);
+    const isCurrent = () =>
+      requests.initialSnapshotHydration === hydration &&
+      this.state === state &&
+      this.ownsChatSnapshot(target) &&
+      areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
+      resolveChatSnapshotKey(state, target) === cacheKey;
+    const reading = store.read(cacheKey, (storedBoard) => {
+      if (!isCurrent()) {
+        return;
+      }
+      const cachedBoard = readChatSessionSnapshot(cache, state, target)?.board;
+      const board = cachedBoard === undefined ? storedBoard : cachedBoard;
+      if (board) {
+        this.resolveBoardProvider();
+        this.boardProviderLease?.restoreSnapshot(board.snapshot, board.receivedAtMs);
+      }
+    });
     const hydration: InitialChatSnapshotHydration = {
       sessionKey,
       connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
         .then((storedSnapshot) => {
-          if (
-            requests.initialSnapshotHydration !== hydration ||
-            this.state !== state ||
-            !this.ownsChatSnapshot({ sessionKey }) ||
-            !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
-          ) {
+          if (!isCurrent()) {
             return hydration.complete?.();
           }
-          const snapshot = mergeStoredChatSessionSnapshot(
-            state.chatMessagesBySession,
-            state,
-            { sessionKey },
-            storedSnapshot,
-          );
-          if (snapshot?.board) {
-            this.boardProviderLease?.restoreSnapshot(
-              snapshot.board.snapshot,
-              snapshot.board.receivedAtMs,
-            );
-          }
+          const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
           if (requests.acceptedHistory) {
             return hydration.complete?.();
           }
           // A sibling can fill the shared cache while this pane still needs its
           // own transcript. Adopt those messages before revalidating their cursor.
-          const cache = state.chatMessagesBySession;
           if (!snapshot) {
             return hydration.complete?.();
           }
           applyChatCacheSnapshot(state, snapshot);
           const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(cache, state, { sessionKey }, mergedSnapshot);
+          cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
           if (snapshot.progressCard !== undefined) {
             const target = this.resolveChatReadTarget();
             if (target) {

@@ -52,6 +52,7 @@ function hostOptions(
   return {
     frame,
     widget: widget(),
+    documentActive: true,
     sandboxOrigin: "https://sandbox.example",
     sandboxUrl: SANDBOX_URL,
     sourceOrigin: "https://gateway.example",
@@ -621,7 +622,7 @@ describe("BoardWidgetSandboxHost", () => {
       );
       await vi.waitFor(() => expect(oldClient.request).toHaveBeenCalledOnce());
       if (change === "reconnected") {
-        host.update({ ...baseOptions, connected: false });
+        host.update({ ...baseOptions, connected: false, documentActive: false });
       }
       host.update({ ...baseOptions, client: newClient, connected: true });
       await vi.waitFor(() =>
