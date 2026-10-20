@@ -313,6 +313,14 @@ function openFile(
                   typeof error.details === "object"
                     ? (error.details as { type?: unknown })
                     : null;
+                if (
+                  details?.type === "session_file_source_changed" &&
+                  viewingSession &&
+                  isCurrentSessionWorkspace(state, workspace)
+                ) {
+                  // Reopened browser rows must use the current root, without replacing this draft.
+                  loadSessionWorkspace(state, workspace, true);
+                }
                 if (details?.type === "session_file_conflict") {
                   return {
                     ok: false as const,
