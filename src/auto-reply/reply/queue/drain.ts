@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { compareChannelAdmissionParticipants } from "../../../channels/message-access/admission-evidence.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
@@ -25,6 +24,7 @@ import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-tr
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
 import { collectRuntimeMetadata, resolveFollowupReplyAnchor } from "./delivery-context.js";
+import { runOutsideAdmittedGenerationScopes } from "./drain-admission-scope.js";
 import {
   buildCollectTranscriptInput,
   collectQueuedPromptMedia,
@@ -304,7 +304,7 @@ export function rememberFollowupDrainCallback(
       // after the request that triggered the drain has closed its own scope.
       await runWithGatewayDetachedWorkContinuation(
         () =>
-          runOutsidePreparedModelRuntimePluginGenerationScope(() => {
+          runOutsideAdmittedGenerationScopes(() => {
             entered = true;
             // Consume this request; a kick during execution re-enables dispatch.
             mailbox.dispatchEnabled = false;
