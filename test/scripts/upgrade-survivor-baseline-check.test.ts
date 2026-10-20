@@ -5,6 +5,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const scenarios = ["legacy-operator-state", "base"];
+const read = (file: string) => readFileSync(file, "utf8");
+const lines = (file: string) => read(file).trim().split("\n");
+const baseline = (version: number, status: string) => ({
+  baseline: `openclaw@2026.8.${version}`,
+  status,
+  scenarios,
+});
 
 function runFixture(
   failure: "version" | "runtime" | "install" | "launch",
@@ -60,7 +68,7 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
     result,
     evidence,
     installs,
-    report: JSON.parse(readFileSync(path.join(evidence, "summary.json"), "utf8")),
+    report: JSON.parse(read(path.join(evidence, "summary.json"))),
   };
 }
 
@@ -83,7 +91,7 @@ describe("published baseline startup admission", () => {
       ["openclaw@2026.9.9", "usable"],
       ["openclaw@2026.9.7", "usable"],
     ]);
-    expect(readFileSync(fixture.installs, "utf8").trim().split("\n")).toHaveLength(3);
+    expect(lines(fixture.installs)).toHaveLength(3);
   });
 
   it.each(["version", "runtime"] as const)(
@@ -93,43 +101,27 @@ describe("published baseline startup admission", () => {
       expect(fixture.result.status, fixture.result.stderr).toBe(0);
       const groups = JSON.parse(fixture.result.stdout);
       expect(groups).toEqual([
-        {
+        ...scenarios.map((scenario, index) => ({
           docker_lanes: "published-upgrade-survivor",
-          label: "published-upgrade-survivor-2026.8.34-scenarios-1",
+          label: `published-upgrade-survivor-2026.8.34-scenarios-${index + 1}`,
           published_upgrade_survivor_baselines: "openclaw@2026.8.34",
-          published_upgrade_survivor_scenarios: "legacy-operator-state",
+          published_upgrade_survivor_scenarios: scenario,
           timeout_minutes: 90,
-        },
-        {
-          docker_lanes: "published-upgrade-survivor",
-          label: "published-upgrade-survivor-2026.8.34-scenarios-2",
-          published_upgrade_survivor_baselines: "openclaw@2026.8.34",
-          published_upgrade_survivor_scenarios: "base",
-          timeout_minutes: 90,
-        },
+        })),
         { docker_lanes: "onboard", label: "onboard" },
       ]);
       expect(fixture.report.baselines).toHaveLength(2);
       expect(fixture.report.baselines).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            baseline: "openclaw@2026.8.33",
-            status: "skipped",
+            ...baseline(33, "skipped"),
             reason: expect.stringContaining("unusable published baseline"),
             error: expect.stringContaining("Cannot find package fixture-runtime"),
-            scenarios: ["legacy-operator-state", "base"],
           }),
-          expect.objectContaining({
-            baseline: "openclaw@2026.8.34",
-            status: "usable",
-            scenarios: ["legacy-operator-state", "base"],
-          }),
+          expect.objectContaining(baseline(34, "usable")),
         ]),
       );
-      const installs = readFileSync(fixture.installs, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      const installs = lines(fixture.installs).map((line) => JSON.parse(line));
       expect(installs).toHaveLength(2);
       for (const install of installs) {
         expect(install.args).toEqual([
@@ -143,7 +135,7 @@ describe("published baseline startup admission", () => {
         ]);
         expect(() => readFileSync(path.join(install.prefix, "bin", "openclaw"))).toThrow();
       }
-      const summary = readFileSync(path.join(fixture.evidence, "summary.md"), "utf8");
+      const summary = read(path.join(fixture.evidence, "summary.md"));
       expect(summary).toContain("skipped");
       expect(summary).toContain("Cannot find package fixture-runtime");
       expect(summary).not.toContain("passed");

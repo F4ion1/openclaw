@@ -13,6 +13,12 @@ const helper = resolve("scripts/e2e/lib/upgrade-survivor/backup-rollback.mjs");
 const runner = resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
 const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+const transcriptRelative = "agents/main/sessions/upgrade-restored-index-history.jsonl";
+const agentRelative = "agents/main/agent/openclaw-agent.sqlite";
+const legacyRelative = "agents/ops/sessions/sessions.json";
+function expectSuccess(result: ReturnType<typeof spawnSync>) {
+  expect(result.status, String(result.stderr)).toBe(0);
+}
 
 // A subprocess fixture owns only the published CLI boundary. The observer runs
 // unmodified against real SQLite files; Docker supplies the actual release CLI.
@@ -101,11 +107,9 @@ function fixture(withTranscript = false) {
   const artifactRoot = join(root, "artifacts");
   mkdirSync(dirname(entry), { recursive: true });
   mkdirSync(artifactRoot);
-  const agentRelative = "agents/main/agent/openclaw-agent.sqlite";
-  const legacyRelative = "agents/ops/sessions/sessions.json";
-  mkdirSync(dirname(join(state, agentRelative)), { recursive: true });
-  mkdirSync(dirname(join(state, legacyRelative)), { recursive: true });
-  mkdirSync(join(state, "state"));
+  for (const relative of [dirname(agentRelative), dirname(legacyRelative), "state"]) {
+    mkdirSync(join(state, relative), { recursive: true });
+  }
   writeJson(join(state, legacyRelative), { "agent:ops:main": { sessionId: "legacy-session" } });
   const agent = new DatabaseSync(join(state, agentRelative));
   agent.exec(`
@@ -118,7 +122,6 @@ function fixture(withTranscript = false) {
     INSERT INTO transcript_events VALUES ('session-one', 1, '{"id":"user-one","text":"hello"}');
     INSERT INTO transcript_events VALUES ('session-one', 2, '{"id":"assistant-one","text":"hello back"}');
   `);
-  const transcriptRelative = "agents/main/sessions/upgrade-restored-index-history.jsonl";
   if (withTranscript) {
     const history = [
       { type: "session", id: "upgrade-restored-index-history", version: 3 },
@@ -207,18 +210,18 @@ function fixture(withTranscript = false) {
       timeout: 15_000,
       env: { ...process.env, OPENCLAW_STATE_DIR: state },
     });
+  const capture = () => run("capture", beforeFile, packageRoot, entry, runtimeRoot, resultFile);
   return {
-    root,
     state,
     packageRoot,
     entry,
-    runtimeRoot,
     resultFile,
     afterFile,
     beforeFile,
     events,
     mode: (mode: string) => writeJson(controlsFile, { ...controls, mode }),
-    capture: () => run("capture", beforeFile, packageRoot, entry, runtimeRoot, resultFile),
+    capture,
+    captured: () => expectSuccess(capture()),
     verify: () => run("verify", resultFile, afterFile),
     run,
   };
@@ -229,12 +232,10 @@ describe("published backup rollback proof", () => {
     "proves restored history and schema with omitted raw transcript=%s",
     (withTranscript) => {
       const f = fixture(withTranscript);
-      const capture = f.capture();
-      expect(capture.status, capture.stderr).toBe(0);
+      f.captured();
       const before = readJson(f.resultFile);
       expect(before.status).toBe("captured");
-      const restored = f.verify();
-      expect(restored.status, restored.stderr).toBe(0);
+      expectSuccess(f.verify());
       const proof = readJson(f.resultFile);
       expect(proof).toMatchObject({
         status: "passed",
@@ -251,7 +252,7 @@ describe("published backup rollback proof", () => {
         expect(before.backupCreate.skippedVolatileCount).toBe(1);
         expect(before.omittedRawTranscripts).toMatchObject([
           {
-            relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
+            relative: transcriptRelative,
             canonicalEventCount: 2,
             reason: "published-2026.9.4-volatile-transcript",
           },
@@ -278,9 +279,7 @@ describe("published backup rollback proof", () => {
       expect(commands[1].state).toBe(commands[2].state);
       expect(commands[2].state).toBe(commands[3].state);
       expect(commands[1].state).not.toBe(f.state);
-      const source = new DatabaseSync(join(f.state, "agents/main/agent/openclaw-agent.sqlite"), {
-        readOnly: true,
-      });
+      const source = new DatabaseSync(join(f.state, agentRelative), { readOnly: true });
       try {
         expect(source.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
         expect(source.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()?.count).toBe(
@@ -304,7 +303,7 @@ describe("published backup rollback proof", () => {
       f.mode(mode);
     }
     if (mode === "changed-history") {
-      const db = new DatabaseSync(join(f.state, "agents/main/agent/openclaw-agent.sqlite"));
+      const db = new DatabaseSync(join(f.state, agentRelative));
       db.exec(
         "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'upgrade-restored-index-history' AND seq = 1",
       );
@@ -320,7 +319,7 @@ describe("published backup rollback proof", () => {
         file.relative = "agents/main/sessions/unrelated.jsonl";
         writeFileSync(
           join(f.state, file.relative),
-          readFileSync(join(f.state, "agents/main/sessions/upgrade-restored-index-history.jsonl")),
+          readFileSync(join(f.state, transcriptRelative)),
         );
         f.mode("omit-unrelated");
       }
@@ -355,8 +354,7 @@ describe("published backup rollback proof", () => {
     if (mode === "lost-transcript") {
       f.mode("retained-transcript");
     }
-    const capture = f.capture();
-    expect(capture.status, capture.stderr).toBe(0);
+    f.captured();
     if (mode === "lost-transcript") {
       expect(readJson(f.resultFile).omittedRawTranscripts).toEqual([]);
     }
@@ -371,8 +369,7 @@ describe("published backup rollback proof", () => {
     "rejects changed %s before invoking restore",
     (changed) => {
       const f = fixture();
-      const capture = f.capture();
-      expect(capture.status, capture.stderr).toBe(0);
+      f.captured();
       if (changed === "archive") {
         writeFileSync(readJson(f.resultFile).archive.path, "replacement");
       }
@@ -400,7 +397,7 @@ describe("published backup rollback proof", () => {
     const version = "2026.9.4-beta.1";
     const f = fixture();
     const result = f.run("eligibility", version, f.resultFile);
-    expect(result.status, result.stderr).toBe(0);
+    expectSuccess(result);
     expect(readJson(f.resultFile)).toMatchObject({
       status: "not-applicable",
       baselineVersion: version,
@@ -465,27 +462,17 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
         },
       });
       const phases = readFileSync(join(root, "events"), "utf8").trim().split("\n");
-      expect(phases.indexOf("capture-backup-rollback")).toBeGreaterThan(
-        phases.indexOf("seed-legacy-operator-gateway"),
-      );
-      expect(phases.indexOf("capture-backup-rollback")).toBeLessThan(
-        phases.indexOf("seed-formerly-bundled-plugin"),
-      );
-      expect(phases.indexOf("capture-backup-rollback")).toBeLessThan(
-        phases.indexOf("update-candidate"),
-      );
-      expect(phases.indexOf("assert-candidate-schemas")).toBeLessThan(
-        phases.indexOf("verify-backup-rollback"),
-      );
-      expect(phases.indexOf("legacy-operator-doctor-clean")).toBeLessThan(
-        phases.indexOf("verify-backup-rollback"),
-      );
-      expect(phases.indexOf("formerly-bundled-doctor-joined")).toBeGreaterThan(
-        phases.indexOf("legacy-operator-doctor-clean"),
-      );
-      expect(phases.indexOf("formerly-bundled-doctor-joined")).toBeLessThan(
-        phases.indexOf("verify-backup-rollback"),
-      );
+      const before = (first: string, second: string) =>
+        expect(phases.indexOf(first), `${first} before ${second}`).toBeLessThan(
+          phases.indexOf(second),
+        );
+      before("seed-legacy-operator-gateway", "capture-backup-rollback");
+      before("capture-backup-rollback", "seed-formerly-bundled-plugin");
+      before("capture-backup-rollback", "update-candidate");
+      before("assert-candidate-schemas", "verify-backup-rollback");
+      before("legacy-operator-doctor-clean", "verify-backup-rollback");
+      before("legacy-operator-doctor-clean", "formerly-bundled-doctor-joined");
+      before("formerly-bundled-doctor-joined", "verify-backup-rollback");
       if (fail) {
         expect(phases.at(-1)).toBe("verify-backup-rollback");
         expect(phases).not.toContain("assert-restored-index-rollback");

@@ -24,11 +24,11 @@ const harness = [
 
 type Call = { argv: string[]; packageSpec: string | null; registry: string | null };
 
-function runUpdate(params: {
-  baselineVersion: string;
-  candidateVersion: string;
-  configureRegistry?: boolean;
-}) {
+function runUpdate({
+  baselineVersion = "2026.8.35",
+  candidateVersion = "2026.9.33",
+  configureRegistry = false,
+} = {}) {
   const root = tempDirs.make("survivor-extended-selector-");
   const artifacts = join(root, "artifacts");
   const bin = join(root, "bin");
@@ -80,10 +80,10 @@ CANDIDATE_SPEC=${JSON.stringify(join(root, "candidate.tgz"))}
 candidate_tarball=""
 plugin_registry_pid=""
 candidate_selector_registry=0
-baseline_version=${params.baselineVersion}
+baseline_version=${baselineVersion}
 baseline_spec="openclaw@$baseline_version"
-candidate_version=${params.candidateVersion}
-${params.configureRegistry ? "configure_plugin_registry || exit 90" : ""}
+candidate_version=${candidateVersion}
+${configureRegistry ? "configure_plugin_registry || exit 90" : ""}
 update_candidate
 `,
     ],
@@ -111,11 +111,7 @@ describe.skipIf(process.platform === "win32")("upgrade survivor extended-stable 
   it.each([false, true])(
     "updates 2026.8.35 to 2026.9.33 through the loopback selector (fixture registry: %s)",
     (configureRegistry) => {
-      const { result, update, registries, tarball } = runUpdate({
-        baselineVersion: "2026.8.35",
-        candidateVersion: "2026.9.33",
-        configureRegistry,
-      });
+      const { result, update, registries, tarball } = runUpdate({ configureRegistry });
       // The fake updater fails after recording its invocation.
       expect(result.status, result.stderr).toBe(2);
       expect(update).toEqual({
@@ -133,27 +129,20 @@ describe.skipIf(process.platform === "win32")("upgrade survivor extended-stable 
     },
   );
 
-  it.each([
-    { baselineVersion: "2026.9.9", candidateVersion: "2026.9.33", channel: [] },
-    {
-      baselineVersion: "2026.8.35",
-      candidateVersion: "2026.10.1",
-      channel: ["--channel", "stable"],
-    },
-  ])(
-    "keeps the explicit target for $baselineVersion to $candidateVersion",
-    ({ baselineVersion, candidateVersion, channel }) => {
-      const { result, update, registries, tarball } = runUpdate({
-        baselineVersion,
-        candidateVersion,
-      });
-      expect(result.status, result.stderr).toBe(2);
-      expect(update).toEqual({
-        argv: ["update", "--tag", `file:${tarball}`, "--yes", "--json", ...channel, "--no-restart"],
-        packageSpec: null,
-        registry: process.env.NPM_CONFIG_REGISTRY ?? null,
-      });
-      expect(registries).toEqual([]);
-    },
-  );
+  it.each<[string, string, string[]]>([
+    ["2026.9.9", "2026.9.33", []],
+    ["2026.8.35", "2026.10.1", ["--channel", "stable"]],
+  ])("keeps the explicit target for %s to %s", (baselineVersion, candidateVersion, channel) => {
+    const { result, update, registries, tarball } = runUpdate({
+      baselineVersion,
+      candidateVersion,
+    });
+    expect(result.status, result.stderr).toBe(2);
+    expect(update).toEqual({
+      argv: ["update", "--tag", `file:${tarball}`, "--yes", "--json", ...channel, "--no-restart"],
+      packageSpec: null,
+      registry: process.env.NPM_CONFIG_REGISTRY ?? null,
+    });
+    expect(registries).toEqual([]);
+  });
 });

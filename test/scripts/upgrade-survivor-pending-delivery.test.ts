@@ -7,6 +7,10 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+function succeeds(result: ReturnType<typeof spawnSync>) {
+  expect(result.status, result.stderr?.toString()).toBe(0);
+}
 const sessionId = "legacy-pending-delivery";
 const sessionKey = "agent:ops:legacy-pending-delivery";
 const pending = {
@@ -38,18 +42,15 @@ function fixture() {
     },
   });
   const storePath = path.join(state, "agents/ops/sessions/sessions.json");
-  writeFileSync(metadata, JSON.stringify({ storePath, original }));
+  writeJson(metadata, { storePath, original });
   writeFileSync(archive, original);
   mkdirSync(path.join(state, "session-sqlite-migration-runs"));
-  writeFileSync(
-    path.join(state, "session-sqlite-migration-runs/import.json"),
-    JSON.stringify({
-      completedAt: 1,
-      targets: [
-        { completedMoves: [{ kind: "legacy-store", sourcePath: storePath, archivePath: archive }] },
-      ],
-    }),
-  );
+  writeJson(path.join(state, "session-sqlite-migration-runs/import.json"), {
+    completedAt: 1,
+    targets: [
+      { completedMoves: [{ kind: "legacy-store", sourcePath: storePath, archivePath: archive }] },
+    ],
+  });
   const seedDb = new DatabaseSync(database);
   seedDb.exec(`
     CREATE TABLE session_nodes (session_key TEXT, current_session_id TEXT, entry_json TEXT);
@@ -129,22 +130,18 @@ function fixture() {
 
 it("keeps exact migration proof before restart recovery adopts the saved final", () => {
   const f = fixture();
-  const manual = f.verify("manual");
-  expect(manual.status, manual.stderr).toBe(0);
+  succeeds(f.verify("manual"));
   renameSync(f.metadata, `${f.metadata}.parked`);
   expect(f.capture().status).toBe(0);
   expect(existsSync(f.witness)).toBe(false);
   renameSync(`${f.metadata}.parked`, f.metadata);
-  const capture = f.capture();
-  expect(capture.status, capture.stderr).toBe(0);
+  succeeds(f.capture());
   const saved = readFileSync(f.witness, "utf8");
-  const retained = f.verify();
-  expect(retained.status, retained.stderr).toBe(0);
+  succeeds(f.verify());
   f.recover();
   expect(f.capture().status).toBe(0);
   expect(readFileSync(f.witness, "utf8")).toBe(saved);
-  const recovered = f.verify();
-  expect(recovered.status, recovered.stderr).toBe(0);
+  succeeds(f.verify());
 });
 
 it.each([
@@ -164,8 +161,7 @@ it.each([
     renameSync(f.database, `${f.database}.parked`);
   }
   if (fault !== "missing witness") {
-    const capture = f.capture();
-    expect(capture.status, capture.stderr).toBe(0);
+    succeeds(f.capture());
   }
   if (fault === "observation failure") {
     renameSync(`${f.database}.parked`, f.database);

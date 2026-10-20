@@ -74,13 +74,7 @@ it.each([
   const artifacts = tempDirs.make("survivor-doctor-budget-");
   const clock = path.join(artifacts, "clock");
   writeFileSync(clock, "0");
-  const result = spawnSync(
-    "/bin/bash",
-    [
-      "-euo",
-      "pipefail",
-      "-c",
-      `source scripts/lib/openclaw-e2e-instance.sh
+  const script = `source scripts/lib/openclaw-e2e-instance.sh
 ${assertIdempotence}
 # Advance the injected clock when Doctor returns; no real process boot or sleep.
 date() { cat "$CLOCK"; }
@@ -96,31 +90,29 @@ node() {
   fi
 }
 assert_volume_idempotence
-`,
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        PATH: process.env.PATH,
-        TMPDIR: artifacts,
-        GITHUB_ACTIONS: "false",
-        OPENCLAW_STATE_DIR: testCase.large ? largeState : emptyState,
-        // These deliberately disagree with persisted state and must not select the budget.
-        OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "1",
-        ...(testCase.override === undefined
-          ? {}
-          : { OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS: testCase.override }),
-        ARTIFACT_ROOT: artifacts,
-        CLOCK: clock,
-        ELAPSED: String(testCase.elapsed),
-        COMMAND_TIMEOUT: "900s",
-        DOCTOR_LOG: path.join(artifacts, "doctor.log"),
-        survival_assert_stage: "survival",
-      },
+`;
+  const result = spawnSync("/bin/bash", ["-euo", "pipefail", "-c", script], {
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      TMPDIR: artifacts,
+      GITHUB_ACTIONS: "false",
+      OPENCLAW_STATE_DIR: testCase.large ? largeState : emptyState,
+      // These deliberately disagree with persisted state and must not select the budget.
+      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "1",
+      ...(testCase.override === undefined
+        ? {}
+        : { OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS: testCase.override }),
+      ARTIFACT_ROOT: artifacts,
+      CLOCK: clock,
+      ELAPSED: String(testCase.elapsed),
+      COMMAND_TIMEOUT: "900s",
+      DOCTOR_LOG: path.join(artifacts, "doctor.log"),
+      survival_assert_stage: "survival",
     },
-  );
+  });
   expect(result.status, result.stdout + result.stderr).toBe(testCase.exit);
   expect(result.stdout).toContain(`(budget ${testCase.budget}s)`);
   expect(readFileSync(path.join(artifacts, "doctor-command"), "utf8")).toBe(

@@ -230,13 +230,12 @@ printf 'summary:passed\\n' >>"$FIXTURE_EVENTS"
           }
           main.write("continue\n");
           const result = await running;
-          expect(result.status, result.stderr).toBe(
-            mode === "success" ? 0 : mode === "proof-failure" ? 43 : 41,
-          );
+          const expectedExit = mode === "success" ? 0 : mode === "proof-failure" ? 43 : 41;
+          expect(result.status, result.stderr).toBe(expectedExit);
           const lines = readFileSync(events, "utf8").trim().split("\n");
           expect(lines.at(-1)).toBe("dependencies:stopped");
           expect(readFileSync(path.join(root, "result"), "utf8")).toBe(
-            `${mode === "success" ? 0 : mode === "proof-failure" ? 43 : 41}:${mode === "proof-failure" ? "formerly-bundled-doctor" : "primary"}\n`,
+            `${expectedExit}:${mode === "proof-failure" ? "formerly-bundled-doctor" : "primary"}\n`,
           );
           if (mode === "success") {
             expect(lines).toEqual([
@@ -253,14 +252,12 @@ printf 'summary:passed\\n' >>"$FIXTURE_EVENTS"
             expect(lines).not.toContain("rollback:started");
             expect(lines).not.toContain("summary:passed");
             if (mode === "primary-failure") {
-              expect(lines).toContain("cli:terminated");
-              expect(lines).toContain("descendant:terminated");
-              expect(lines.indexOf("cli:terminated")).toBeLessThan(
-                lines.indexOf("dependencies:stopped"),
-              );
-              expect(lines.indexOf("descendant:terminated")).toBeLessThan(
-                lines.indexOf("dependencies:stopped"),
-              );
+              for (const role of ["cli", "descendant"]) {
+                expect(lines).toContain(`${role}:terminated`);
+                expect(lines.indexOf(`${role}:terminated`)).toBeLessThan(
+                  lines.indexOf("dependencies:stopped"),
+                );
+              }
             } else {
               expect(result.stdout).toContain("synthetic Doctor completed with 43");
             }

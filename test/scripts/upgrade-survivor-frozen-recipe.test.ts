@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -14,6 +14,22 @@ const policy = source.slice(
   source.indexOf("UPGRADE_SCENARIO_ARGS=()"),
   source.indexOf('if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then'),
 );
+const selection = `set -euo pipefail; source "$HARNESS_ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+${policy}
+printf "%s\\n" "\${UPGRADE_COMPAT_ENV_ARGS[@]}"`;
+
+function run(root: string, command: string, args: string[], env: NodeJS.ProcessEnv) {
+  return spawnSync(command, args, {
+    env: { PATH: process.env.PATH, HOME: root, ...env },
+    encoding: "utf8",
+    timeout: 10000,
+  });
+}
+
+function addSpecimen(target: string) {
+  mkdirSync(join(target, specimen, ".."), { recursive: true });
+  writeFileSync(join(target, specimen), readFileSync(specimen));
+}
 
 function fixture(present: boolean) {
   const root = temps.make("survivor-frozen-recipe-");
@@ -26,67 +42,45 @@ function fixture(present: boolean) {
     JSON.stringify({ version: present ? "2026.9.6" : "2026.9.7" }),
   );
   if (present) {
-    mkdirSync(join(target, specimen, ".."), { recursive: true });
-    writeFileSync(join(target, specimen), readFileSync(specimen));
+    addSpecimen(target);
   }
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", target, ...args], { encoding: "utf8" }).trim();
   git("init", "-q");
   git("add", ".");
   git(
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "commit.gpgsign=false",
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
+    ...[
+      "core.hooksPath=/dev/null",
+      "commit.gpgsign=false",
+      "user.name=Fixture",
+      "user.email=fixture@example.invalid",
+    ].flatMap((setting) => ["-c", setting]),
     "commit",
     "-qm",
     "recipe fixture\n\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>",
   );
   const sha = git("rev-parse", "HEAD");
   const env = {
-    PATH: process.env.PATH,
-    HOME: root,
     HARNESS_ROOT_DIR: repo,
     ROOT_DIR: target,
     OPENCLAW_SELECTED_SHA: sha,
     OPENCLAW_TOOLING_SHA: "a".repeat(40),
     OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
   };
-  const select = (extra = {}) =>
-    spawnSync(
-      "bash",
-      [
-        "-c",
-        [
-          'set -euo pipefail; source "$HARNESS_ROOT_DIR/scripts/lib/frozen-target-compat.sh"',
-          policy,
-          'printf "%s\\n" "${UPGRADE_COMPAT_ENV_ARGS[@]}"',
-        ].join("\n"),
-      ],
-      { env: { ...env, ...extra }, encoding: "utf8", timeout: 10000 },
-    );
+  const select = (extra = {}) => run(root, "bash", ["-c", selection], { ...env, ...extra });
   return { root, target, select, sha };
 }
 
 function apply(root: string, mode: string) {
   const bin = join(root, "bin");
   mkdirSync(bin, { recursive: true });
-  const executable = join(bin, "openclaw");
-  writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-  chmodSync(executable, 0o755);
+  writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const summary = join(root, "recipe.json");
-  const result = spawnSync(
+  const result = run(
+    root,
     process.execPath,
     [recipe, "apply", "--summary", summary, "--baseline-version", "2026.9.6"],
-    {
-      env: { PATH: bin + ":" + process.env.PATH, HOME: root, [flag]: mode },
-      encoding: "utf8",
-      timeout: 10000,
-    },
+    { PATH: bin + ":" + process.env.PATH, [flag]: mode },
   );
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(readFileSync(summary, "utf8")) as {
@@ -106,20 +100,15 @@ function assertToolSearch(
   writeFileSync(config, JSON.stringify({ tools: { toolSearch } }));
   // Isolate this assertion's input; recipe coverage retention is checked separately.
   writeFileSync(coverage, JSON.stringify({ acceptedIntents: accepted ? ["tool-search"] : [] }));
-  return spawnSync(
+  return run(
+    root,
     process.execPath,
     ["scripts/e2e/lib/upgrade-survivor/assertions.mjs", "assert-config"],
     {
-      env: {
-        PATH: process.env.PATH,
-        HOME: root,
-        OPENCLAW_CONFIG_PATH: config,
-        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coverage,
-        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
-      },
-      encoding: "utf8",
-      timeout: 10000,
+      OPENCLAW_CONFIG_PATH: config,
+      OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coverage,
+      OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
     },
   );
 }
@@ -128,8 +117,7 @@ describe.skipIf(process.platform === "win32")("frozen survivor Tool Search recip
   it("selects committed coverage through the actual host policy, retaining all other recipe steps", () => {
     const old = fixture(false);
     // An uncommitted working-tree addition cannot grant selected coverage.
-    mkdirSync(join(old.target, specimen, ".."), { recursive: true });
-    writeFileSync(join(old.target, specimen), readFileSync(specimen));
+    addSpecimen(old.target);
     const selectedOld = old.select();
     expect(selectedOld.status, selectedOld.stderr).toBe(0);
     expect(selectedOld.stdout).toContain(flag + "=absent");
