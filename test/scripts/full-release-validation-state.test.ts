@@ -428,11 +428,10 @@ describe("full release execution plan", () => {
         planInput({
           sourceAdmissionContract: record.sourceAdmissionContract,
           sourceAdmission: record.sourceAdmission,
-          publicationAdmissionContract: record.publicationAdmissionContract,
-          publicationAdmission: record.publicationAdmission,
         }),
       ),
     );
+    writeFileSync(join(root, "publication-admission.json"), JSON.stringify(record));
     writeFileSync(
       join(root, "publication-source-request.json"),
       JSON.stringify({ ...record.sourceAdmission, runAttempt: 2 }),
@@ -450,6 +449,25 @@ describe("full release execution plan", () => {
     expect(JSON.parse(readFileSync(join(root, "publication-admission.json"), "utf8"))).toEqual(
       record,
     );
+
+    const wrongAttempt = structuredClone(record);
+    wrongAttempt.sourceAdmission.runAttempt = 3;
+    for (const [label, changed] of [
+      ["producer", registryRecord(sourceFact({ runId: "999" }))],
+      ["attempt", wrongAttempt],
+    ] as const) {
+      writeFileSync(join(root, "publication-admission.json"), JSON.stringify(changed));
+      const rejected = runCollector("restore-publication", {
+        FULL_RELEASE_EXECUTION_PLAN_PATH: join(root, `missing-plan-${label}.json`),
+        FULL_RELEASE_PLAN_INPUTS_PATH: inputsPath,
+        GITHUB_RUN_ATTEMPT: "2",
+        RUNNER_TEMP: root,
+      });
+      expect(rejected.status).toBe(2);
+      expect(rejected.stderr).toContain(
+        label === "producer" ? "parentRunId mismatch" : "source admission digest mismatch",
+      );
+    }
   });
 
   const betaCoverage = {
