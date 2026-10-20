@@ -1,6 +1,3 @@
-/**
- * Node pairing auto-approval tests.
- */
 import { describe, expect, it } from "vitest";
 import {
   resolveNodePairingClientIpSource,
@@ -22,49 +19,23 @@ const BASE_PARAMS = {
 
 describe("resolveNodePairingClientIpSource", () => {
   it.each([
-    {
-      name: "direct address",
-      params: {
-        reportedClientIp: "192.168.1.42",
-        hasProxyHeaders: false,
-        remoteIsTrustedProxy: false,
-        remoteIsLoopback: false,
-      },
-      expected: "direct",
+    ["direct", "192.168.1.42", false, false, false],
+    ["trusted-proxy", "192.168.1.42", true, true, false],
+    ["loopback-trusted-proxy", "192.168.1.42", true, true, true],
+    ["none", undefined, true, true, false],
+  ] as const)(
+    "%s",
+    (expected, reportedClientIp, hasProxyHeaders, remoteIsTrustedProxy, remoteIsLoopback) => {
+      expect(
+        resolveNodePairingClientIpSource({
+          reportedClientIp,
+          hasProxyHeaders,
+          remoteIsTrustedProxy,
+          remoteIsLoopback,
+        }),
+      ).toBe(expected);
     },
-    {
-      name: "trusted proxy",
-      params: {
-        reportedClientIp: "192.168.1.42",
-        hasProxyHeaders: true,
-        remoteIsTrustedProxy: true,
-        remoteIsLoopback: false,
-      },
-      expected: "trusted-proxy",
-    },
-    {
-      name: "loopback trusted proxy",
-      params: {
-        reportedClientIp: "192.168.1.42",
-        hasProxyHeaders: true,
-        remoteIsTrustedProxy: true,
-        remoteIsLoopback: true,
-      },
-      expected: "loopback-trusted-proxy",
-    },
-    {
-      name: "no reported client IP",
-      params: {
-        reportedClientIp: undefined,
-        hasProxyHeaders: true,
-        remoteIsTrustedProxy: true,
-        remoteIsLoopback: false,
-      },
-      expected: "none",
-    },
-  ] as const)("$name", ({ params, expected }) => {
-    expect(resolveNodePairingClientIpSource(params)).toBe(expected);
-  });
+  );
 });
 
 describe("shouldAutoApproveNodePairingFromTrustedCidrs", () => {
@@ -82,34 +53,13 @@ describe("shouldAutoApproveNodePairingFromTrustedCidrs", () => {
   });
 
   it.each([
-    {
-      name: "existing paired device",
-      patch: { existingPairedDevice: true },
-    },
-    {
-      name: "operator role",
-      patch: { role: "operator" },
-    },
-    {
-      name: "non-matching CIDR",
-      patch: { reportedClientIp: "192.168.2.42" },
-    },
-    {
-      name: "requested scopes",
-      patch: { scopes: ["operator.read"] },
-    },
-    {
-      name: "browser origin",
-      patch: { hasBrowserOriginHeader: true },
-    },
-    {
-      name: "Control UI client",
-      patch: { isControlUi: true },
-    },
-    {
-      name: "WebChat client",
-      patch: { isWebchat: true },
-    },
+    { name: "existing paired device", patch: { existingPairedDevice: true } },
+    { name: "operator role", patch: { role: "operator" } },
+    { name: "non-matching CIDR", patch: { reportedClientIp: "192.168.2.42" } },
+    { name: "requested scopes", patch: { scopes: ["operator.read"] } },
+    { name: "browser origin", patch: { hasBrowserOriginHeader: true } },
+    { name: "Control UI client", patch: { isControlUi: true } },
+    { name: "WebChat client", patch: { isWebchat: true } },
     {
       name: "loopback trusted proxy",
       patch: { reportedClientIpSource: "loopback-trusted-proxy" as const },
@@ -118,10 +68,7 @@ describe("shouldAutoApproveNodePairingFromTrustedCidrs", () => {
       name: "missing reported client IP",
       patch: { reportedClientIpSource: "none" as const, reportedClientIp: undefined },
     },
-    {
-      name: "invalid CIDR config",
-      patch: { autoApproveCidrs: ["invalid/24"] },
-    },
+    { name: "invalid CIDR config", patch: { autoApproveCidrs: ["invalid/24"] } },
   ])("rejects $name", ({ patch }) => {
     expect(shouldAutoApproveNodePairingFromTrustedCidrs({ ...BASE_PARAMS, ...patch })).toBe(false);
   });

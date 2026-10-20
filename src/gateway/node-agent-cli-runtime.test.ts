@@ -28,6 +28,18 @@ import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient } from "./node-registry.test-helpers.js";
 
+function invoke(overrides: Partial<Parameters<typeof invokeNodeClaudeCliRun>[0]> = {}) {
+  return invokeNodeClaudeCliRun({
+    nodeId: "node-1",
+    argv: ["-p"],
+    stdin: "hello",
+    timeoutMs: 10_000,
+    idleTimeoutMs: 1_000,
+    onProgress: () => {},
+    ...overrides,
+  });
+}
+
 describe("invokeNodeClaudeCliRun", () => {
   beforeEach(() => {
     mocks.get.mockReset();
@@ -46,16 +58,7 @@ describe("invokeNodeClaudeCliRun", () => {
   it("fails closed when Gateway node command policy denies the agent run", async () => {
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: false, reason: "denyCommands" });
 
-    await expect(
-      invokeNodeClaudeCliRun({
-        nodeId: "node-1",
-        argv: ["-p"],
-        stdin: "hello",
-        timeoutMs: 10_000,
-        idleTimeoutMs: 1_000,
-        onProgress: () => {},
-      }),
-    ).resolves.toEqual({
+    await expect(invoke()).resolves.toEqual({
       ok: false,
       error: {
         code: "PERMISSION_DENIED",
@@ -71,15 +74,9 @@ describe("invokeNodeClaudeCliRun", () => {
     mocks.invoke.mockResolvedValue({ ok: true });
 
     await expect(
-      invokeNodeClaudeCliRun({
-        nodeId: "node-1",
-        argv: ["-p"],
-        stdin: "hello",
+      invoke({
         env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
         clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        timeoutMs: 10_000,
-        idleTimeoutMs: 1_000,
-        onProgress: () => {},
       }),
     ).resolves.toEqual({ ok: true });
     expect(mocks.resolveNodeCommandAllowlist).toHaveBeenCalledOnce();
@@ -122,14 +119,9 @@ describe("invokeNodeClaudeCliRun", () => {
         throw revoked;
       }
     });
-    const invocation = invokeNodeClaudeCliRun({
-      nodeId: "node-1",
-      argv: ["-p"],
+    const invocation = invoke({
       stdin: "private conversation history",
       assertReadable,
-      timeoutMs: 10_000,
-      idleTimeoutMs: 1_000,
-      onProgress: () => {},
     });
     try {
       await Promise.race([pairingEntered.promise, invocation]);
