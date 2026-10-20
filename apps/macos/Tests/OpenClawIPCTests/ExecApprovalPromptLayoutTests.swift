@@ -98,6 +98,17 @@ struct ExecApprovalPromptLayoutTests {
         try state.checkComputerAction(.key)
     }
 
+    @Test func `screen capture with a pending approval requires an app exclusion`() throws {
+        let state = ApprovalPromptState()
+        try state.checkScreenCapture(excludesApplication: false)
+
+        state.setPending(true, source: UUID())
+        #expect(throws: ComputerActionService.ComputerActionError.self) {
+            try state.checkScreenCapture(excludesApplication: false)
+        }
+        try state.checkScreenCapture(excludesApplication: true)
+    }
+
     @Test func `queued prompt expires without later presentation`() async throws {
         let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
         defer { ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation) }

@@ -21,6 +21,12 @@ final class ApprovalPromptState {
         }
     }
 
+    func checkScreenCapture(excludesApplication: Bool) throws {
+        if !excludesApplication {
+            try self.checkComputerAction(.screenshot)
+        }
+    }
+
     func checkComputerAction(_ action: OpenClawComputerAction) throws {
         switch action {
         case .listApps, .listWindows, .getCursorPosition:
