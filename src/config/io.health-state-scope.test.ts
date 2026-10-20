@@ -3,6 +3,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  invalidateSqliteDatabaseCleanClose,
+  readSqliteDatabaseCleanClose,
+} from "../infra/sqlite-database-admission.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { migrateLegacyConfigHealth } from "../infra/state-migrations.runtime-state.js";
 import {
   withArtifactPreservingStateReads,
@@ -69,13 +74,17 @@ async function snapshotFixture() {
 }
 
 it("shares boot health observations until a committed owner write changes them", async () => {
-  const { configPath, capture, setSignature } = fixture();
+  const { deps, configPath, capture, setSignature } = fixture();
   await closeDatabase();
+  expect(readSqliteDatabaseCleanClose(resolveOpenClawStateSqlitePath(deps.env))).toBe(true);
+  const copies = vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync");
   const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   const observe = () => withArtifactPreservingStateReads(() => capture().read());
   const before = await observe();
   expect(await observe()).toEqual(before);
   expect(reads).toHaveBeenCalledTimes(1);
+  expect(before.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
+  expect(copies).not.toHaveBeenCalled();
 
   setSignature("sync commit");
   const after = await observe();
@@ -93,6 +102,22 @@ it("shares boot health observations until a committed owner write changes them",
     "worker commit",
   );
   expect(reads).toHaveBeenCalledTimes(3);
+});
+
+it("preserves unsealed state artifacts when reading boot health", async () => {
+  const { deps, configPath, capture } = fixture();
+  await closeDatabase();
+  const databasePath = resolveOpenClawStateSqlitePath(deps.env);
+  invalidateSqliteDatabaseCleanClose(databasePath);
+  expect(readSqliteDatabaseCleanClose(databasePath)).toBe(false);
+  const copies = vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync");
+  const bytes = fs.readFileSync(databasePath);
+  const before = await withArtifactPreservingStateReads(() => capture().read());
+  expect(before.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
+  expect(copies).toHaveBeenCalledTimes(1);
+  expect(fs.readFileSync(databasePath)).toEqual(bytes);
+  expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
+  expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
 });
 
 it("keeps a pinned snapshot separate from the published live health fact", async () => {

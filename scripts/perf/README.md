@@ -48,7 +48,8 @@ node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
 This fixture has 44 synthetic startup-active plugins, eight local agents, 4,096
 shared session entries, and 128 MiB of inert synthetic shared-state payload. It
 uses the normal database and session writers and keeps clean-close seals. It
-does not provision remote workers or make model/channel calls. Actual database
+retains an identical config backup so startup exercises the config-health read
+without requiring recovery. It does not provision remote workers or make model/channel calls. Actual database
 sizes and inventory are recorded in `team-boot-fixture.json` and copied into the
 result. Seed each side sequentially outside the measurement window. Payload
 writes checkpoint every 8 MiB and pause between batches; Linux generation stops

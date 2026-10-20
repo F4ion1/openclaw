@@ -5,7 +5,9 @@ import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenanc
 import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
+  withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -168,11 +170,21 @@ export function captureConfigHealthStateStore(
         if (receipt && cached?.receipt === receipt) {
           return cached.snapshot;
         }
-        const reply = await executeExistingOpenClawStateRead(
-          options,
-          { type: "config.health.read", input: undefined },
-          { context: captured.context },
-        );
+        const read = () =>
+          executeExistingOpenClawStateRead(
+            options,
+            { type: "config.health.read", input: undefined },
+            { context },
+          );
+        const reply =
+          isArtifactPreservingStateRead("shared", databasePath) &&
+          !context.maintenanceScope &&
+          !context.existingSchemaPath
+            ? await withOpenClawStateDatabaseReadSnapshot(read, {
+                ...options,
+                reuseCleanClose: true,
+              })
+            : await read();
         assertCurrent();
         const snapshot = reply?.snapshot ?? { state: {}, basis: {} };
         if (receipt) {

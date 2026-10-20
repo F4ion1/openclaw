@@ -963,6 +963,8 @@ const SLOW_DATABASE_AGENT_IDS = [
 async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): Promise<void> {
   mkdirSync(root);
   const configPath = writeConfig(root, benchCase);
+  // A retained backup exercises boot's config-health read even when no recovery is needed.
+  writeFileSync(`${configPath}.bak`, readFileSync(configPath));
   const env = createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
   const previousEnv = process.env;
   process.env = { ...env };
@@ -1033,6 +1035,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         agentCount: agents.length,
         sessionCount: agents.length * 512,
         stateDatabaseBytes: statSync(statePath).size,
+        configBackup: true,
         agentDatabaseBytes: databasePaths.map((databasePath) => statSync(databasePath).size),
         workerEnvironments: "default local startup; no provisioned remote workers",
       },
