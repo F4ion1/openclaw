@@ -16,6 +16,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type ResourceEvent = { event: string; database: string; mode: string };
 const expectedRows = [{ value: "registrar" }, { value: "action" }];
+const activePhases = ["opened", "registrar-entered", "registrar-completed", "action-entered"];
 
 it("keeps native plugin resources through registration and action, then disposes at CLI completion", async () => {
   const root = tempDirs.make("openclaw-cli-registration-resources-");
@@ -132,51 +133,28 @@ module.exports = {
     async interact(child) {
       try {
         await waitForCliProcessStderrMarker(child, "native-resource action entered");
-        const events = readEvents();
-        expect(events.some((event) => event.event === "registrar-completed")).toBe(true);
-        expect(events.some((event) => event.event === "action-completed")).toBe(false);
-        expect(events.filter((event) => event.event === "disposed")).toEqual([]);
+        expect(readEvents().map(({ event }) => event)).toEqual(activePhases);
       } finally {
         child.stdin.end("continue\n");
       }
     },
-  }).catch((error: unknown) => {
-    let phaseEvidence: string;
-    try {
-      phaseEvidence = fs.readFileSync(eventsPath, "utf8");
-    } catch (readError) {
-      phaseEvidence = `Resource event file unavailable: ${String(readError)}`;
-    }
-    console.error(`Native plugin resource phases before failure:\n${phaseEvidence}`);
-    throw error;
   });
   const diagnostics = formatCliProcessFailure({ reason: "Native plugin CLI result", ...result });
-  expect(result.code, diagnostics).toBe(0);
-  expect(result.signal, diagnostics).toBeNull();
+  expect(result, diagnostics).toMatchObject({ code: 0, signal: null });
   expect(JSON.parse(result.stdout), diagnostics).toEqual(expectedRows);
   expect(result.stderr).toContain("native-resource diagnostic");
   expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
 
   const events = readEvents();
-  const opened = events.filter((event) => event.event === "opened");
-  expect(opened, diagnostics).toHaveLength(1);
-  expect(opened[0]!.mode).not.toBe("cli-metadata");
-  const completed = events.find((event) => event.event === "action-completed");
-  expect(completed, diagnostics).toBeDefined();
-  const reopened = new DatabaseSync(completed!.database);
-  try {
-    expect(reopened.prepare("SELECT value FROM observations ORDER BY rowid").all()).toEqual(
-      expectedRows,
-    );
-  } finally {
-    reopened.close();
-  }
-  expect(events.filter((event) => event.event === "cleanup")).toEqual([]);
   expect(
-    events
-      .filter((event) => event.event === "disposed")
-      .map((event) => event.database)
-      .toSorted(),
+    events.map(({ event }) => event),
     diagnostics,
-  ).toEqual(opened.map((event) => event.database).toSorted());
+  ).toEqual([...activePhases, "action-completed", "disposed"]);
+  expect(events[0]!.mode).not.toBe("cli-metadata");
+  const databases = events.map(({ database }) => database);
+  expect(new Set(databases)).toEqual(new Set([databases[0]]));
+  using reopened = new DatabaseSync(events[0]!.database);
+  expect(reopened.prepare("SELECT value FROM observations ORDER BY rowid").all()).toEqual(
+    expectedRows,
+  );
 });

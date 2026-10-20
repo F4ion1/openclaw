@@ -32,16 +32,10 @@ it.concurrent.for([
     const mode = ${JSON.stringify(mode)};
     const database = new DatabaseSync(${JSON.stringify(databasePath)});
     database.exec("CREATE TABLE observations(value INTEGER); INSERT INTO observations VALUES (42)");
-    let disposals = 0;
-    let returnedBeforeCleanup = false;
-    let finalizationReturnedBeforeCleanup = false;
-    let reportedErrors = 0;
-    process.on("exit", code => {
-      fs.writeFileSync(${JSON.stringify(exitPath)}, JSON.stringify({
-        code, disposals, nativeOpen: database.isOpen, returnedBeforeCleanup,
-        finalizationReturnedBeforeCleanup, reportedErrors,
-      }));
-    });
+    const observed = { disposals: 0, returnedBeforeCleanup: false,
+      finalizationReturnedBeforeCleanup: false, reportedErrors: 0 };
+    process.on("exit", code => fs.writeFileSync(${JSON.stringify(exitPath)},
+      JSON.stringify({ code, ...observed, nativeOpen: database.isOpen })));
     await runCliWithExitFinalization({
       run: async () => {
         try {
@@ -56,18 +50,18 @@ it.concurrent.for([
             await delay(150);
             database.exec("INSERT INTO observations VALUES (99)");
             database.close();
-            disposals++;
+            observed.disposals++;
           }, undefined, 100);
-          returnedBeforeCleanup = database.isOpen && disposals === 0;
+          observed.returnedBeforeCleanup = database.isOpen && observed.disposals === 0;
         }
       },
       onError: error => {
         if (error.message !== "synthetic command failure") throw error;
-        reportedErrors++;
+        observed.reportedErrors++;
         process.exitCode = 9;
       },
     });
-    finalizationReturnedBeforeCleanup = database.isOpen;
+    observed.finalizationReturnedBeforeCleanup = database.isOpen;
   `;
 
       let child: ChildProcess | undefined;
@@ -100,9 +94,11 @@ it.concurrent.for([
           },
         ),
       );
-      expect(result.error).toBeUndefined();
-      expect(child?.signalCode).toBeNull();
-      expect(result.status).toBe(exitCode);
+      expect({ error: result.error, signal: child?.signalCode, code: result.status }).toEqual({
+        error: undefined,
+        signal: null,
+        code: exitCode,
+      });
       expect(JSON.parse(result.stdout)).toEqual({ mode, outcome: "recorded" });
       expect(result.stderr).toContain("CLI cleanup timed out: native-write after 100ms");
       expect(JSON.parse(fs.readFileSync(exitPath, "utf8"))).toEqual({
@@ -113,15 +109,11 @@ it.concurrent.for([
         finalizationReturnedBeforeCleanup: false,
         reportedErrors: mode === "failure" ? 1 : 0,
       });
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(database.prepare("SELECT value FROM observations ORDER BY value").all()).toEqual([
-          { value: 42 },
-          { value: 99 },
-        ]);
-      } finally {
-        database.close();
-      }
+      using database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("SELECT value FROM observations ORDER BY value").all()).toEqual([
+        { value: 42 },
+        { value: 99 },
+      ]);
     });
   },
 );

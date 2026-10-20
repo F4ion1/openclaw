@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
@@ -47,7 +47,7 @@ export default defineToolPlugin({
 async function runPlugins(root: string, args: string[]) {
   const configPath = path.join(root, "openclaw.json");
   await fs.writeFile(configPath, invalidConfig);
-  return runCliProcessChild({
+  const result = await runCliProcessChild({
     nodeArgs: ["--import", "tsx", path.resolve("src", "entry.ts"), "plugins", ...args],
     env: {
       ...process.env,
@@ -67,42 +67,40 @@ async function runPlugins(root: string, args: string[]) {
       VITEST_WORKER_ID: undefined,
     },
   });
+  expect(await fs.readFile(configPath, "utf8")).toBe(invalidConfig);
+  return result;
 }
 
-describe("plugin authoring with invalid host config", () => {
-  it.each(["init", "build", "validate"] as const)(
-    "runs plugins %s against its target package",
-    async (command) => {
-      const root = tempDirs.make("openclaw-plugin-authoring-process-");
-      const project =
-        command === "init" ? path.join(root, "project") : await createAuthoringFixture(root);
-      if (command === "build") {
-        await fs.unlink(path.join(project, "openclaw.plugin.json"));
-      }
-      const args =
-        command === "init"
-          ? [command, pluginId, "--directory", project]
-          : [command, "--root", project, ...(command === "validate" ? ["--json"] : [])];
+it.each(["init", "build", "validate"] as const)(
+  "runs plugins %s against its target package",
+  async (command) => {
+    const root = tempDirs.make("openclaw-plugin-authoring-process-");
+    const project =
+      command === "init" ? path.join(root, "project") : await createAuthoringFixture(root);
+    if (command === "build") {
+      await fs.unlink(path.join(project, "openclaw.plugin.json"));
+    }
+    const args =
+      command === "init"
+        ? [command, pluginId, "--directory", project]
+        : [command, "--root", project, ...(command === "validate" ? ["--json"] : [])];
 
-      const result = await runPlugins(root, args);
+    const result = await runPlugins(root, args);
 
-      expect(result.code, result.stderr).toBe(0);
-      expect(await fs.readFile(path.join(root, "openclaw.json"), "utf8")).toBe(invalidConfig);
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(project, "openclaw.plugin.json"), "utf8"),
-      );
-      expect(manifest).toMatchObject({ id: pluginId, contracts: { tools: ["echo"] } });
-      if (command === "validate") {
-        expect(JSON.parse(result.stdout)).toEqual({ valid: true, pluginId, errors: [] });
-      }
-    },
-  );
+    expect(result.code, result.stderr).toBe(0);
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(project, "openclaw.plugin.json"), "utf8"),
+    );
+    expect(manifest).toMatchObject({ id: pluginId, contracts: { tools: ["echo"] } });
+    if (command === "validate") {
+      expect(JSON.parse(result.stdout)).toEqual({ valid: true, pluginId, errors: [] });
+    }
+  },
+);
 
-  it("still rejects invalid host config for plugin enable", async () => {
-    const root = tempDirs.make("openclaw-plugin-enable-process-");
-    const result = await runPlugins(root, ["enable", pluginId]);
-    expect(result.code, result.stderr).toBe(1);
-    expect(result.stderr).toContain("OpenClaw config is invalid");
-    expect(await fs.readFile(path.join(root, "openclaw.json"), "utf8")).toBe(invalidConfig);
-  });
+it("still rejects invalid host config for plugin enable", async () => {
+  const root = tempDirs.make("openclaw-plugin-enable-process-");
+  const result = await runPlugins(root, ["enable", pluginId]);
+  expect(result.code, result.stderr).toBe(1);
+  expect(result.stderr).toContain("OpenClaw config is invalid");
 });
