@@ -84,6 +84,10 @@ describe("github_publish tool", () => {
     expect(Value.Check(tool.parameters, { action: "edit", publishingSessionKey: "another" })).toBe(
       false,
     );
+    expect(tool.description).toContain("omit action to append accepted changes to the original PR");
+    expect(tool.description).not.toContain(
+      "Imported PR publication and other PR actions are not available",
+    );
     expect(tool.description).toContain("used only when creating a PR");
     expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
     expect(

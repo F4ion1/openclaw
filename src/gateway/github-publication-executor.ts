@@ -284,7 +284,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     const baseTree = await command(["git", "rev-parse", `${remoteBaseSha}^{tree}`], {
       cwd: worktree.path,
     });
-    if (baseTree === workspaceTree) {
+    // A bound PR can legitimately append a full revert of its original contribution.
+    if (!pullRequest && baseTree === workspaceTree) {
       throw new GitHubPublicationKnownFailure("GitHub publication has no changes to publish.", {
         code: "no_changes",
         nextAction: "Make or restore a repository change, then retry.",
@@ -377,7 +378,9 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         cwd: worktree.path,
       });
       if (ancestry.code === 1) {
-        throw new GitHubPublicationBranchChangedError();
+        throw new GitHubPublicationBranchChangedError({
+          originalPullRequest: Boolean(pullRequest),
+        });
       }
       if (ancestry.code !== 0) {
         throw new Error("GitHub publication remote branch could not be verified.");
@@ -544,7 +547,9 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     remoteHead = await step(observeRemoteHead);
     if (remoteHead !== headCommit) {
       if (remoteHead !== expectedRemoteHead) {
-        throw new GitHubPublicationBranchChangedError();
+        throw new GitHubPublicationBranchChangedError({
+          originalPullRequest: Boolean(pullRequest),
+        });
       }
       assertAction();
       await params.recordEffect?.("push");

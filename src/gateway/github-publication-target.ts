@@ -200,7 +200,7 @@ export async function prepareBoundGitHubPublication(params: {
     const observedPublication =
       row.head_commit !== row.source_head_commit && observedHead === row.head_commit;
     if (observedHead !== expectedHead && !observedPublication) {
-      throw new GitHubPublicationBranchChangedError();
+      throw new GitHubPublicationBranchChangedError({ originalPullRequest: true });
     }
     assertInspected = inspected.assertCurrent;
     if (!observedPublication) {

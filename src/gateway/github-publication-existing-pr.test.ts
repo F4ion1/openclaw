@@ -308,13 +308,45 @@ describe("shared publication to a prepared original PR", () => {
       await f.revoke();
     }
     try {
-      expect(await f.publish(scenario)).toMatchObject({ status: "failed" });
+      const result = await f.publish(scenario);
+      expect(result).toMatchObject({ status: "failed" });
+      if (scenario === "remote advance") {
+        expect(result).toMatchObject({
+          code: "push_rejected",
+          nextAction: expect.stringContaining("Do not create a replacement PR"),
+        });
+      }
     } catch (error) {
       expect(String(error)).toMatch(/authoriz|authority|scope/);
     }
     expect(f.pushes).toEqual([]);
     expect(f.mutations).toEqual([]);
     expect(await f.local.git("rev-parse", "HEAD")).toBe(f.originalHead);
+  });
+
+  it("publishes a full revert to the original PR and reuses its unchanged head", async () => {
+    const f = await fixture(true);
+    const baseTree = await f.local.git("rev-parse", `${f.pr.base.sha}^{tree}`);
+    await fs.rm(path.join(f.local.cwd, "original.txt"));
+    await fs.rm(path.join(f.local.cwd, "continued.txt"));
+    const result = await f.publish("full-revert");
+    expect(result).toMatchObject({
+      status: "published",
+      url: f.pr.html_url,
+      branch: "topic/original",
+    });
+    const revertedHead = f.pr.head.sha;
+    expect(await f.local.git("rev-parse", `${revertedHead}^`)).toBe(f.originalHead);
+    expect(await f.local.git("rev-parse", `${revertedHead}^{tree}`)).toBe(baseTree);
+    expect(await f.publish("full-revert")).toEqual(result);
+    expect(await f.publish("unchanged-full-revert")).toMatchObject({
+      status: "published",
+      url: f.pr.html_url,
+      headCommit: revertedHead,
+    });
+    expect(await f.local.git("rev-parse", "HEAD")).toBe(revertedHead);
+    expect(f.pushes).toHaveLength(1);
+    expect(f.mutations).toEqual([]);
   });
 
   it("settles an accepted original-PR push after requester revocation without another write", async () => {
