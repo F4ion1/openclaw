@@ -596,9 +596,8 @@ type PrometheusExporterHealthUpdate = {
   status: "started" | "dropped";
   reason?: "configured";
 };
-type TrustedExporterDiagnosticsBridge = NonNullable<
-  OpenClawPluginServiceContext["internalDiagnostics"]
-> & {
+type TrustedExporterDiagnosticsBridge = {
+  emit: NonNullable<OpenClawPluginServiceContext["internalDiagnostics"]>["emit"];
   reportExporterHealth?: (update: PrometheusExporterHealthUpdate) => void;
 };
 
