@@ -530,7 +530,14 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
   ) {
     throw new Error("publication original admission did not succeed; use a fresh parent");
   }
-  const sealers = jobs.filter((job) => job.name === "Seal release execution plan");
+  const sealAttempt = cachedPlan?.sealParentRunAttempt ?? 1;
+  const sealJobs =
+    sealAttempt === 1
+      ? jobs
+      : await evidenceClient.getRunAttemptJobs(request.runId, sealAttempt, {
+          requireComplete: true,
+        });
+  const sealers = sealJobs.filter((job) => job.name === "Seal release execution plan");
   const sealer = sealers[0];
   const seals =
     sealer?.steps?.filter((step) => step.name === "Seal immutable release execution plan") ?? [];
@@ -546,7 +553,7 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
   // checkpoint. The guarded successful upload, not overall job success, seals it.
   if (
     sealers.length !== 1 ||
-    sealer.run_attempt !== 1 ||
+    sealer.run_attempt !== sealAttempt ||
     sealer.status !== "completed" ||
     seals.length !== 1 ||
     seal.status !== "completed" ||

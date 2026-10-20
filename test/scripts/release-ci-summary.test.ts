@@ -51,6 +51,7 @@ import {
   manifestChildEntries,
   readManifestArtifactArchive,
   requiredChildKeysForRerunGroup,
+  restoreOriginalPublicationAdmission,
   resolveManifestChildOriginAttempt,
   runReleaseCiGh,
   selectExactChildRun,
@@ -303,6 +304,64 @@ function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prep
 }
 
 describe("original publication admission reader", () => {
+  it("authenticates a cached plan against its later pre-seal recovery attempt", async () => {
+    const fixture = publicationRestoreFixture();
+    fixture.plan.sealParentRunAttempt = 2;
+    fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
+    const parent = {
+      ...fixture.parentRun,
+      name: "Full Release Validation",
+      display_title: "Full Release Validation",
+      repository: { full_name: "openclaw/openclaw" },
+      head_repository: { full_name: "openclaw/openclaw" },
+    };
+    const resolveJob = {
+      id: 901,
+      name: "Resolve target ref",
+      run_attempt: 1,
+      status: "completed",
+      conclusion: "success",
+      steps: [{ name: "Finalize publication admission", conclusion: "success" }],
+    };
+    const sealer = {
+      id: 902,
+      name: "Seal release execution plan",
+      run_attempt: 2,
+      status: "completed",
+      conclusion: "success",
+      steps: [...publicationPlanSteps(), planDigestStep()],
+    };
+    const client = {
+      getRunAttempt: vi.fn(async () => parent),
+      getWorkflowSource: vi.fn(
+        () =>
+          'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"\n',
+      ),
+      getRunAttemptJobs: vi.fn(async (_runId: string, attempt: number) =>
+        attempt === 1 ? [resolveJob] : [sealer],
+      ),
+      getJobLog: vi.fn(
+        async () => `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${fixture.plan.sha256}\n`,
+      ),
+      loadExecutionPlanEvidence: vi.fn(() => {
+        throw new Error("authenticated cache must avoid artifact download");
+      }),
+    };
+    const restored = await restoreOriginalPublicationAdmission({
+      request: fixture.request,
+      client,
+      cachedPlan: fixture.plan,
+    });
+    expect(restored.plan).toEqual(fixture.plan);
+    expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(1, fixture.runId, 1, {
+      requireComplete: true,
+    });
+    expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(2, fixture.runId, 2, {
+      requireComplete: true,
+    });
+    expect(client.loadExecutionPlanEvidence).not.toHaveBeenCalled();
+  });
+
   it.each([
     "changed-admission",
     "skipped-original-upload",
@@ -778,7 +837,11 @@ try {
           {
             always: () => true,
             github: { run_attempt: 1 },
-            steps: { plan: { outputs } },
+            steps: {
+              plan: { outputs },
+              plan_inputs_upload: { outcome: "success" },
+              plan_inputs_restore: { outcome: "skipped" },
+            },
           },
         ),
       ).toBe(true);
@@ -1079,7 +1142,11 @@ process.stdout.write(JSON.stringify(restored));
       const uploadSelected = runInNewContext(condition, {
         always: () => true,
         github: { run_attempt: fault === "workflow-plan-prewrite" ? 1 : 2 },
-        steps: { plan: { outputs: { sha256: "", source_parent_attempt: "", ...outputs } } },
+        steps: {
+          plan: { outputs: { sha256: "", source_parent_attempt: "", ...outputs } },
+          plan_inputs_upload: { outcome: "skipped" },
+          plan_inputs_restore: { outcome: "skipped" },
+        },
       });
       if (uploadSelected && upload.with.overwrite === true) {
         const replacement = makeStoredZip({ [entry]: readFileSync(cachedPlanPath, "utf8") });
