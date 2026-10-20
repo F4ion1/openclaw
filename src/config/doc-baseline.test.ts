@@ -1,5 +1,4 @@
-// Verifies generated config documentation baselines stay stable.
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { renderConfigDocBaselineArtifacts } from "./doc-baseline.js";
 
 vi.mock("./doc-baseline.runtime.js", async () => {
@@ -45,41 +44,34 @@ vi.mock("./doc-baseline.runtime.js", async () => {
   };
 });
 
-describe("config doc baseline", () => {
-  it("renders optional wildcards and merges tuple metadata through the public renderer", async () => {
-    const { baseline } = await renderConfigDocBaselineArtifacts();
+it("renders optional wildcards and merges tuple metadata through the public renderer", async () => {
+  const { baseline } = await renderConfigDocBaselineArtifacts();
 
-    const entry = (
-      path: string,
-      type: string | string[],
-      required = false,
-      hasChildren = false,
-    ) => ({
-      path,
-      type,
-      required,
-      hasChildren,
-      kind: "core",
-      deprecated: false,
-      sensitive: false,
-      tags: [],
-    });
-    expect(baseline.coreEntries).toEqual([
-      entry("*", "string"),
-      entry("mapValues", "object", true, true),
-      entry("mapValues.*", "boolean"),
-      entry("mixedValues", "array", true, true),
-      {
-        ...entry("mixedValues.*", ["number", "string"]),
-        enumValues: ["extra", 42],
-      },
-      entry("singleValues", "array", true, true),
-      entry("singleValues.*", "string"),
-      entry("tupleValues", "array", false, true),
-      {
-        ...entry("tupleValues.*", ["number", "string"]),
-        enumValues: ["alpha", 42],
-      },
-    ]);
+  const entry = (path: string, type: string | string[], required = false, hasChildren = false) => ({
+    path,
+    type,
+    required,
+    hasChildren,
+    kind: "core",
+    deprecated: false,
+    sensitive: false,
+    tags: [],
   });
+  expect(baseline.coreEntries).toEqual([
+    entry("*", "string"),
+    entry("mapValues", "object", true, true),
+    entry("mapValues.*", "boolean"),
+    entry("mixedValues", "array", true, true),
+    {
+      ...entry("mixedValues.*", ["number", "string"]),
+      enumValues: ["extra", 42],
+    },
+    entry("singleValues", "array", true, true),
+    entry("singleValues.*", "string"),
+    entry("tupleValues", "array", false, true),
+    {
+      ...entry("tupleValues.*", ["number", "string"]),
+      enumValues: ["alpha", 42],
+    },
+  ]);
 });
