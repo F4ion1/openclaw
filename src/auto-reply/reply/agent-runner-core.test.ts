@@ -103,19 +103,18 @@ const transition = resolveFallbackTransition({
   activeModel: "fallback-model",
   attempts: [],
 });
-const base = {
-  fallbackTransition: transition,
-  fallbackFailureKnown: true,
-  fallbackAttempts: [],
-  cfg: {},
-  completion: resolveReplyCompletion("required", "empty"),
-};
+function fallbackPayload(fallbackFailureKnown: boolean) {
+  return buildSilentFallbackFailurePayload({
+    fallbackTransition: transition,
+    fallbackFailureKnown,
+    fallbackAttempts: [],
+    cfg: fallbackFailureKnown ? { agents: { defaults: { silentReply: { group: "allow" } } } } : {},
+    completion: resolveReplyCompletion("required", "empty"),
+  });
+}
 
 it("surfaces both model identities when a required fallback reply is missing", () => {
-  const payload = buildSilentFallbackFailurePayload({
-    ...base,
-    cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
-  });
+  const payload = fallbackPayload(true);
 
   expect(payload?.isError).toBe(true);
   expect(payload?.text).toContain(transition.selectedModelRef);
@@ -124,7 +123,5 @@ it("surfaces both model identities when a required fallback reply is missing", (
 });
 
 it("requires an active failed fallback", () => {
-  expect(
-    buildSilentFallbackFailurePayload({ ...base, fallbackFailureKnown: false }),
-  ).toBeUndefined();
+  expect(fallbackPayload(false)).toBeUndefined();
 });

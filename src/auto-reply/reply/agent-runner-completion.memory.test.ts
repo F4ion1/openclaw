@@ -4,7 +4,7 @@ import type {
   SessionActorStorage,
 } from "../../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -41,15 +41,13 @@ const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 
 async function mutate(command: Parameters<SessionActorStorage["mutate"]>[0], create = false) {
-  const acquired = await acquireSessionActorStorage(scope, { lifetime, authority, create });
-  if (!acquired) {
-    throw new Error("Expected memory actor");
-  }
-  try {
-    return readSessionActorStorageResult(await acquired.actor.storage.mutate(command, authority));
-  } finally {
-    await acquired.actor.release();
-  }
+  const acquired = await withSessionActorStorage(
+    scope,
+    { lifetime, authority, create },
+    async ({ actor }) =>
+      readSessionActorStorageResult(await actor.storage.mutate(command, authority)),
+  );
+  expect(acquired).toBeDefined();
 }
 
 afterEach(() => {

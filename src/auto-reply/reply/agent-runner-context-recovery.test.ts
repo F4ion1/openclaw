@@ -1,18 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { model as createModelFixture } from "../../agents/model-catalog-fixtures.test-support.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 
-function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+function makeTestModel(id: string, contextTokens: number) {
+  return createModelFixture(id, id, {
     contextWindow: contextTokens,
     contextTokens,
     maxTokens: 4096,
-  };
+  });
 }
 
 const primary = { primaryProvider: "openrouter", primaryModel: "qwen3.6-plus" };

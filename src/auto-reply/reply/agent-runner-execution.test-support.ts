@@ -9,13 +9,12 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
+import { model as createModelFixture } from "../../agents/model-catalog-fixtures.test-support.js";
 import {
   initialModelFallbackAttemptOptions,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { getRawExecuteAgentTurnForTest } from "./agent-runner-execution-admission.test-support.js";
@@ -84,17 +83,12 @@ const productionBuilder = vi.hoisted(() => ({
 
 export const GENERIC_RUN_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
-export function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+export function makeTestModel(id: string, contextTokens: number) {
+  return createModelFixture(id, id, {
     contextWindow: contextTokens,
     contextTokens,
     maxTokens: 4096,
-  };
+  });
 }
 
 vi.mock("../../agents/embedded-agent.js", () => ({
@@ -395,19 +389,9 @@ export type EmbeddedAgentParams = Pick<
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onItemEvent?: (payload: {
-    itemId?: string;
-    toolCallId?: string;
-    kind?: string;
-    title?: string;
-    name?: string;
-    phase?: string;
-    status?: string;
-    summary?: string;
-    progressText?: string;
-    approvalId?: string;
-    approvalSlug?: string;
-  }) => Promise<void> | void;
+  onItemEvent?: (
+    payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0],
+  ) => Promise<void> | void;
 };
 
 export function createMockTypingSignaler(): TypingSignaler {
@@ -532,13 +516,14 @@ export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnPar
   };
 }
 
-export function createMinimalRunAgentTurnParams(overrides?: {
-  followupRun?: FollowupRun;
-  opts?: GetReplyOptions;
-  replyOperation?: ReplyOperation;
-  sessionCtx?: TemplateContext;
-  typingSignals?: TypingSignaler;
-}): AgentTurnParams {
+export function createMinimalRunAgentTurnParams(
+  overrides?: Partial<
+    Pick<
+      AgentTurnParams,
+      "followupRun" | "opts" | "replyOperation" | "sessionCtx" | "typingSignals"
+    >
+  >,
+): AgentTurnParams {
   return {
     commandBody: "fix it",
     followupRun: overrides?.followupRun ?? createFollowupRun(),
