@@ -34,26 +34,13 @@ describe("registered native delegation replay", () => {
       void failed.promise.catch(() => {});
       upstream.runEmbeddedAgent.mockImplementation(async (params) =>
         withRegisteredNativeEmbeddedRun(params, async (admittedRunContext) => {
-          if (!params.preparedRunAdmission) {
-            throw new Error("Missing registered source admission");
-          }
           expect(resolveClientVoiceRunBinding(params.runId)).toBeDefined();
-          const identity = {
-            agentId: AGENT_ID,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            runId: params.runId,
-          };
+          const { sessionId, sessionKey, runId, workspaceDir, cwd, config } = params;
+          const identity = { agentId: AGENT_ID, sessionId, sessionKey, runId };
           const text = "Native effect completed.";
           const host = createAgentHarnessHostCapabilities({
             pluginId: "replay-fixed-model",
-            attempt: {
-              ...identity,
-              workspaceDir: params.workspaceDir,
-              cwd: params.cwd,
-              config: params.config,
-              admittedRunContext,
-            },
+            attempt: { ...identity, workspaceDir, cwd, config, admittedRunContext },
           });
           const policy = projectEffectiveExecPolicy({
             base: { host: "gateway", mode: "full" },
@@ -63,9 +50,9 @@ describe("registered native delegation replay", () => {
           const [tool] = host.capabilities.bindToolSurface([
             createExecTool({
               ...policy,
-              config: params.config,
-              cwd: params.workspaceDir,
               ...identity,
+              config,
+              cwd: workspaceDir,
               allowBackground: false,
             }),
           ]);
@@ -73,14 +60,14 @@ describe("registered native delegation replay", () => {
             if (!tool) {
               throw new Error("Missing admitted exec");
             }
-            marker = path.join(params.workspaceDir, "native-replay-effects");
+            marker = path.join(workspaceDir, "native-replay-effects");
             const result = await tool.execute("fixed-action", {
               command: "printf 'effect\n' >> native-replay-effects",
-              workdir: params.workspaceDir,
+              workdir: workspaceDir,
               yieldMs: 10000,
             });
             effects.push(result.details);
-            runIds.push(params.runId);
+            runIds.push(runId);
             return {
               ...nativeResult(text),
               meta: { durationMs: 0, terminalReply: { disposition: "visible", text } },

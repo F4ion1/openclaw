@@ -8,24 +8,8 @@ export type TalkConfigProjectionResponse = {
 };
 
 export function createTalkConfig(apiKey: unknown): OpenClawConfig {
-  return {
-    talk: {
-      provider: "acme",
-      providers: { acme: { apiKey, voiceId: "stub-default-voice" } },
-    },
-  } as OpenClawConfig;
-}
-
-function realtimeConfig(model: string, voice: string, explicit = true): OpenClawConfig {
-  return {
-    talk: {
-      realtime: {
-        ...(explicit ? { provider: "openai" } : {}),
-        model,
-        providers: { openai: { model, voice } },
-      },
-    },
-  };
+  const acme = { apiKey, voiceId: "stub-default-voice" };
+  return { talk: { provider: "acme", providers: { acme } } } as OpenClawConfig;
 }
 
 /** Runs public wire/privacy cases inside the owning handler suite's isolated harness. */
@@ -36,62 +20,57 @@ export function defineRealtimeConfigProjectionTests(
   ) => Promise<TalkConfigProjectionResponse>,
 ) {
   it.each([
-    { includeSecrets: false, providerSelection: "explicit" },
-    { includeSecrets: true, providerSelection: "explicit" },
-    { includeSecrets: false, providerSelection: "implicit" },
+    ["opaque", false, true],
+    ["opaque", true, true],
+    ["opaque", false, false],
+    ["released", false, true],
+    ["released", true, true],
   ] as const)(
-    "projects opaque OpenAI models through the cold bundled policy surface includeSecrets=$includeSecrets provider=$providerSelection",
-    async ({ includeSecrets, providerSelection }) => {
+    "projects %s OpenAI models through the cold bundled policy (secrets=%s explicit=%s)",
+    async (route, includeSecrets, explicit) => {
+      const released = route === "released";
+      const model = released ? "gpt-live-1-codex" : "gpt-live-test-canary";
+      const voice = released ? "spruce" : "marin";
       const response = await requestConfig(
-        realtimeConfig("gpt-live-test-canary", "marin", providerSelection === "explicit"),
+        {
+          talk: {
+            realtime: {
+              ...(explicit ? { provider: "openai" } : {}),
+              model,
+              providers: { openai: { model, voice } },
+            },
+          },
+        },
         includeSecrets,
       );
       const realtime = expectRecordFields(response.config?.talk?.realtime, {
         provider: "openai",
+        ...(released ? { model } : {}),
       });
-      expect(JSON.stringify(response)).not.toContain("gpt-live-test-canary");
-      expect(realtime).not.toHaveProperty("model");
       const providerConfig = (realtime.providers as Record<string, unknown>).openai;
-      expectRecordFields(providerConfig, { voice: "marin" });
-      expect(providerConfig).not.toHaveProperty("model");
+      expectRecordFields(providerConfig, { voice, ...(released ? { model } : {}) });
+      if (!released) {
+        expect(JSON.stringify(response)).not.toContain(model);
+        expect(realtime).not.toHaveProperty("model");
+        expect(providerConfig).not.toHaveProperty("model");
+      }
       expect(response.config?.clientHints).toEqual({
         realtime: {
-          modelSource: "gateway",
-          gatewayRelaySupported: false,
+          ...(!released ? { modelSource: "gateway" } : {}),
+          gatewayRelaySupported: released,
         },
       });
     },
   );
 
-  it.each([false, true])(
-    "preserves the released OpenAI realtime route through the cold bundled policy surface includeSecrets=%s",
-    async (includeSecrets) => {
-      const response = await requestConfig(
-        realtimeConfig("gpt-live-1-codex", "spruce"),
-        includeSecrets,
-      );
-      const realtime = expectRecordFields(response.config?.talk?.realtime, {
-        provider: "openai",
-        model: "gpt-live-1-codex",
-      });
-      expectRecordFields((realtime.providers as Record<string, unknown>).openai, {
-        model: "gpt-live-1-codex",
-        voice: "spruce",
-      });
-      expect(response.config?.clientHints).toEqual({ realtime: { gatewayRelaySupported: true } });
-    },
+  const fixturePath = new URL(
+    "../../../../test/fixtures/talk-realtime-relay-contract.json",
+    import.meta.url,
   );
-
-  it.each(
-    (
-      JSON.parse(
-        readFileSync(
-          new URL("../../../../test/fixtures/talk-realtime-relay-contract.json", import.meta.url),
-          "utf8",
-        ),
-      ) as { cases: Array<{ id: string; source: OpenClawConfig; config: Record<string, unknown> }> }
-    ).cases,
-  )("projects the Android startup wire contract: $id", async (fixture) => {
+  const fixtures = JSON.parse(readFileSync(fixturePath, "utf8")) as {
+    cases: Array<{ id: string; source: OpenClawConfig; config: Record<string, unknown> }>;
+  };
+  it.each(fixtures.cases)("projects the Android startup wire contract: $id", async (fixture) => {
     const response = await requestConfig(fixture.source, false);
     // This same public payload drives the Android manager's socket/startup test.
     expect(response.config).toMatchObject(fixture.config);

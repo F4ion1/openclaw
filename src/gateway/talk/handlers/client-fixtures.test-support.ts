@@ -3,19 +3,16 @@ import { vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
+import type { ChatSendInternalOptions } from "../../server-methods/chat-send-options.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../../server-methods/types.js";
+
+type BrowserSessionFactory = NonNullable<RealtimeVoiceProviderPlugin["createBrowserSession"]>;
 
 export function createTrustedInternalChatSendFixture(chatSend: (...args: unknown[]) => unknown) {
   return (
     request: GatewayRequestHandlerOptions,
     onAdmissionOwned: unknown,
-    options: {
-      beforeDispatch?: (params: {
-        runId: string;
-        assertCurrent: () => void;
-        assertWorkAdmissionCurrent: () => void;
-      }) => Promise<void | (() => void)>;
-    },
+    options: Pick<ChatSendInternalOptions, "beforeDispatch">,
   ) => {
     let registration: Promise<void | (() => void)> | undefined;
     const result = chatSend(
@@ -35,18 +32,17 @@ export function createTrustedInternalChatSendFixture(chatSend: (...args: unknown
               assertWorkAdmissionCurrent() {},
             });
           }
-          if (registration) {
-            void registration.then(
-              () => request.respond(...args),
-              (error: unknown) =>
-                request.respond(false, undefined, {
-                  code: ErrorCodes.UNAVAILABLE,
-                  message: String(error),
-                }),
-            );
-          } else {
-            request.respond(...args);
+          if (!registration) {
+            return request.respond(...args);
           }
+          void registration.then(
+            () => request.respond(...args),
+            (error: unknown) =>
+              request.respond(false, undefined, {
+                code: ErrorCodes.UNAVAILABLE,
+                message: String(error),
+              }),
+          );
         },
       },
       onAdmissionOwned,
@@ -56,9 +52,7 @@ export function createTrustedInternalChatSendFixture(chatSend: (...args: unknown
   };
 }
 
-export function createBrowserProvider(
-  createBrowserSession: NonNullable<RealtimeVoiceProviderPlugin["createBrowserSession"]>,
-) {
+export function createBrowserProvider(createBrowserSession: BrowserSessionFactory) {
   return {
     id: "openai",
     label: "OpenAI Realtime",
@@ -76,9 +70,7 @@ export function createBrowserSessionMock() {
   }));
 }
 
-export type BrowserRequest = Parameters<
-  NonNullable<RealtimeVoiceProviderPlugin["createBrowserSession"]>
->[0];
+export type BrowserRequest = Parameters<BrowserSessionFactory>[0];
 export const browserSession = {
   provider: "openai",
   transport: "webrtc" as const,

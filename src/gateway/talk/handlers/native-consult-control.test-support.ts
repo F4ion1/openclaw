@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -42,9 +43,13 @@ type NativeControlHarness = {
 
 export function registerNativeConsultExactControlTests(harness: NativeControlHarness) {
   const cancel = { text: "cancel", mode: "cancel" };
-  const created = async (method: string, params: Record<string, unknown>) => {
+  const success = async (
+    method: string,
+    params: Record<string, unknown>,
+    expected: unknown = expect.any(Object),
+  ) => {
     const respond = await harness.dispatch(method, params);
-    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect(respond).toHaveBeenCalledWith(true, expected, undefined);
     return respond.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
   };
   describe.each(["browser-rpc", "browser-provider", "relay"] as const)(
@@ -57,6 +62,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             ? ["replaced run", "reused run ID", "other call", "same call"]
             : ["foreign global", "replaced run", "reused run ID", "other call"],
       )("keeps %s control within its declared scope", async (replacement) => {
+        const answer = "Synthetic consult answer";
         harness.getConfig().session = { scope: "global" };
         const started = createDeferredCore<RunEmbeddedAgentParams>();
         const finish = createDeferredCore();
@@ -67,31 +73,19 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
         });
         const abortOther = vi.fn();
         harness.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-          const handle = createEmbeddedRunHandle({
-            runId: params.runId,
-            abort: abortOwned,
-          });
+          const { runId, sessionId, sessionKey, agentId } = params;
+          const handle = createEmbeddedRunHandle({ runId, abort: abortOwned });
           const operation = getCurrentSessionControllerOwner();
           if (!operation) {
             throw new Error("Talk consult has no controller-owned turn");
           }
-          setActiveEmbeddedRun(
-            params.sessionId,
-            handle,
-            params.sessionKey,
-            undefined,
-            params.agentId,
-            operation,
-          );
+          setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, agentId, operation);
           started.resolve(params);
           try {
             await finish.promise;
-            return {
-              payloads: [{ text: "Synthetic consult answer" }],
-              meta: { durationMs: 0, aborted },
-            };
+            return { payloads: [{ text: answer }], meta: { durationMs: 0, aborted } };
           } finally {
-            clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+            clearActiveEmbeddedRun(sessionId, handle, sessionKey);
           }
         });
         const browser = surface !== "relay";
@@ -103,7 +97,8 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           transport: browser ? "webrtc" : "gateway-relay",
           ...(browser ? { capabilities: ["gateway-control-v1"] } : {}),
         };
-        const result = await created(createMethod, createParams);
+        const result = await success(createMethod, createParams);
+        const voiceId = result.voiceSessionId ?? result.sessionId!;
         let controlSessionId = result.sessionId;
         const cancelsOriginal =
           replacement === "foreign global" ||
@@ -112,26 +107,24 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
         const consult = harness.getCallback()({ prompt: "Keep working" });
         let foreignOperation: ReturnType<typeof createReplyOperation> | undefined;
         try {
-          const active = await Promise.race([
+          const active = await awaitGateBeforeSettlement(
             started.promise,
-            consult.then(() => {
-              throw new Error("consult ended before model dispatch");
-            }),
-          ]);
+            consult,
+            "consult ended before model dispatch",
+          );
           expect(getRpcSourceIdentity(rpcSourceTesting.get(active.runId)!)).toMatchObject({
             agentId: "voice",
             sessionKey: "global",
             sessionId: active.sessionId,
           });
           if (replacement === "other call" || replacement === "same call") {
-            const call = await created(createMethod, {
+            const call = await success(createMethod, {
               ...createParams,
               ...(replacement === "same call" ? { voiceSessionId: result.voiceSessionId } : {}),
             });
-            expect(
-              (call.voiceSessionId ?? call.sessionId) ===
-                (result.voiceSessionId ?? result.sessionId),
-            ).toBe(replacement === "same call");
+            expect((call.voiceSessionId ?? call.sessionId) === voiceId).toBe(
+              replacement === "same call",
+            );
             controlSessionId = call.sessionId;
           } else {
             if (replacement !== "replaced run") {
@@ -188,33 +181,24 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
               ),
             );
           } else {
-            const control = await harness.dispatch(
+            await success(
               browser ? "talk.client.steer" : "talk.session.steer",
               {
                 ...(browser ? {} : { sessionId: controlSessionId }),
                 sessionKey: "main",
                 ...cancel,
               },
-            );
-            expect(control).toHaveBeenCalledWith(
-              true,
               expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" }),
-              undefined,
             );
           }
           expect(abortOwned).toHaveBeenCalledTimes(cancelsOriginal ? 1 : 0);
           expect(abortOther).not.toHaveBeenCalled();
-          expect(
-            clientVoiceSessionTesting.readRecord(
-              "voice",
-              result.voiceSessionId ?? result.sessionId!,
-            )?.sessionKey,
-          ).toBe("main");
+          expect(clientVoiceSessionTesting.readRecord("voice", voiceId)?.sessionKey).toBe("main");
           finish.resolve();
           if (cancelsOriginal) {
             await expect(consult).rejects.toMatchObject({ name: "AbortError" });
           } else {
-            await expect(consult).resolves.toEqual({ text: "Synthetic consult answer" });
+            await expect(consult).resolves.toEqual({ text: answer });
           }
         } finally {
           finish.resolve();
