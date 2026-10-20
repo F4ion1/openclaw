@@ -71,7 +71,10 @@ should change `memory.search.provider` to `qianfan`; keep their endpoint and key
 }
 ```
 
-The plugin reuses your configured Qianfan connection. It limits each memory
+The plugin reuses your configured Qianfan connection and resolves credentials
+from your saved profile or `QIANFAN_API_KEY`. An explicit remote API key or
+Authorization header takes precedence; a different remote endpoint requires
+its own credentials. It limits each memory
 embedding request to 16 inputs for `bge-large-zh`, `bge-large-en`, and
 `Embedding-V1`, following [Baidu's documented batch limits](https://ai.baidu.com/ai-doc/WENXINWORKSHOP/Ultiovtgu).
 Other models retain the compatible transport's existing batching behavior.
