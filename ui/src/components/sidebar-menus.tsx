@@ -78,6 +78,7 @@ type SidebarMenusState = {
   filterMenuView: SidebarFilterMenuView;
   agentMenuPosition: { x: number; top: number } | null;
   agentMenuMode: "hover" | "click";
+  agentCreateDialogOpen: boolean;
   // Anchored by its bottom edge so the footer menu grows upward.
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
   menuRenderer: SidebarMenusRenderer | null;
@@ -105,6 +106,7 @@ export function createSidebarMenus(deps: {
     filterMenuView: "root",
     agentMenuPosition: null,
     agentMenuMode: "click",
+    agentCreateDialogOpen: false,
     identityMenuPosition: null,
     menuRenderer: null,
   });
@@ -588,6 +590,19 @@ export function createSidebarMenus(deps: {
       releaseTrigger("agent", options.restoreFocus);
     },
 
+    openAgentCreateDialog() {
+      if (!host.sessionDataContext) {
+        return;
+      }
+      menus.closeAgentMenu();
+      loadMenuRenderer();
+      setField("agentCreateDialogOpen", true);
+    },
+
+    closeAgentCreateDialog() {
+      setField("agentCreateDialogOpen", false);
+    },
+
     toggleIdentityMenu(trigger: HTMLElement) {
       if (state.identityMenuPosition) {
         menus.closePositionedMenu("identity");
@@ -623,6 +638,9 @@ export function createSidebarMenus(deps: {
               state.menuRenderer!.renderSidebarAgentMenuForMenus(menus, view, menu, avatars.read),
             )
           }
+        </Show>,
+        <Show when={state.menuRenderer && state.agentCreateDialogOpen}>
+          {state.menuRenderer!.renderSidebarAgentCreateDialogForMenus(menus, view)}
         </Show>,
         <Show when={state.menuRenderer && state.identityMenuPosition} keyed>
           {(menu) => state.menuRenderer!.renderSidebarIdentityMenuForMenus(menus, view, menu)}

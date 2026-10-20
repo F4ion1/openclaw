@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import type { AgentsAvatarGenerateResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
@@ -29,6 +29,7 @@ export type AvatarPickerProps = {
   onSelect: (dataUrl: string) => void;
   onUpload: (file: File) => void;
   onGenerate: (prompt: string) => Promise<GeneratedAvatar>;
+  onBusyChange?: (busy: boolean) => void;
 };
 
 /** Draft-only chooser. The identity editor owns persistence and agent scope. */
@@ -39,6 +40,9 @@ export function AvatarPicker(props: AvatarPickerProps) {
   const [candidate, setCandidate] = createSignal<Candidate | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  createEffect(busy, (isBusy) => {
+    props.onBusyChange?.(isBusy);
+  });
   let operation = 0;
   let fileInput: HTMLInputElement | undefined;
   onCleanup(() => {

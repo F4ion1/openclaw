@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { createRouter, definePage, type RouterHistory } from "@openclaw/uirouter";
+import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -232,7 +233,7 @@ describe("application agent creation", () => {
       onTestFinished(() => pending.remove());
       await vi.waitFor(() => {
         expect(pending.querySelector(".chat-group.assistant .chat-text")?.textContent?.trim()).toBe(
-          "Hi! What would you like to call me?",
+          "Hi, I’m New agent. Happy to help.",
         );
       });
       expect(pending.querySelector(".chat-avatar.assistant")?.getAttribute("aria-label")).toBe(
@@ -247,6 +248,25 @@ describe("application agent creation", () => {
     }
   });
 
+  it("creates the chosen name and avatar and opens that agent's own chat", async () => {
+    const avatar = "data:image/webp;base64,Ym90";
+    const { context, request, roster, settledNavigation } = await fixture();
+
+    await createApplicationAgent(context, { name: "Scout", avatar });
+    await settledNavigation();
+
+    const agent = roster.agents[1];
+    expect(agent).toEqual({ id: expect.stringMatching(/^bot-/), name: "Scout" });
+    expect(context.agentSelection.state.selectedId).toBe(agent?.id);
+    expect(context.gateway.snapshot.sessionKey).toBe(`agent:${agent?.id}:home`);
+    expect(request).toHaveBeenCalledWith("agents.create", {
+      agentId: agent?.id,
+      name: "Scout",
+      onboarding: true,
+      avatar,
+    });
+  });
+
   it("puts creation first, shows a pending top row, and opens the agent-initiated chat", async () => {
     const verification = createDeferred<{ ok: boolean }>();
     const creation = createDeferred();
@@ -259,13 +279,33 @@ describe("application agent creation", () => {
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
+    await vi.waitFor(() => {
+      expect(sidebar.querySelector('[data-value="command:new-agent"]')?.textContent).toContain(
+        "Create new agent",
+      );
+    });
     const create = sidebar.querySelector<HTMLButtonElement>('[data-value="command:new-agent"]');
-    expect(create?.textContent).toContain("Create new agent");
     expect(sidebar.querySelector(".sidebar-agent-menu [data-value]")).toBe(create);
     expect(sidebar.querySelector(".sidebar-agent-menu [role=separator]")).toBeNull();
     create?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    await vi.waitFor(() => {
+      expect(sidebar.querySelector(".agent-create-dialog input[name='name']")).not.toBeNull();
+    });
+    const name = sidebar.querySelector<HTMLInputElement>(
+      ".agent-create-dialog input[name='name']",
+    )!;
+    name.value = "New agent";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(name.value).toBe("New agent");
+    expect(
+      sidebar.querySelector<HTMLButtonElement>(".agent-create-dialog button[type='submit']")
+        ?.disabled,
+    ).toBe(false);
+    sidebar.querySelector<HTMLButtonElement>(".agent-create-dialog button[type='submit']")!.click();
+    await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     await vi.waitFor(() => {

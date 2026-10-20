@@ -11,7 +11,8 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { AGENT_ONBOARDING_GREETING } from "../../shared/agent-onboarding.js";
+import { buildAgentOnboardingGreeting } from "../../shared/agent-onboarding.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
@@ -21,6 +22,7 @@ import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { createGatewaySession } from "../session-create-service.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { createSystemAgentGatewayRuntime } from "./system-agent-execution.js";
@@ -94,6 +96,7 @@ export async function prepareAgentOnboarding(
 export async function completeAgentOnboarding(
   options: GatewayRequestHandlerOptions,
   agentId: string,
+  agentName?: string,
 ): Promise<NonNullable<AgentsCreateResult["onboarding"]>> {
   using diagnostics = startSessionCreateDiagnostics();
   const cfg = options.context.getRuntimeConfig();
@@ -119,7 +122,7 @@ export async function completeAgentOnboarding(
             provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
             id: "onboarding",
           },
-          content: [{ type: "text", text: AGENT_ONBOARDING_GREETING }],
+          content: [{ type: "text", text: buildAgentOnboardingGreeting(agentName) }],
           stopReason: "stop",
           usage: buildUsageWithNoCost({}),
         }),
@@ -143,5 +146,58 @@ export async function completeAgentOnboarding(
     return { sessionKey, status: "completed" };
   } catch (error) {
     return { sessionKey, status: "error", error: formatErrorMessage(error) };
+  }
+}
+
+/** Start the first real agent turn after the create receipt has reached the UI. */
+export async function startAgentOnboardingConversation(
+  options: GatewayRequestHandlerOptions,
+  agentId: string,
+  sessionKey: string,
+): Promise<void> {
+  const releaseAuthorization = options.sessionMutationAuthorization?.retain?.();
+  using _ = { [Symbol.dispose]: () => releaseAuthorization?.() };
+  let response: Parameters<GatewayRequestHandlerOptions["respond"]> | undefined;
+  try {
+    await runOutsideAsyncWorkScope(() =>
+      handleTrustedInternalChatSend(
+        {
+          ...options,
+          req: { ...options.req, method: "chat.send" },
+          params: {
+            sessionKey,
+            agentId,
+            message: [
+              "A short introduction has already been saved in this agent's conversation. Call the ask_user tool now to continue onboarding; do not show the choices as plain text or use tool_search/dispatch_action.",
+              'Use exactly this Ask User question shape: {"questions":[{"id":"primary_focus","header":"Main focus","question":"What do you want me helping with most?","multiSelect":false,"options":[{"label":"Calendar and scheduling"},{"label":"Notion notes and tasks"},{"label":"Research and summaries"},{"label":"Errands like shopping or bookings"}]}]}. Keep the short header separate from the full question. Do not add option values or other fields.',
+              "After the user selects an option, ask one open-ended follow-up to learn a bit more about the specific thing they want to achieve. Tailor it to their selection, but do not provide another list or hard-code the follow-up wording. Then continue normally after they answer.",
+              "This agent already exists. Do not propose creating an agent or ask the user to approve its creation.",
+            ].join("\n\n"),
+            idempotencyKey: `agents.create:${agentId}:onboarding-question`,
+            deliver: false,
+            suppressCommandInterpretation: true,
+            systemInputProvenance: {
+              kind: "internal_system",
+              sourceTool: "agents_create_onboarding",
+            },
+          },
+          respond: (...args) => {
+            response ??= args;
+          },
+        },
+        undefined,
+        {
+          transcript: { display: false },
+          toolsAllow: ["ask_user"],
+        },
+      ),
+    );
+    if (response && !response[0]) {
+      throw new Error(formatErrorMessage(response[2]));
+    }
+  } catch (error) {
+    options.context.logGateway.warn(
+      `could not start onboarding for agent ${agentId}: ${formatErrorMessage(error)}`,
+    );
   }
 }

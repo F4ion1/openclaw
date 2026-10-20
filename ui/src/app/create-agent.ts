@@ -16,8 +16,13 @@ import { patchSettings } from "./settings.ts";
 
 registerAgentCreationEnglish();
 
+export type ApplicationAgentIdentity = { name: string; avatar: string | null };
+
 /** Creation belongs to the application, so closing the selector cannot cancel it. */
-export async function createApplicationAgent(context: ApplicationContext): Promise<void> {
+export async function createApplicationAgent(
+  context: ApplicationContext,
+  identity?: ApplicationAgentIdentity,
+): Promise<void> {
   if (!canCallGatewayMethod(context.gateway.snapshot, "agents.create", "operator.admin")) {
     showToast({ message: t("agentChip.creationUnavailable"), durationMs: 12_000 });
     return;
@@ -40,34 +45,38 @@ export async function createApplicationAgent(context: ApplicationContext): Promi
     }
   };
   try {
-    const name = t("agentChip.newAgent");
-    const result = await context.agents.create(name, (agentId) => {
-      creation.sessionKey = buildAgentMainSessionKey({
-        agentId,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-        }),
-      });
-      const target = sessionNavigationTarget({
-        context,
-        face: "chat",
-        sessionKey: creation.sessionKey,
-        agentId,
-        preferenceDerivedFace: true,
-        exactKey: true,
-      });
-      clearPending = context.chatSubmissions.beginCreate({
-        creation,
-        message: null,
-        displayName: name,
-        canDisplay: () =>
-          context.gateway.snapshot.client === client &&
-          context.router.getState().location.pathname === target.options.pathname,
-      });
-      context.navigate("chat", target.options);
-      location = context.router.getState().location;
-    });
+    const name = identity?.name.trim() || t("agentChip.newAgent");
+    const result = await context.agents.create(
+      name,
+      (agentId) => {
+        creation.sessionKey = buildAgentMainSessionKey({
+          agentId,
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+          }),
+        });
+        const target = sessionNavigationTarget({
+          context,
+          face: "chat",
+          sessionKey: creation.sessionKey,
+          agentId,
+          preferenceDerivedFace: true,
+          exactKey: true,
+        });
+        clearPending = context.chatSubmissions.beginCreate({
+          creation,
+          message: null,
+          displayName: name,
+          canDisplay: () =>
+            context.gateway.snapshot.client === client &&
+            context.router.getState().location.pathname === target.options.pathname,
+        });
+        context.navigate("chat", target.options);
+        location = context.router.getState().location;
+      },
+      identity?.avatar ? { avatar: identity.avatar } : undefined,
+    );
     if (!result || context.gateway.snapshot.client !== client || !client) {
       if (context.gateway.snapshot.client === client) {
         restoreUncreatedChat();

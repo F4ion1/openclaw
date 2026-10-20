@@ -355,12 +355,13 @@ export function createAgentCapability(gateway: AgentGateway) {
     async create(
       name: string,
       onStarted?: (agentId: string) => void,
+      identity?: { avatar?: string },
     ): Promise<AgentCreationResult | null> {
       const client = state.client;
       if (!client || !state.connected || disposed || state.pendingAgent) {
         return null;
       }
-      const attempt = creations.prepare(client, name);
+      const attempt = creations.prepare(client, name, identity?.avatar);
       const { agentId } = attempt;
       const pendingAgent = { id: agentId, name: attempt.name };
       const isCurrent = () =>

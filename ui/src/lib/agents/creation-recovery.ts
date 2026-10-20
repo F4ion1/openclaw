@@ -8,6 +8,7 @@ export type AgentCreationResult = Pick<AgentsCreateResult, "agentId" | "name"> &
 export type AgentCreationAttempt = {
   agentId: string;
   name: string;
+  avatar?: string;
   receipt?: AgentCreationResult;
   rejection?: unknown;
   responseReceived?: boolean;
@@ -17,10 +18,14 @@ export type AgentCreationAttempt = {
 export function createAgentCreationRecovery() {
   const attempts = new Map<string, AgentCreationAttempt>();
   return {
-    prepare(client: GatewayBrowserClient, name: string) {
+    prepare(client: GatewayBrowserClient, name: string, avatar?: string) {
       const target = client.gatewayUrl;
       const previous = attempts.get(target);
-      const attempt = previous ?? { agentId: `bot-${crypto.randomUUID()}`, name };
+      const attempt = previous ?? {
+        agentId: `bot-${crypto.randomUUID()}`,
+        name,
+        ...(avatar ? { avatar } : {}),
+      };
       return {
         agentId: attempt.agentId,
         name: attempt.name,

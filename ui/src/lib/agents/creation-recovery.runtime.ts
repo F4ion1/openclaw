@@ -78,6 +78,7 @@ export async function executeAgentCreation(
       created = await client.request<AgentCreationResult>("agents.create", {
         agentId: attempt.agentId,
         name: attempt.name,
+        ...(attempt.avatar ? { avatar: attempt.avatar } : {}),
         onboarding: true,
       });
       attempt.receipt = created;

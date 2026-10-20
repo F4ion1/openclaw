@@ -1,10 +1,8 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
-import { createApplicationAgent } from "../app/create-agent.ts";
+import { createMemo, lazy, Loading, Show } from "solid-js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
-import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
@@ -29,7 +27,6 @@ import {
   pluginSessionMenuActions,
   runControlUiPluginAction,
 } from "../plugins/control-ui-actions.ts";
-import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
@@ -44,9 +41,14 @@ import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
 
-registerAgentCreationEnglish();
+const AgentCreateDialog = lazy(() => import("./agent-create-dialog.tsx"), {
+  export: "AgentCreateDialog",
+});
+const SidebarAgentMenu = lazy(() => import("./app-sidebar-agent-menu.tsx"), {
+  export: "renderSidebarAgentMenu",
+});
 
-export { focusSidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
+export { focusSidebarAgentMenu } from "./sidebar-agent-menu-focus.ts";
 
 export {
   renderSidebarCatalogViewMenuForMenus,
@@ -124,73 +126,99 @@ export function renderSidebarAgentMenuForMenus(
   });
   const chipAgent = createMemo(() => host.activeChipAgent());
   return (
-    <SidebarAgentMenu
-      {...{
-        position,
-        basePath: host.basePath,
-        activeId: chipAgent().agent ? chipAgent().activeId : "",
-        agents: chipAgent().agents,
-        identities: chipAgent().identities,
-        pinnedAgentIds: host.pinnedAgentIds,
-        rosterMode: host.sidebarAgentsMode === "roster" && !chipAgent().pending,
-        onShowAllAgents: () => {
-          host.navigationView = "sessions";
-          host.sessionDataContext?.navigation.update({ navCollapsed: false });
-          patchSettings({ sidebarAgentsMode: "roster" });
-          host.sessionDataContext?.agentSelection.setScope(null);
-          host.onNavigate?.("sessions");
-          void menus.commit().then((committed) => {
-            if (!committed) {
+    <Loading>
+      <SidebarAgentMenu
+        {...{
+          position,
+          basePath: host.basePath,
+          activeId: chipAgent().agent ? chipAgent().activeId : "",
+          agents: chipAgent().agents,
+          identities: chipAgent().identities,
+          pinnedAgentIds: host.pinnedAgentIds,
+          rosterMode: host.sidebarAgentsMode === "roster" && !chipAgent().pending,
+          onShowAllAgents: () => {
+            host.navigationView = "sessions";
+            host.sessionDataContext?.navigation.update({ navCollapsed: false });
+            patchSettings({ sidebarAgentsMode: "roster" });
+            host.sessionDataContext?.agentSelection.setScope(null);
+            host.onNavigate?.("sessions");
+            void menus.commit().then((committed) => {
+              if (!committed) {
+                return;
+              }
+              menus.element
+                .querySelector<HTMLElement>(
+                  ".sidebar-workspace-header__main, .sidebar-agent-card__main",
+                )
+                ?.focus();
+            });
+          },
+          creationDisabledReason: canCallGatewayMethod(
+            gateway()?.read().snapshot,
+            "agents.create",
+            "operator.admin",
+          )
+            ? null
+            : t("agentChip.creationUnavailable"),
+          resolveAvatarUrl: (url) => avatars().resolve(url),
+          avatarErrorHandler: (url) => avatars().imageErrorHandler(url),
+          openMode: menus.agentMenuMode,
+          agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
+          onPointerEnter: () => menus.handleAgentMenuPointerEnter(),
+          onPointerLeave: () => menus.handleAgentMenuPointerLeave(),
+          onAfterShow: () => menus.restoreFocusAfterAgentMenuHoverOpen(),
+          onSwitchAgent: (agentId) => {
+            if (host.sidebarAgentsMode === "roster") {
+              patchSettings({ sidebarAgentsMode: "chip" });
+            }
+            host.switchChipAgent(agentId);
+          },
+          pendingAgent: agentState()?.read().pendingAgent,
+          recentlyCreatedAgentId:
+            agentState()?.read().recentlyCreatedAgentId ??
+            preferences()?.read().sidebarRecentlyCreatedAgentId,
+          onCreateAgent: () => {
+            const context = host.sessionDataContext;
+            if (context) {
+              menus.closeAgentMenu();
+              menus.openAgentCreateDialog();
+            }
+          },
+          anchor: trigger ?? undefined,
+          onClose: (restoreFocus) => {
+            if (menus.agentMenuPosition !== position) {
               return;
             }
-            menus.element
-              .querySelector<HTMLElement>(
-                ".sidebar-workspace-header__main, .sidebar-agent-card__main",
-              )
-              ?.focus();
-          });
-        },
-        creationDisabledReason: canCallGatewayMethod(
-          gateway()?.read().snapshot,
-          "agents.create",
-          "operator.admin",
-        )
-          ? null
-          : t("agentChip.creationUnavailable"),
-        resolveAvatarUrl: (url) => avatars().resolve(url),
-        avatarErrorHandler: (url) => avatars().imageErrorHandler(url),
-        openMode: menus.agentMenuMode,
-        agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
-        onPointerEnter: () => menus.handleAgentMenuPointerEnter(),
-        onPointerLeave: () => menus.handleAgentMenuPointerLeave(),
-        onAfterShow: () => menus.restoreFocusAfterAgentMenuHoverOpen(),
-        onSwitchAgent: (agentId) => {
-          if (host.sidebarAgentsMode === "roster") {
-            patchSettings({ sidebarAgentsMode: "chip" });
-          }
-          host.switchChipAgent(agentId);
-        },
-        pendingAgent: agentState()?.read().pendingAgent,
-        recentlyCreatedAgentId:
-          agentState()?.read().recentlyCreatedAgentId ??
-          preferences()?.read().sidebarRecentlyCreatedAgentId,
-        onCreateAgent: async () => {
-          const context = host.sessionDataContext;
-          if (context) {
-            menus.closeAgentMenu();
-            await createApplicationAgent(context);
-          }
-        },
-        anchor: trigger ?? undefined,
-        onClose: (restoreFocus) => {
-          if (menus.agentMenuPosition !== position) {
-            return;
-          }
-          menus.closeAgentMenu({ restoreFocus });
-        },
-        onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
-      }}
-    />
+            menus.closeAgentMenu({ restoreFocus });
+          },
+          onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
+        }}
+      />
+    </Loading>
+  );
+}
+
+export function renderSidebarAgentCreateDialogForMenus(
+  menus: SidebarMenus,
+  host: SidebarMenusOwner,
+): JSX.Element | null {
+  const context = host.sessionDataContext;
+  if (!context) {
+    return null;
+  }
+  return (
+    <Loading>
+      <AgentCreateDialog
+        context={context}
+        onCancel={() => menus.closeAgentCreateDialog()}
+        onCreate={(identity) => {
+          menus.closeAgentCreateDialog();
+          void import("../app/create-agent.ts").then(({ createApplicationAgent }) =>
+            createApplicationAgent(context, identity),
+          );
+        }}
+      />
+    </Loading>
   );
 }
 

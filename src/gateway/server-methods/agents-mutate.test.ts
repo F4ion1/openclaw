@@ -9,6 +9,8 @@ import {
 } from "../../config/runtime-write-application.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { FsSafeError, root, type ReadResult } from "../../infra/fs-safe.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "../../process/gateway-work-admission.test-helpers.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
 import { registerAgentDeletionAuthorityTests } from "./agents-delete-authority.test-support.js";
 import { registerAgentDeleteFilesystemTests } from "./agents-delete-filesystem.test-support.js";
@@ -103,6 +105,8 @@ const mocks = vi.hoisted(() => ({
   logGatewayWarn: vi.fn(),
   prepareAgentOnboarding: vi.fn(),
   completeAgentOnboarding: vi.fn(),
+  startAgentOnboardingConversation: vi.fn(),
+  captureGatewayOperatorRunAuthority: vi.fn(),
   runAgentDatabaseCleanup: vi.fn(
     async (_target: unknown, run: () => Promise<unknown>) => await run(),
   ),
@@ -230,6 +234,11 @@ vi.mock("../../commands/agents.config.js", () => ({
   findAgentEntryIndex: mocks.findAgentEntryIndex,
   listAgentEntries: mocks.listAgentEntries,
   pruneAgentConfig: mocks.pruneAgentConfig,
+}));
+
+vi.mock("../operator-run-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../operator-run-authority.js")>()),
+  captureGatewayOperatorRunAuthority: mocks.captureGatewayOperatorRunAuthority,
 }));
 
 vi.mock("../../agents/auth-profiles/path-resolve.js", async (importOriginal) => ({
@@ -472,6 +481,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 vi.mock(import("./agents-onboarding.js"), () => ({
   prepareAgentOnboarding: mocks.prepareAgentOnboarding,
   completeAgentOnboarding: mocks.completeAgentOnboarding,
+  startAgentOnboardingConversation: mocks.startAgentOnboardingConversation,
 }));
 
 const { agentsHandlers } = await import("./agents.js");
@@ -704,6 +714,7 @@ describe("agents.create", () => {
   beforeEach(() => {
     mocks.captureDeletedAgentDatabaseFences.mockReturnValue([]);
     mocks.reviveAgentDatabases.mockReset().mockResolvedValue(undefined);
+    mocks.captureGatewayOperatorRunAuthority.mockReset();
     mocks.loadConfigReturn = agentConfig({ main: {} });
   });
 
@@ -774,6 +785,114 @@ describe("agents.create", () => {
       expect(mocks.completeAgentOnboarding).toHaveBeenCalledOnce();
     },
   );
+  it("retains the create request's Gateway work while onboarding starts after its receipt", async () => {
+    let releaseOnboarding!: () => void;
+    let onboardingStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      onboardingStarted = resolve;
+    });
+    const onboarding = new Promise<void>((resolve) => {
+      releaseOnboarding = resolve;
+    });
+    mocks.prepareAgentOnboarding.mockResolvedValueOnce({
+      expectedConfigHash: "test-hash",
+      assertCurrent: vi.fn(),
+    });
+    mocks.completeAgentOnboarding.mockResolvedValueOnce({
+      status: "completed",
+      sessionKey: "agent:bot-stable:home",
+    });
+    mocks.startAgentOnboardingConversation.mockImplementationOnce(async () => {
+      onboardingStarted();
+      await onboarding;
+    });
+
+    await runWithGatewayRootWorkAdmissionForTest(async () => {
+      expectRespondOk(
+        await create({ agentId: "bot-stable", name: "Preview Agent", onboarding: true }),
+        {
+          ok: true,
+          agentId: "bot-stable",
+          name: "Preview Agent",
+          workspace: "/resolved/workspace/bot-stable",
+          agentDir: "/agents/test-agent",
+          onboarding: { status: "completed", sessionKey: "agent:bot-stable:home" },
+        },
+      );
+    });
+
+    await started;
+    expect(mocks.startAgentOnboardingConversation).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    releaseOnboarding();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+  it("captures operator authority before the create receipt and carries it into onboarding", async () => {
+    const operatorAuthority = { assertCurrent: vi.fn(), retain: vi.fn(() => vi.fn()) };
+    const releaseAuthority = vi.fn();
+    let releaseOnboarding!: () => void;
+    let onboardingStarted!: (options: unknown) => void;
+    const onboarding = new Promise<void>((resolve) => {
+      releaseOnboarding = resolve;
+    });
+    const started = new Promise<unknown>((resolve) => {
+      onboardingStarted = resolve;
+    });
+    const client = {
+      connect: { role: "operator", scopes: ["operator.admin"], client: { id: "control-ui" } },
+      internal: { authenticatedOperator: true },
+    };
+    const hasCurrentClientAuthority = vi.fn(() => true);
+    mocks.prepareAgentOnboarding.mockResolvedValueOnce({
+      expectedConfigHash: "test-hash",
+      assertCurrent: vi.fn(),
+    });
+    mocks.completeAgentOnboarding.mockResolvedValueOnce({
+      status: "completed",
+      sessionKey: "agent:bot-stable:home",
+    });
+    mocks.captureGatewayOperatorRunAuthority.mockImplementationOnce(async () => {
+      expect(hasCurrentClientAuthority()).toBe(true);
+      return { authority: operatorAuthority, release: releaseAuthority };
+    });
+    mocks.startAgentOnboardingConversation.mockImplementationOnce(async (options: unknown) => {
+      onboardingStarted(options);
+      await onboarding;
+    });
+
+    let response!: ReturnType<typeof vi.fn>;
+    await runWithGatewayRootWorkAdmissionForTest(async () => {
+      response = vi.fn(() => {
+        expect(mocks.captureGatewayOperatorRunAuthority).toHaveBeenCalledOnce();
+      });
+      const handler = expectDefined(agentsHandlers["agents.create"], "agents.create handler");
+      await handler({
+        params: { agentId: "bot-stable", name: "Preview Agent", onboarding: true },
+        respond: response,
+        context: createContext() as never,
+        req: { type: "req", id: "authority-test", method: "agents.create" },
+        client: client as never,
+        hasCurrentClientAuthority,
+        isWebchatConnect: () => false,
+      });
+    });
+
+    expectRespondOk(response, {
+      ok: true,
+      agentId: "bot-stable",
+      name: "Preview Agent",
+      workspace: "/resolved/workspace/bot-stable",
+      agentDir: "/agents/test-agent",
+      onboarding: { status: "completed", sessionKey: "agent:bot-stable:home" },
+    });
+    const receivedOptions = await started;
+    expect(receivedOptions).toMatchObject({
+      client: { internal: { operatorRunAuthority: operatorAuthority } },
+    });
+    expect(releaseAuthority).not.toHaveBeenCalled();
+    releaseOnboarding();
+    await vi.waitFor(() => expect(releaseAuthority).toHaveBeenCalledOnce());
+  });
   it("does not create an agent or workspace when inference verification fails", async () => {
     mocks.prepareAgentOnboarding.mockRejectedValueOnce(new Error("Inference unavailable"));
     expectRespondErrorContaining(

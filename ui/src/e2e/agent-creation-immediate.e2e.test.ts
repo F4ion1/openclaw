@@ -12,7 +12,7 @@ import {
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI immediate agent creation" });
-const greeting = "Hi! What would you like to call me?";
+const greeting = "Hi, I’m New agent. Happy to help.";
 const previousMessage = "Synthetic Harbor conversation before agent creation.";
 const pendingSelector = 'openclaw-pending-session-create[aria-hidden="false"]';
 
@@ -56,6 +56,13 @@ suite.define(() => {
         await gateway.deferNext("agents.create");
         await captureSidebarUiProof(suite, page, "synthetic-agent-create-before.png");
 
+        await create.click();
+        const dialog = page.locator(".agent-create-dialog");
+        await dialog.waitFor({ state: "visible" });
+        await dialog.locator('input[name="name"]').fill("New agent");
+        await captureSidebarUiProof(suite, page, "synthetic-agent-create-dialog.png");
+        const submit = dialog.locator('button[type="submit"]');
+
         const [firstPaint] = await Promise.all([
           page.evaluate(
             ({ pending, text, originalPath }) =>
@@ -90,7 +97,7 @@ suite.define(() => {
               originalPath: new URL(originalUrl).pathname,
             },
           ),
-          create.click(),
+          submit.click(),
         ]);
         // This bounds automation-to-painted-preview time; it makes no provider/persistence claim.
         expect(firstPaint.elapsedMs).toBeGreaterThanOrEqual(0);

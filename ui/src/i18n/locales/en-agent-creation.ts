@@ -3,6 +3,8 @@ import { en } from "./en.ts";
 
 const enAgentCreation = {
   agentChip: {
+    createDialogTitle: "Create New Bot",
+    createDialogName: "Name your Bot",
     creationUnavailable:
       "Creating an agent requires agents.create with operator.admin access. Pair this browser with operator.admin scope, then reconnect.",
     rosterUnavailable: "Could not load your agents. Reconnect and try again.",

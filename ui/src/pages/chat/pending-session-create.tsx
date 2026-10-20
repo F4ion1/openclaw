@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
-import { AGENT_ONBOARDING_GREETING } from "../../../../src/shared/agent-onboarding.js";
+import { buildAgentOnboardingGreeting } from "../../../../src/shared/agent-onboarding.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
@@ -219,7 +219,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
                 <div class="chat-group-messages">
                   <div class="chat-bubble chat-bubble--first">
                     <MessageMarkdown
-                      markdown={AGENT_ONBOARDING_GREETING}
+                      markdown={buildAgentOnboardingGreeting(displayName)}
                       messageKey={`${composerId}-greeting`}
                       options={{ role: "assistant", isStreaming: false }}
                       markdownOptions={{ codeBlockChrome: "none" }}

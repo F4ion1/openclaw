@@ -28,9 +28,13 @@ import {
 } from "../../config/runtime-write-application.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  runWithGatewayDetachedWorkContinuation,
+} from "../../process/gateway-work-admission.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
@@ -55,6 +59,7 @@ import { agentListHandler } from "./agents-list.js";
 import {
   prepareAgentOnboarding,
   completeAgentOnboarding,
+  startAgentOnboardingConversation,
   type PreparedAgentOnboarding,
 } from "./agents-onboarding.js";
 import {
@@ -183,7 +188,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       if (applied) {
         diagnostics?.mark("createChat");
       }
-      const onboarding = preparation
+      let onboarding = preparation
         ? applicationError
           ? {
               status: "error" as const,
@@ -193,8 +198,29 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }),
               error: applicationError,
             }
-          : await completeAgentOnboarding(options, result.agentId)
+          : await completeAgentOnboarding(options, result.agentId, result.name)
         : undefined;
+      let onboardingOperatorAuthority:
+        | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+        | undefined;
+      if (onboarding?.status === "completed" && client) {
+        try {
+          onboardingOperatorAuthority = await captureGatewayOperatorRunAuthority({
+            client,
+            context,
+            hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+          });
+          if (!onboardingOperatorAuthority) {
+            throw new Error("Could not retain operator authority for the agent's first turn.");
+          }
+        } catch (error) {
+          onboarding = {
+            status: "error",
+            sessionKey: onboarding.sessionKey,
+            error: formatErrorMessage(error),
+          };
+        }
+      }
       diagnostics?.mark("response");
       respond(
         true,
@@ -209,6 +235,36 @@ export const agentsHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
+      if (onboarding?.status === "completed" && (!client || onboardingOperatorAuthority)) {
+        const onboardingOptions =
+          client && onboardingOperatorAuthority
+            ? {
+                ...options,
+                client: {
+                  ...client,
+                  internal: {
+                    ...client.internal,
+                    operatorRunAuthority: onboardingOperatorAuthority.authority,
+                  },
+                },
+              }
+            : options;
+        void runWithGatewayDetachedWorkContinuation(async () => {
+          try {
+            await startAgentOnboardingConversation(
+              onboardingOptions,
+              result.agentId,
+              onboarding.sessionKey,
+            );
+          } finally {
+            onboardingOperatorAuthority?.release();
+          }
+        }, "agents:create-onboarding").catch((error: unknown) => {
+          context.logGateway.warn(
+            `could not start onboarding for agent ${result.agentId}: ${formatErrorMessage(error)}`,
+          );
+        });
+      }
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         respond(false, undefined, error.error);

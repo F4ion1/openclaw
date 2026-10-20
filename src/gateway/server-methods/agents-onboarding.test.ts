@@ -7,11 +7,21 @@ import {
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { verifySetupInferenceConfig } from "../../system-agent/setup-inference-turn.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareAgentOnboarding, completeAgentOnboarding } from "./agents-onboarding.js";
+import {
+  completeAgentOnboarding,
+  prepareAgentOnboarding,
+  startAgentOnboardingConversation,
+} from "./agents-onboarding.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+const { sendInternalChat } = vi.hoisted(() => ({ sendInternalChat: vi.fn() }));
+vi.mock(import("./chat-send-handler.js"), () => ({
+  handleTrustedInternalChatSend: sendInternalChat,
+}));
 
 // mock-isolation: control inference availability without contacting a real provider.
 vi.mock(import("../../system-agent/setup-inference-turn.js"), () => ({
@@ -108,7 +118,7 @@ it("atomically publishes a saved greeting that remains in the agent's conversati
       assertTargetCurrent: vi.fn(),
       recordCreatedSession,
     };
-    const receipt = await completeAgentOnboarding(options, "main");
+    const receipt = await completeAgentOnboarding(options, "main", "Scout");
     expect(receipt).toEqual({ status: "completed", sessionKey: "agent:main:home" });
     const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey: receipt.sessionKey });
     expect(recordCreatedSession).toHaveBeenCalledOnce();
@@ -127,7 +137,7 @@ it("atomically publishes a saved greeting that remains in the agent's conversati
     expect(messages).toEqual([
       expect.objectContaining({
         role: "assistant",
-        content: [{ type: "text", text: "Hi! What would you like to call me?" }],
+        content: [{ type: "text", text: "Hi, I’m Scout. Happy to help." }],
         api: "openclaw-transcript",
         provider: "openclaw",
         model: "onboarding",
@@ -137,6 +147,52 @@ it("atomically publishes a saved greeting that remains in the agent's conversati
     expect(messages.some((message) => isRecord(message) && message.role === "user")).toBe(false);
     expect(isTranscriptOnlyOpenClawAssistantMessage(messages[0])).toBe(false);
   });
+});
+
+it("starts onboarding with a hidden single-select Ask User prompt in the agent's chat", async () => {
+  const release = vi.fn();
+  const work = new AsyncWorkScope();
+  const options = invocation();
+  options.sessionMutationAuthorization = {
+    retain: () => release,
+  } as unknown as GatewayRequestHandlerOptions["sessionMutationAuthorization"];
+  let sendWorkSignal: AbortSignal | undefined;
+  sendInternalChat.mockReset().mockImplementation(async (request: GatewayRequestHandlerOptions) => {
+    sendWorkSignal = getAsyncWorkSignal();
+    request.respond(true, { status: "started" });
+  });
+
+  await work.track(() =>
+    startAgentOnboardingConversation(options, "bot-stable", "agent:bot-stable:home"),
+  );
+  await work.drain();
+
+  const [request, , internalOptions] = sendInternalChat.mock.calls[0]!;
+  expect(request.params).toMatchObject({
+    sessionKey: "agent:bot-stable:home",
+    agentId: "bot-stable",
+    deliver: false,
+    suppressCommandInterpretation: true,
+    systemInputProvenance: {
+      kind: "internal_system",
+      sourceTool: "agents_create_onboarding",
+    },
+  });
+  expect(request.params.message).toContain(
+    '"header":"Main focus","question":"What do you want me helping with most?","multiSelect":false',
+  );
+  expect(request.params.message).toContain('"id":"primary_focus"');
+  expect(request.params.message).toContain("Calendar and scheduling");
+  expect(request.params.message).toContain("Notion notes and tasks");
+  expect(request.params.message).toContain("Research and summaries");
+  expect(request.params.message).toContain("Errands like shopping or bookings");
+  expect(request.params.message).toContain("one open-ended follow-up");
+  expect(internalOptions).toMatchObject({
+    transcript: { display: false },
+    toolsAllow: ["ask_user"],
+  });
+  expect(sendWorkSignal).toBeUndefined();
+  expect(release).toHaveBeenCalledOnce();
 });
 it("reports failed transcript admission without changing the already-created agent receipt", async () => {
   const options = invocation();
