@@ -235,11 +235,19 @@ function processRows(output, previous, elapsedMs) {
           : /^\/(?:System\/Library|usr\/(?:bin|sbin|libexec)|bin|sbin)\//u.test(executable)
             ? "host-system"
             : "other";
+    // Only installed Apple runtime system paths may contribute an otherwise unknown name.
+    // Device data, apps, and container paths retain the fixed-role privacy boundary.
+    const runtimeSystemPath =
+      /^(?:\/Library\/Developer\/CoreSimulator\/Volumes\/[^/]+|\/private\/var\/run\/com\.apple\.security\.cryptexd\/mnt\/com\.apple\.(?:iPhoneOS|watchOS)\.SimulatorRuntime-[^/]+)\/Library\/Developer\/CoreSimulator\/Profiles\/Runtimes\/[^/]+\.simruntime\/Contents\/Resources\/RuntimeRoot\/(?:System\/Library|usr\/(?:bin|sbin|libexec))\//u.test(
+        executable,
+      ) && path.posix.normalize(executable) === executable;
+    const publicRuntimeName =
+      runtimeSystemPath && /^[A-Za-z][A-Za-z0-9_.+-]{0,95}$/u.test(basename);
     return [
       {
         pid: Number(pid),
         parentPid: Number(ppid),
-        role: roles.has(basename) ? basename : "other",
+        role: roles.has(basename) || publicRuntimeName ? basename : "other",
         origin,
         parentRole: "other",
         state,

@@ -131,6 +131,13 @@ describe("iOS resource timeline workload boundary", () => {
               row(82, 80, 0.33, 500000, "U", runtime + "/private-api-token"),
               row(83, 80, 0.001, 1, "S", cryptex + "/usr/libexec/modelcatalogd"),
               row(84, 80, 0.01, 1, "S", cryptex + "/System/Library/Frameworks/CoreSpotlight.framework/CoreSpotlightService"),
+              row(85, 80, 0.4, 1024, "S", cryptex + "/usr/libexec/duetexpertd"),
+              row(86, 80, 0.001, 1, "S", "/Library/Developer/CoreSimulator/Devices/private-device/data/RuntimeRoot/usr/libexec/private-device-token"),
+              row(87, 80, 0.001, 1, "S", runtime + "/System/Library/../../private-container-token"),
+              row(88, 80, 0.001, 1, "S", runtime + "/Applications/private-app-token.app/private-app-token"),
+              row(89, 80, 0.001, 1, "S", runtime + "/usr/libexec/private-non-ascii-é"),
+              row(101, 80, 0.001, 1, "S", runtime + "/usr/libexec/" + "private-oversize-".repeat(8)),
+              row(102, 80, 0.001, 1, "S", "/private/app-container/duetexpertd"),
               ...Array.from({ length: 8 }, (_, i) => row(90 + i, 1, 0.1 + i / 100, 2048, "S", "/usr/libexec/cfprefsd")),
             ].join("\\n");
           }
@@ -174,7 +181,7 @@ describe("iOS resource timeline workload boundary", () => {
       expect(result.stderr).toBe("");
       const raw = readFileSync(output, "utf8");
       expect(raw).not.toMatch(
-        /private-api-token|private-runtime|iOS_private|RuntimeRoot|\/usr\/|\/Applications\//u,
+        /private-api-token|private-runtime|private-device-token|private-container-token|private-app-token|private-non-ascii|private-oversize|app-container|iOS_private|RuntimeRoot|\/usr\/|\/Applications\//u,
       );
       const records = raw
         .trim()
@@ -208,7 +215,7 @@ describe("iOS resource timeline workload boundary", () => {
       });
       expect(samples[1].processes.map((row: { pid: number }) => row.pid)).not.toContain(83);
       expect(samples[1].processSummary).toMatchObject({
-        count: 14,
+        count: 21,
         runnableCount: 2,
         uninterruptibleCount: 1,
         groups: expect.arrayContaining([
@@ -229,6 +236,19 @@ describe("iOS resource timeline workload boundary", () => {
           { origin: "xcode", role: "launchd_sim", count: 1, cpuObservedCount: 1, cpuDeltaMs: 0 },
         ]),
       });
+      expect(
+        samples[1].processSummary.groups.filter(
+          (group: { role: string }) => group.role === "duetexpertd",
+        ),
+      ).toEqual([
+        {
+          origin: "simulator-runtime",
+          role: "duetexpertd",
+          count: 1,
+          cpuObservedCount: 1,
+          cpuDeltaMs: 36_000,
+        },
+      ]);
       expect(samples[3].probes.ps.outcome).toBe("timeout");
       expect(samples[3].processSummary).toBeNull();
       expect(
