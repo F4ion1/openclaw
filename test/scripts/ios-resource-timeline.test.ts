@@ -123,13 +123,14 @@ describe("iOS resource timeline workload boundary", () => {
           else {
             const runtime = "/Library/Developer/CoreSimulator/Volumes/iOS_private/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/Contents/Resources/RuntimeRoot";
             const row = (pid, ppid, rate, rss, state, command) => [pid, ppid, (now * rate / 1_000).toFixed(2), rss, state, command].join(" ");
+            const cryptex = "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.1.434.0.private-runtime/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/Contents/Resources/RuntimeRoot";
             stdout = [
               row(42, 1, 1, 1024, "R", "/usr/bin/xcodebuild"),
-              row(80, 1, 0, 1, "S", "/Applications/Xcode.app/Contents/Developer/usr/libexec/launchd_sim"),
+              row(80, 1, 0, 1, "S", "/Applications/Xcode_27.app/Contents/Developer/usr/libexec/launchd_sim"),
               row(81, 80, 0.5, 1024, "R", runtime + "/System/Library/Frameworks/CoreSpotlight.framework/CoreSpotlightService"),
               row(82, 80, 0.33, 500000, "U", runtime + "/private-api-token"),
-              row(83, 80, 0.001, 1, "S", runtime + "/usr/libexec/mediaanalysisd"),
-              row(84, 80, 0.01, 1, "S", runtime + "/System/Library/Frameworks/CoreSpotlight.framework/CoreSpotlightService"),
+              row(83, 80, 0.001, 1, "S", cryptex + "/usr/libexec/modelcatalogd"),
+              row(84, 80, 0.01, 1, "S", cryptex + "/System/Library/Frameworks/CoreSpotlight.framework/CoreSpotlightService"),
               ...Array.from({ length: 8 }, (_, i) => row(90 + i, 1, 0.1 + i / 100, 2048, "S", "/usr/libexec/cfprefsd")),
             ].join("\\n");
           }
@@ -173,7 +174,7 @@ describe("iOS resource timeline workload boundary", () => {
       expect(result.stderr).toBe("");
       const raw = readFileSync(output, "utf8");
       expect(raw).not.toMatch(
-        /private-api-token|iOS_private|RuntimeRoot|\/usr\/|\/Applications\//u,
+        /private-api-token|private-runtime|iOS_private|RuntimeRoot|\/usr\/|\/Applications\//u,
       );
       const records = raw
         .trim()
@@ -220,7 +221,7 @@ describe("iOS resource timeline workload boundary", () => {
           },
           {
             origin: "simulator-runtime",
-            role: "mediaanalysisd",
+            role: "modelcatalogd",
             count: 1,
             cpuObservedCount: 1,
             cpuDeltaMs: 90,

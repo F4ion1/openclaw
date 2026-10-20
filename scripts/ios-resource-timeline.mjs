@@ -130,6 +130,52 @@ const roles = new Set([
   "notifyd",
   "trustd",
   "securityd",
+  "modelcatalogd",
+  "modelmanagerd",
+  "mlhostd",
+  "mlruntimed",
+  "intelligenceplatformd",
+  "intelligencecontextd",
+  "intelligenceflowd",
+  "intelligencetasksd",
+  "generativeexperiencesd",
+  "knowledgeconstructiond",
+  "assistantd",
+  "triald",
+  "axassetsd",
+  "managedassetsd",
+  "AssetCacheLocatorService",
+  "fileindexerd",
+  "biomed",
+  "biomesyncd",
+  "chronod",
+  "liveactivitiesd",
+  "systemsoundserver-simd",
+  "_iokitsimd",
+  "iokitsimd",
+  "xpcproxy_sim",
+  "launchd_sim_trampoline",
+  "tccd",
+  "diagnosticd",
+  "diagnosticextensionsd",
+  "ScreenTimeAgent",
+  "UsageTrackingAgent",
+  "familycircled",
+  "ReportCrash",
+  "osanalyticshelper",
+  "PerfPowerServices",
+  "PerfPowerServicesExtended",
+  "symptomsd",
+  "logd_helper",
+  "logd_reporter",
+  "MTLCompilerService",
+  "com.apple.WebKit.GPU",
+  "com.apple.WebKit.Networking",
+  "com.apple.WebKit.WebContent",
+  "dasd",
+  "nsurlsessiond",
+  "sharingd",
+  "swcd",
   "testmanagerd",
   "xctest",
   "OpenClaw",
@@ -175,10 +221,16 @@ function processRows(output, previous, elapsedMs) {
     const executable = command.trim();
     const basename = path.basename(executable);
     const origin =
-      executable.startsWith("/Library/Developer/CoreSimulator/") &&
-      executable.includes("/RuntimeRoot/")
+      (executable.startsWith("/Library/Developer/CoreSimulator/") ||
+        executable.startsWith(
+          "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-",
+        ) ||
+        executable.startsWith(
+          "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.watchOS.SimulatorRuntime-",
+        )) &&
+      executable.includes("/Contents/Resources/RuntimeRoot/")
         ? "simulator-runtime"
-        : executable.startsWith("/Applications/Xcode.app/")
+        : /^\/Applications\/Xcode(?:_[^/]+)?\.app\//u.test(executable)
           ? "xcode"
           : /^\/(?:System\/Library|usr\/(?:bin|sbin|libexec)|bin|sbin)\//u.test(executable)
             ? "host-system"
