@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   start: vi.fn(),
   bundle: vi.fn(),
-  user: vi.fn(),
   assert: vi.fn(),
   request: vi.fn(),
   ensure: vi.fn(),
@@ -20,7 +19,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   loadCodexBundleMcpThreadConfig: mocks.bundle,
 }));
 vi.mock("openclaw/plugin-sdk/codex-mcp-projection", () => ({
-  buildCodexUserMcpServersThreadConfigPatchForRuntime: mocks.user,
+  buildCodexUserMcpServersThreadConfigPatchForRuntime: async () => undefined,
 }));
 vi.mock("./auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileId: () => "prepared-account",
@@ -124,7 +123,6 @@ beforeEach(() => {
   mocks.bundle.mockResolvedValue({
     configPatch: { mcp_servers: { demo: { command: "fixture" } } },
   });
-  mocks.user.mockResolvedValue(undefined);
   mocks.retain.mockResolvedValue(true);
   mocks.start.mockResolvedValue(thread);
 });
