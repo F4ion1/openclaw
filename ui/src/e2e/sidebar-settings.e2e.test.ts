@@ -1,5 +1,5 @@
 import path from "node:path";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
@@ -16,6 +16,28 @@ import {
 } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocked Gateway E2E");
+
+const INBOX_COUNT = "openclaw-app-sidebar .sidebar-issues-button__count";
+const RAIL_INBOX = ".sidebar-rail__bottom openclaw-sidebar-attention";
+const withSettingsPage = (run: (page: Page) => Promise<void>, height = 900) =>
+  suite.withPage(
+    { locale: "en-US", serviceWorkers: "block", viewport: { height, width: 1440 } },
+    ({ page }) => run(page),
+  );
+
+async function setVisibility(page: Page, visibility: "hidden" | "visible", focus = false) {
+  await page.evaluate(
+    ({ value, wake }) => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value });
+      document.dispatchEvent(new Event("visibilitychange"));
+      if (wake) {
+        window.dispatchEvent(new Event("focus"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+    },
+    { value: visibility, wake: focus },
+  );
+}
 
 const FAILED_CRON_RESPONSE = {
   jobs: [
@@ -53,32 +75,23 @@ const MISSING_AUTH_RESPONSE = {
 };
 
 suite.define(() => {
-  it("defers hidden Inbox inventory and shows fresh cron attention on return", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await page.clock.setFixedTime(Date.now());
-    const gateway = await installMockGateway(page, {
-      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
-      methodResponses: {
-        "cron.list": FAILED_CRON_RESPONSE,
-        "models.authStatus": MISSING_AUTH_RESPONSE,
-      },
-    });
-    try {
+  it("defers hidden Inbox inventory and shows fresh cron attention on return", () =>
+    withSettingsPage(async (page) => {
+      await page.clock.setFixedTime(Date.now());
+      const gateway = await installMockGateway(page, {
+        presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+        methodResponses: {
+          "cron.list": FAILED_CRON_RESPONSE,
+          "models.authStatus": MISSING_AUTH_RESPONSE,
+        },
+      });
       await page.goto(`${suite.server.baseUrl}new`);
-      const badge = page.locator("openclaw-app-sidebar .sidebar-issues-button__count");
+      const badge = page.locator(INBOX_COUNT);
       await expect.poll(() => badge.textContent()).toBe("2");
       await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
       await page.getByText("Failed settings transition", { exact: true }).waitFor();
       await captureSidebarUiProof(suite, page, "inbox-before-hidden-events.png");
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await setVisibility(page, "hidden");
       await gateway.setMethodResponse("cron.list", {
         ...FAILED_CRON_RESPONSE,
         jobs: [{ ...FAILED_CRON_RESPONSE.jobs[0], name: "Failure while away" }],
@@ -90,15 +103,7 @@ suite.define(() => {
         expect(await gateway.getRequests(method)).toHaveLength(1);
       }
       await page.getByText("Failed settings transition", { exact: true }).waitFor();
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", {
-          configurable: true,
-          value: "visible",
-        });
-        document.dispatchEvent(new Event("visibilitychange"));
-        window.dispatchEvent(new Event("focus"));
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await setVisibility(page, "visible", true);
       await page.getByText("Failure while away", { exact: true }).waitFor();
       expect(await badge.textContent()).toBe("2");
       for (const method of ["cron.list", "cron.status"]) {
@@ -111,22 +116,13 @@ suite.define(() => {
       await gateway.emitGatewayEvent("cron", { action: "finished" });
       await gateway.waitForRequest("cron.list", { after: 2 });
       await page.getByRole("button", { name: "Dismiss Failure while away", exact: true }).click();
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await setVisibility(page, "hidden");
       // The first event invalidating this pending inventory arrives while hidden.
       await gateway.emitGatewayEvent("cron", { action: "finished" });
       await gateway.resolveDeferred("cron.list", { ...FAILED_CRON_RESPONSE, jobs: [], total: 0 });
       expect(await gateway.getRequests("cron.list")).toHaveLength(3);
       await gateway.deferNext("cron.list");
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", {
-          configurable: true,
-          value: "visible",
-        });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      await setVisibility(page, "visible");
       await gateway.waitForRequest("cron.list", { after: 3 });
       await gateway.resolveDeferred("cron.list", {
         ...FAILED_CRON_RESPONSE,
@@ -141,27 +137,18 @@ suite.define(() => {
       expect(await badge.textContent()).toBe("2");
       expect(await gateway.getRequests("cron.list")).toHaveLength(4);
       await captureSidebarUiProof(suite, page, "inbox-dismissal-preserved-on-return.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
-  it("refreshes stale auth attention after metadata changes while the first read is pending", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const now = Date.now();
-    await page.clock.setFixedTime(now);
-    const gateway = await installMockGateway(page, {
-      heldMethods: ["models.authStatus"],
-      methodResponses: { "cron.list": FAILED_CRON_RESPONSE },
-    });
-    try {
+  it("refreshes stale auth attention after metadata changes while the first read is pending", () =>
+    withSettingsPage(async (page) => {
+      const now = Date.now();
+      await page.clock.setFixedTime(now);
+      const gateway = await installMockGateway(page, {
+        heldMethods: ["models.authStatus"],
+        methodResponses: { "cron.list": FAILED_CRON_RESPONSE },
+      });
       await page.goto(`${suite.server.baseUrl}new`);
-      const badge = page.locator("openclaw-app-sidebar .sidebar-issues-button__count");
+      const badge = page.locator(INBOX_COUNT);
       await expect.poll(() => badge.textContent()).toBe("1");
       await gateway.waitForRequest("models.authStatus");
       await page.clock.setFixedTime(now + 60_001);
@@ -202,27 +189,18 @@ suite.define(() => {
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await authWarning.waitFor({ state: "visible" });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(3);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
-  it("coalesces cron bursts without losing independently loaded Inbox attention", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      heldMethods: ["cron.list", "cron.status", "models.authStatus"],
-      methodResponses: {
-        "cron.list": FAILED_CRON_RESPONSE,
-        "models.authStatus": MISSING_AUTH_RESPONSE,
-      },
-    });
+  it("coalesces cron bursts without losing independently loaded Inbox attention", () =>
+    withSettingsPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        heldMethods: ["cron.list", "cron.status", "models.authStatus"],
+        methodResponses: {
+          "cron.list": FAILED_CRON_RESPONSE,
+          "models.authStatus": MISSING_AUTH_RESPONSE,
+        },
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       await gateway.waitForRequest("cron.status");
@@ -236,7 +214,7 @@ suite.define(() => {
       }
 
       await gateway.resolveDeferred("models.authStatus");
-      const badge = page.locator("openclaw-app-sidebar .sidebar-issues-button__count");
+      const badge = page.locator(INBOX_COUNT);
       await expect.poll(() => badge.textContent()).toBe("1");
       await gateway.resolveDeferred("cron.list");
       expect(await gateway.getRequests("cron.list")).toHaveLength(1);
@@ -261,69 +239,46 @@ suite.define(() => {
         expect(await gateway.getRequests(method)).toHaveLength(3);
       }
       await captureSidebarUiProof(suite, page, "cron-burst-refreshed.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
-  it("dismisses an open font picker before exiting Settings with Escape", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page);
-    try {
+  it("dismisses an open font picker before exiting Settings with Escape", () =>
+    withSettingsPage(async (page) => {
+      await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
       const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
-      await picker.locator(".picker-select__trigger").click();
+      const trigger = picker.locator(".picker-select__trigger");
+      await trigger.click();
       const selected = picker.locator('[role="option"][aria-selected="true"]');
       await selected.waitFor({ state: "visible" });
       const selectedValue = await selected.getAttribute("data-value");
-      const selectedLabel = await picker.locator(".picker-select__trigger").textContent();
+      const selectedLabel = await trigger.textContent();
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
-      await expect
-        .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
-        .toBe("false");
-      expect(await picker.locator(".picker-select__trigger").textContent()).toBe(selectedLabel);
-      await picker.locator(".picker-select__trigger").click();
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(await trigger.textContent()).toBe(selectedLabel);
+      await trigger.click();
       expect(await selected.getAttribute("data-value")).toBe(selectedValue);
       await page.keyboard.press("Escape");
-      expect(
-        await picker
-          .locator(".picker-select__trigger")
-          .evaluate((input) => input.matches(":focus")),
-      ).toBe(true);
+      expect(await trigger.evaluate((input) => input.matches(":focus"))).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
   it.each([
     { state: "open sidebar", collapseSidebar: false, nativeWebChrome: false },
     { state: "closed sidebar", collapseSidebar: true, nativeWebChrome: false },
     { state: "native web chrome", collapseSidebar: false, nativeWebChrome: true },
-  ])("keeps Inbox out of Settings after $state", async (testCase) => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    if (testCase.nativeWebChrome) {
-      await installNativeWebChrome(page);
-    }
-    await installMockGateway(page);
+  ])("keeps Inbox out of Settings after $state", (testCase) =>
+    withSettingsPage(async (page) => {
+      if (testCase.nativeWebChrome) {
+        await installNativeWebChrome(page);
+      }
+      await installMockGateway(page);
 
-    try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       if (testCase.collapseSidebar) {
@@ -341,30 +296,22 @@ suite.define(() => {
         page,
         `settings-without-inbox-${testCase.state.replaceAll(" ", "-")}.png`,
       );
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }),
+  );
 
-  it("keeps loaded Inbox attention through collapsed chat and Settings", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "cron.list": FAILED_CRON_RESPONSE,
-        "models.authStatus": MISSING_AUTH_RESPONSE,
-      },
-    });
+  it("keeps loaded Inbox attention through collapsed chat and Settings", () =>
+    withSettingsPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "cron.list": FAILED_CRON_RESPONSE,
+          "models.authStatus": MISSING_AUTH_RESPONSE,
+        },
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       await page.locator('[data-navigation-view][aria-pressed="true"]').click();
-      const railInbox = page.locator(".sidebar-rail__bottom openclaw-sidebar-attention");
+      const railInbox = page.locator(RAIL_INBOX);
       await expect
         .poll(() => railInbox.locator(".sidebar-issues-button__count").textContent())
         .toBe("2");
@@ -375,7 +322,7 @@ suite.define(() => {
 
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      const restoredInbox = page.locator(".sidebar-rail__bottom openclaw-sidebar-attention");
+      const restoredInbox = page.locator(RAIL_INBOX);
       await restoredInbox.locator(".sidebar-issues-button").waitFor({ state: "visible" });
       expect(await restoredInbox.locator(".sidebar-issues-button__count").textContent()).toBe("2");
 
@@ -406,31 +353,20 @@ suite.define(() => {
           .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button__count")
           .count(),
       ).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
-  it("keeps one rail attention badge across expanded and collapsed navigation", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "cron.list": { ...FAILED_CRON_RESPONSE, jobs: [], total: 0 },
-        "models.authStatus": { ts: 1, providers: [] },
-      },
-    });
+  it("keeps one rail attention badge across expanded and collapsed navigation", () =>
+    withSettingsPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "cron.list": { ...FAILED_CRON_RESPONSE, jobs: [], total: 0 },
+          "models.authStatus": { ts: 1, providers: [] },
+        },
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("cron.list");
-      await expect
-        .poll(() => page.locator("openclaw-app-sidebar .sidebar-issues-button__count").count())
-        .toBe(0);
+      await expect.poll(() => page.locator(INBOX_COUNT).count()).toBe(0);
 
       await page.locator('[data-navigation-view][aria-pressed="true"]').click();
       await page
@@ -449,11 +385,7 @@ suite.define(() => {
         jobId: "failed-settings-transition",
         status: "error",
       });
-      await expect
-        .poll(() =>
-          page.locator("openclaw-app-sidebar .sidebar-issues-button__count").textContent(),
-        )
-        .toBe("1");
+      await expect.poll(() => page.locator(INBOX_COUNT).textContent()).toBe("1");
 
       await gateway.deferNext("cron.list");
       await gateway.deferNext("cron.status");
@@ -468,25 +400,16 @@ suite.define(() => {
             .textContent(),
         )
         .toBe("1");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
-  it("keeps Gateway connection fields editable by their visible labels", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      awaitInitialRoster: false,
-      featureMethods: ["system.info"],
-      methodResponses: { "system.info": deviceSystemInfo },
-    });
+  it("keeps Gateway connection fields editable by their visible labels", () =>
+    withSettingsPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        awaitInitialRoster: false,
+        featureMethods: ["system.info"],
+        methodResponses: { "system.info": deviceSystemInfo },
+      });
 
-    try {
       const routeModule = await holdModuleResponse(
         page,
         /\/assets\/connection-page-[^/]+\.js(?:\?|$)/u,
@@ -521,39 +444,7 @@ suite.define(() => {
       expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await credential.isEditable()).toBe(true);
 
-      try {
-        await gateway.waitForRequest("system.info");
-      } catch (error) {
-        try {
-          const [browser, systemInfoRequestCount, heartbeatRequestCount] = await withTimeout(
-            Promise.all([
-              page.evaluate(() => {
-                const host = document.querySelector("openclaw-connection-page");
-                const systemInfoSection = host?.querySelector("#settings-connection-host");
-                return {
-                  visibilityState: document.visibilityState,
-                  hasFocus: document.hasFocus(),
-                  connectionHostPresent: host !== null,
-                  connectionHostConnected: host?.isConnected ?? null,
-                  systemInfoSectionPresent: Boolean(systemInfoSection),
-                  systemInfoSectionBusy: systemInfoSection?.getAttribute("aria-busy") === "true",
-                };
-              }),
-              gateway.getRequests("system.info").then((requests) => requests.length),
-              gateway.getRequests("last-heartbeat").then((requests) => requests.length),
-            ]),
-            5_000,
-            "connection system.info failure diagnostics",
-          );
-          console.error(
-            "[sidebar-settings] initial system.info wait failed",
-            JSON.stringify({ ...browser, systemInfoRequestCount, heartbeatRequestCount }),
-          );
-        } catch {
-          console.error("[sidebar-settings] initial system.info diagnostics unavailable");
-        }
-        throw error;
-      }
+      await gateway.waitForRequest("system.info");
       const reads = (await gateway.getRequests("system.info")).length;
       const connections = (await gateway.getRequests("connect")).length;
       await gateway.deferNext("connect");
@@ -584,47 +475,33 @@ suite.define(() => {
           path: path.join(suite.artifactDir, "gateway-draft-reconnected.png"),
         });
       }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
   it.each([
     { mode: "standalone", webChrome: false },
     { mode: "native web chrome", webChrome: true },
-  ])("aligns the settings search with navigation rows in $mode", async ({ mode, webChrome }) => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 620, width: 1440 },
-    });
-    const page = await context.newPage();
-    if (webChrome) {
-      await page.addInitScript(() => {
-        const nativeWindow = window as Window & {
-          __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-          __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
-        };
-        nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
-        nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
-          canGoBack: false,
-          canGoForward: false,
-        };
-        const stamp = () =>
-          document.documentElement.classList.add(
-            "openclaw-native-macos",
-            "openclaw-native-web-chrome",
-          );
-        if (document.documentElement) {
-          stamp();
-        } else {
-          document.addEventListener("DOMContentLoaded", stamp);
-        }
-      });
-    }
-    await installMockGateway(page);
+  ])("aligns the settings search with navigation rows in $mode", ({ mode, webChrome }) =>
+    withSettingsPage(async (page) => {
+      if (webChrome) {
+        await page.addInitScript(() => {
+          Object.assign(window, {
+            __OPENCLAW_NATIVE_WEB_CHROME__: true,
+            __OPENCLAW_NATIVE_HISTORY__: { canGoBack: false, canGoForward: false },
+          });
+          const stamp = () =>
+            document.documentElement.classList.add(
+              "openclaw-native-macos",
+              "openclaw-native-web-chrome",
+            );
+          if (document.documentElement) {
+            stamp();
+          } else {
+            document.addEventListener("DOMContentLoaded", stamp);
+          }
+        });
+      }
+      await installMockGateway(page);
 
-    try {
       await page.goto(`${suite.server.baseUrl}settings/general`);
       const { search: settingsSearchInput, sidebar: settingsSidebar } =
         await waitForControlUiSettingsTakeover(page);
@@ -684,8 +561,6 @@ suite.define(() => {
         settingsSidebar,
         `settings-search-scrolled-${mode.replaceAll(" ", "-")}.png`,
       );
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }, 620),
+  );
 });

@@ -49,15 +49,16 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await waitForControlUiRoute(page, { routeId: "chat" });
         const sidebar = page.locator("openclaw-app-sidebar");
+        const groups = sidebar.locator("[data-agent-group]");
+        const ownerTitle = sidebar.locator("#sidebar-session-owner-title");
+        const shellClass = () => page.locator(".shell").getAttribute("class");
         const switcher = sidebar.locator(
           ".sidebar-agent-card__main, .sidebar-workspace-header__main",
         );
         await switcher.waitFor();
         await chooseSidebarOwner(page, "owner:profile-riley");
         await sidebar.getByText("No active sessions match this filter", { exact: true }).waitFor();
-        expect(await sidebar.locator("#sidebar-session-owner-title").textContent()).toContain(
-          "My sessions",
-        );
+        expect(await ownerTitle.textContent()).toContain("My sessions");
         await captureSidebarUiProof(suite, page, "empty-my-sessions.png");
         for (const panel of ["sessions", "pages", "online", "pages"] as const) {
           const tab = sidebar.locator(`[data-navigation-view="${panel}"]`);
@@ -66,15 +67,11 @@ suite.define(() => {
           }
           if (panel === "pages") {
             await tab.click();
-            await expect
-              .poll(() => page.locator(".shell").getAttribute("class"))
-              .toContain("shell--nav-collapsed");
+            await expect.poll(shellClass).toContain("shell--nav-collapsed");
           }
           await switcher.click();
           await page.getByRole("menuitem", { name: "Show all", exact: true }).click();
-          await expect
-            .poll(() => page.locator(".shell").getAttribute("class"))
-            .not.toContain("shell--nav-collapsed");
+          await expect.poll(shellClass).not.toContain("shell--nav-collapsed");
           await expect
             .poll(() =>
               sidebar.locator('[data-navigation-view="sessions"]').getAttribute("aria-pressed"),
@@ -82,26 +79,20 @@ suite.define(() => {
             .toBe("true");
           await expect
             .poll(() =>
-              sidebar
-                .locator("[data-agent-group]")
-                .evaluateAll((groups) =>
-                  groups.map((group) => group.getAttribute("data-agent-group")),
-                ),
+              groups.evaluateAll((rows) =>
+                rows.map((group) => group.getAttribute("data-agent-group")),
+              ),
             )
             .toEqual(["main", "research"]);
-          await expect
-            .poll(() => sidebar.locator("[data-agent-group]").first().isVisible())
-            .toBe(true);
-          expect(await sidebar.locator("#sidebar-session-owner-title").textContent()).toContain(
-            "My sessions",
-          );
+          await expect.poll(() => groups.first().isVisible()).toBe(true);
+          expect(await ownerTitle.textContent()).toContain("My sessions");
           if (panel === "sessions") {
             await captureSidebarUiProof(suite, page, "all-agents-empty-my-sessions.png");
           }
         }
         await page.reload();
         await waitForControlUiRoute(page, { routeId: "chat" });
-        await expect.poll(() => sidebar.locator("[data-agent-group]").count()).toBe(2);
+        await expect.poll(() => groups.count()).toBe(2);
       },
     );
   });

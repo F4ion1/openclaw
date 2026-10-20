@@ -28,21 +28,13 @@ suite.define(() => {
           historyMessages: [
             { role: "assistant", content: "The release notes are ready for review." },
           ],
-          presenceUsers: [
-            {
-              id: "ada",
-              identity: { type: "profile", id: "ada" },
-              name: "Ada Chen",
-              self: true,
-              lastInputSeconds: 5,
-            },
-            {
-              id: "bob",
-              identity: { type: "profile", id: "bob" },
-              name: "Bob Rivera",
-              lastInputSeconds: 180,
-            },
-          ],
+          presenceUsers: ["Ada Chen", "Bob Rivera"].map((name, index) => ({
+            id: index === 0 ? "ada" : "bob",
+            identity: { type: "profile", id: index === 0 ? "ada" : "bob" },
+            name,
+            self: index === 0 ? true : undefined,
+            lastInputSeconds: index === 0 ? 5 : 180,
+          })),
           methodResponses: {
             "users.list": {
               profiles: ["Ada Chen", "Bob Rivera", "Carol Singh"].map((displayName, index) => ({

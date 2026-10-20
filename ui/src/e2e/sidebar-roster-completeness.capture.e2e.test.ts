@@ -11,65 +11,36 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 const MAIN_KEY = "agent:main:main";
-/** Categorized work sits below the recency cutoff a truncating roster applies,
- *  which is exactly the shape that emptied real sidebar categories. */
 const STALE_CATEGORY = "Papercuts";
 const FRESH_CATEGORY = "Automated Issue Fixes";
 const BASE_TIME = Date.parse("2026-08-27T12:00:00.000Z");
 
-function roster() {
+function rosterMock() {
+  const group = (count: number, prefix: string, label: string, age: number, category?: string) =>
+    Array.from({ length: count }, (_, index) =>
+      sessionRow(
+        `agent:main:${prefix}-${index}`,
+        `${label} ${index}`,
+        BASE_TIME - age - index * 1_000,
+        {
+          sessionId: `${prefix}-${index}`,
+          ...(category ? { category } : {}),
+        },
+      ),
+    );
   const rows = [
     sessionRow(MAIN_KEY, "Main", BASE_TIME, { sessionId: "main" }),
-    ...Array.from({ length: 2 }, (_value, index) =>
-      sessionRow(
-        `agent:main:fresh-${index}`,
-        `Fresh fix ${index}`,
-        BASE_TIME - 1_000 * (index + 1),
-        {
-          category: FRESH_CATEGORY,
-          sessionId: `fresh-${index}`,
-        },
-      ),
-    ),
-    // Filler outranks the categorized tail on recency, so a 50/60-row page ends
-    // before the stale category is ever reached.
-    ...Array.from({ length: 80 }, (_value, index) =>
-      sessionRow(
-        `agent:main:filler-${index}`,
-        `Untitled ${index}`,
-        BASE_TIME - 100_000 - index * 1_000,
-        {
-          sessionId: `filler-${index}`,
-        },
-      ),
-    ),
-    ...Array.from({ length: 3 }, (_value, index) =>
-      sessionRow(
-        `agent:main:stale-${index}`,
-        `Papercut ${index}`,
-        BASE_TIME - 900_000 - index * 1_000,
-        {
-          category: STALE_CATEGORY,
-          sessionId: `stale-${index}`,
-        },
-      ),
-    ),
+    ...group(2, "fresh", "Fresh fix", 1_000, FRESH_CATEGORY),
+    // A 50/60-row recency page must miss the categorized tail.
+    ...group(80, "filler", "Untitled", 100_000),
+    ...group(3, "stale", "Papercut", 900_000, STALE_CATEGORY),
   ];
-  return rows;
-}
-
-function truncated(limit: number) {
-  const rows = roster().slice(0, limit);
-  return sessionsListResponse(rows, {
-    hasMore: true,
-    nextOffset: limit,
-    totalCount: roster().length,
-  });
-}
-
-/** Mirrors the gateway: an explicit limit truncates by recency, an absent one
- *  returns the whole roster. */
-function rosterMock() {
+  const truncated = (limit: number) =>
+    sessionsListResponse(rows.slice(0, limit), {
+      hasMore: true,
+      nextOffset: limit,
+      totalCount: rows.length,
+    });
   return {
     methodResponses: {
       "sessions.list": {
@@ -79,9 +50,9 @@ function rosterMock() {
           { match: { limit: 60 }, response: truncated(60) },
           {
             match: { limit: SIDEBAR_SESSION_ROSTER_LIMIT },
-            response: sessionsListResponse(roster(), { totalCount: roster().length }),
+            response: sessionsListResponse(rows),
           },
-          { match: {}, response: sessionsListResponse(roster(), { totalCount: roster().length }) },
+          { match: {}, response: sessionsListResponse(rows) },
         ],
       },
       "sessions.groups.list": {

@@ -74,7 +74,9 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
-        const row = page.locator('.sidebar-recent-session[data-session-key="' + parent + '"]');
+        const sessionRow = (key: string) =>
+          page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+        const row = sessionRow(parent);
         await row.locator(".sidebar-recent-session__link").focus();
         await waitForWatchedSessionKey(gateway, parent);
         await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
@@ -118,13 +120,7 @@ suite.define(() => {
           ).toBe(request.url);
         }
         await page.keyboard.press("Escape");
-        await page
-          .locator(
-            '.sidebar-recent-session[data-session-key="' +
-              selected +
-              '"] .sidebar-recent-session__link',
-          )
-          .focus();
+        await sessionRow(selected).locator(".sidebar-recent-session__link").focus();
         await row.locator(".sidebar-recent-session__link").focus();
         await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(3);
       },
