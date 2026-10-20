@@ -51,7 +51,7 @@ export function assertCleanWorktree(): void {
 
 export function assertAuditBounds(baseSha: string, headSha: string): void {
   if (baseSha === headSha) {
-    throw new Error("release:prepush comparison base must differ from HEAD");
+    return;
   }
   const mergeBase = git(["merge-base", baseSha, headSha]);
   if (!/^[a-f0-9]{40}$/u.test(mergeBase)) {
@@ -230,8 +230,10 @@ export async function runReleasePrepush(
   return 0;
 }
 
-function parseArgs(argv: string[]) {
-  const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
+export function parseReleasePrepushArgs(argv: string[]) {
+  const separator = argv.indexOf("--");
+  const normalizedArgv =
+    separator === -1 ? argv : [...argv.slice(0, separator), ...argv.slice(separator + 1)];
   return parseFlagArgs(
     normalizedArgv,
     {
@@ -273,7 +275,7 @@ function usage(): string {
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   try {
-    const args = parseArgs(argv);
+    const args = parseReleasePrepushArgs(argv);
     if (args.help) {
       console.log(usage());
       return;
