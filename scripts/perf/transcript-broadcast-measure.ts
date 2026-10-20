@@ -137,16 +137,6 @@ const turnScenario =
   scenario === "transcript-broadcast" ||
   retentionScenario ||
   soakScenario;
-if (
-  !values.allocations &&
-  !values["stream-start-allocations"] &&
-  !values["workload-cpu-profile"] &&
-  scenario !== "transcript-broadcast" &&
-  !retentionScenario &&
-  !soakScenario
-) {
-  throw new Error("--scenario requires --allocations or --workload-cpu-profile");
-}
 const operations = integer(
   values.operations ??
     (scenario === "plugins.reload" ? "1" : scenario === "reconnect" ? values.clients : "100"),

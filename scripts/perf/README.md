@@ -1280,6 +1280,10 @@ focused tests; PR CI owns broad gates.
 
 Use the same owned Gateway driver with `--allocations` and a named `--scenario`:
 
+For acceptance timing without heap or CPU profiling, omit `--allocations` and
+`--workload-cpu-profile`. The same workload, response checks, and latency counters
+still run; add `--diagnostics` for event-loop, GC, and RPC phase timing.
+
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --state-dir /path/to/team-shape --allocations --scenario sessions.list \
