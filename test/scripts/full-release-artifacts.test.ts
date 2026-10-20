@@ -616,7 +616,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     ).toBe(true);
   });
 
-  it.each(["npm", "docker", "candidate"])(
+  it.each(["npm", "docker"])(
     "adopts a newer %s producer attempt without replacing its original dispatch",
     (stage) => {
       const test = fixture();

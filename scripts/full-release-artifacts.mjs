@@ -668,7 +668,7 @@ async function resolveProducer(request, env) {
     );
   }
   const run = readArtifactRun(request, record.runId, record.runAttempt, {
-    allowNewerAttempts: true,
+    allowNewerAttempts: request.stage === "npm" || request.stage === "docker",
   });
   output({
     run_id: record.runId,

@@ -477,7 +477,7 @@ describe("FRV continuation preflight", () => {
     });
   });
 
-  it.each(["npm", "docker", "candidate"])(
+  it.each(["npm", "docker"])(
     "retries only failed %s producer jobs, preserves green diagnostics, and verifies the parent",
     async (stage) => {
       const fixture = artifactFixture(stage);
@@ -510,7 +510,20 @@ describe("FRV continuation preflight", () => {
     },
   );
 
-  it("recovers every failed artifact producer instead of stopping at the npm closure", async () => {
+  it("does not claim recovery for a failed candidate producer with undispatched consumers", async () => {
+    const fixture = artifactFixture("candidate");
+    fixture.producer.conclusion = "failure";
+    const missing = withoutChildRunIdentity(child("pluginPrerelease", "202"));
+    fixture.plan = plan([fixture.selected, missing]);
+
+    await expect(preflightContinuation(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "selected FRV children did not record exact run IDs and attempts: pluginPrerelease; start a fresh all-group FRV",
+    );
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("recovers every recoverable failed artifact producer instead of stopping at npm", async () => {
     const fixture = artifactFixture("npm");
     fixture.producer.conclusion = "failure";
     const dockerProducer = {
