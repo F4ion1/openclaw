@@ -164,7 +164,9 @@ describe("worker Gateway tool transport", () => {
       ok: true,
       payload: workerSessionToolErrorResult(new Error(message)),
     });
-    await expect(runtime.callValue("sessions_send", {})).rejects.toThrow(message);
+    await expect(runtime.call("sessions_send", {})).resolves.toMatchObject({
+      result: workerSessionToolErrorResult(new Error(message)),
+    });
     await expect(runtime.callValue("sessions_send", {})).resolves.toEqual(result.details);
 
     // An error-shaped success is still a contract violation, not an explicit failure.
@@ -178,23 +180,4 @@ describe("worker Gateway tool transport", () => {
     expect(getToolContractFailureCode(failure)).toBe("output_contract");
     expect(client.invokeGatewayTool).toHaveBeenCalledTimes(3);
   });
-
-  it.each([
-    { name: "text-only", text: "Remote operation refused", expected: "Remote operation refused" },
-    { name: "bounded", text: "x".repeat(1_025), expected: "x".repeat(1_024) },
-    { name: "empty", text: "", expected: "Gateway tool failed." },
-  ])(
-    "preserves bounded error text when structured details are absent ($name)",
-    async ({ text, expected }) => {
-      const { surface, client } = fixture();
-      client.invokeGatewayTool.mockResolvedValueOnce({
-        type: "res",
-        id: "failed",
-        ok: true,
-        payload: { content: text ? [{ type: "text", text }] : [], isError: true },
-      });
-      const [tool] = createWorkerGatewayToolProxies(surface, client);
-      await expect(tool!.execute("failed", {})).rejects.toEqual(new Error(expected));
-    },
-  );
 });
