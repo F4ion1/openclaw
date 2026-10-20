@@ -1,5 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildReleasePrepushPlan, runReleasePrepush } from "../../scripts/release-prepush.mts";
+import {
+  assertAuditBounds,
+  buildReleasePrepushPlan,
+  parseReleasePrepushArgs,
+  runReleasePrepush,
+} from "../../scripts/release-prepush.mts";
 
 const BASE_SHA = "1".repeat(40);
 const HEAD_SHA = "2".repeat(40);
@@ -9,6 +15,39 @@ afterEach(() => {
 });
 
 describe("release:prepush", () => {
+  it("accepts the package-script separator after its injected push flag", () => {
+    expect(
+      parseReleasePrepushArgs([
+        "--push",
+        "--",
+        "--head",
+        HEAD_SHA,
+        "--branch",
+        "release/2026.10.6",
+      ]),
+    ).toMatchObject({
+      branch: "release/2026.10.6",
+      head: HEAD_SHA,
+      push: true,
+    });
+    expect(() => parseReleasePrepushArgs(["--push", "--", "--", "--head", HEAD_SHA])).toThrow(
+      "unknown argument: --",
+    );
+  });
+
+  it("accepts the exact package-script CLI shape at the executable boundary", () => {
+    const output = execFileSync(
+      process.execPath,
+      ["--import", "./scripts/tsx.mjs", "scripts/release-prepush.mts", "--push", "--", "--help"],
+      { encoding: "utf8" },
+    );
+    expect(output).toContain("Usage: pnpm release:prepush");
+  });
+
+  it("keeps the normal zero-delta cut auditable", () => {
+    expect(() => assertAuditBounds(HEAD_SHA, HEAD_SHA)).not.toThrow();
+  });
+
   it("pins changed static/type checks, dead-code analysis, and changed tests", () => {
     const plan = buildReleasePrepushPlan(BASE_SHA, HEAD_SHA, "/snapshot", { PATH: "/bin" });
     expect(plan.map(({ bin, args }) => [bin, ...args])).toEqual([
@@ -121,6 +160,34 @@ describe("release:prepush", () => {
     expect(status).toBe(0);
     expect(resolveCommit).toHaveBeenCalledWith(HEAD_SHA);
     expect(currentBranch).not.toHaveBeenCalled();
+    expect(pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
+  });
+
+  it("runs applicable gates and pushes when a fresh cut equals origin/main", async () => {
+    const pushValidatedHead = vi.fn();
+    const runCommand = vi.fn().mockResolvedValue(0);
+    const status = await runReleasePrepush(
+      {
+        base: "origin/main",
+        branch: "release/2026.10.6",
+        dryRun: false,
+        head: HEAD_SHA,
+        push: true,
+      },
+      {
+        assertCleanWorktree: vi.fn(),
+        assertAuditBounds,
+        createValidationCheckout: vi.fn().mockReturnValue("/snapshot"),
+        currentBranch: vi.fn(),
+        pushValidatedHead,
+        refreshMain: vi.fn(),
+        removeValidationCheckout: vi.fn(),
+        resolveCommit: vi.fn().mockReturnValue(HEAD_SHA),
+        runCommand,
+      },
+    );
+    expect(status).toBe(0);
+    expect(runCommand).toHaveBeenCalledTimes(4);
     expect(pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });
 
