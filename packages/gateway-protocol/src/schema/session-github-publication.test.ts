@@ -10,6 +10,27 @@ import {
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
+  it("admits an explicit own-PR inspection URL without publication or authority fields", () => {
+    const request = {
+      sessionKey: "agent:main:inspection",
+      action: "inspect_pr",
+      pullRequestUrl: "https://github.com/example/repository/pull/1",
+    };
+    expect(Value.Check(SessionGitHubActionParamsSchema, request)).toBe(true);
+    for (const extra of [
+      { pullRequestUrl: undefined },
+      { pullRequestUrl: "" },
+      { publishingSessionKey: "child" },
+      { expectedHeadCommit: "a".repeat(40) },
+      { requestId: "a1111111-1111-4111-8111-111111111111" },
+      { title: "Write" },
+      { token: "synthetic" },
+      { profileId: "other" },
+      { mergeMethod: "merge" },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...request, ...extra })).toBe(false);
+    }
+  });
   it("accepts a fixed current-PR review request without freeform text or target selectors", () => {
     const request = {
       sessionKey: "agent:main:publication",

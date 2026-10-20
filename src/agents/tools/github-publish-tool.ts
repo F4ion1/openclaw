@@ -3,6 +3,8 @@ import { Type } from "typebox";
 import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import {
   GitHubBaseRefreshSchema,
+  GitHubPullRequestInspectSchema,
+  type SessionGitHubPullRequestInspectResult,
   type SessionGitHubBaseRefreshResult,
   GitHubPublicationActionSchema,
   GitHubPublicationEditSchema,
@@ -33,6 +35,8 @@ function describeGitHubPublishTool(
   const continuation = automationsAvailable
     ? 'schedule a continuation into this conversation before ending the turn (automations: at + agentTurn + sessionTarget "session:<this session key from Runtime>"). While that scheduled continuation waits, use automations next_check to rearm its existing job, not add another job'
     : "continue that work before ending the turn, or explain that a scheduled continuation is unavailable";
+  const inspection =
+    "inspect_pr: supply pullRequestUrl to read an existing PR authored by your currently verified linked GitHub account. Returns its canonical base/head and observed continuation permission. It does not prepare a workspace, bind the PR, publish changes or grant later authority; permission observations do not guarantee a push. Private repositories require verified current account access. ";
   const publication = publicationAvailable
     ? `Publish or edit the current session's PR through Gateway-held credentials, for local or cloud repository workspaces.
 - Omitted action: publish accepted workspace changes as an open PR by default; draft: true creates a draft. title/body and draft are used only when creating a PR. Updating an existing PR preserves its state. Finish the turn so changes can be saved. Busy/recovering workspaces wait; the receipt arrives in this conversation without resuming the agent. If authorized review, CI or landing remains, ${continuation}; a receipt does not complete it.
@@ -44,8 +48,8 @@ function describeGitHubPublishTool(
 Edit, upload_evidence, request_review, refresh and own-draft readiness accept no other repository, PR, ref or publishing session.`
     : "This conversation cannot publish its own workspace. It can act on an explicitly selected publishing child's PR.";
   return actionsAvailable
-    ? `${publication} For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected requestId and expectedHeadCommit; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Guests may only mark their own draft ready; inspection, merge, close and child selection require full operator write access. Actions do not change session sandboxing.`
-    : publication;
+    ? `${inspection}${publication} For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected requestId and expectedHeadCommit; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. The receipt-bound inspect, merge, close and child selection require full operator write access. Actions do not change session sandboxing.`
+    : `${inspection}${publication}`;
 }
 
 export function createGitHubPublishTool(
@@ -72,12 +76,14 @@ export function createGitHubPublishTool(
                 }
               : {}),
             ...GitHubBaseRefreshSchema.properties,
+            pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
             ...GitHubPublicationEditSchema.properties,
             evidence: Type.Optional(GitHubPublicationEvidenceSchema),
             action: actionsAvailable
               ? Type.Optional(
                   Type.Union([
                     Type.Literal("publish"),
+                    Type.Literal("inspect_pr"),
                     Type.Literal("refresh_base"),
                     Type.Literal("edit"),
                     Type.Literal("request_review"),
@@ -87,6 +93,7 @@ export function createGitHubPublishTool(
                 )
               : Type.Optional(
                   Type.Union([
+                    Type.Literal("inspect_pr"),
                     Type.Literal("refresh_base"),
                     Type.Literal("edit"),
                     Type.Literal("ready"),
@@ -100,19 +107,31 @@ export function createGitHubPublishTool(
           },
           { additionalProperties: false },
         )
-      : GitHubPublicationActionSchema,
+      : Type.Object(
+          {
+            ...GitHubPublicationActionSchema.properties,
+            pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
+            action: Type.Union([
+              Type.Literal("inspect_pr"),
+              ...GitHubPublicationActionSchema.properties.action.anyOf,
+            ]),
+          },
+          { additionalProperties: false },
+        ),
     execute: async (toolCallId, rawArgs) => {
       // SAFETY: the tool runtime validates rawArgs against the closed schema above.
       const input = rawArgs as Omit<SessionGitHubPublishParams, "idempotencyKey" | "sessionKey"> &
         Omit<GitHubPublicationAction, "action"> &
         Omit<GitHubPublicationEdit, "action"> & {
           action?:
+            | "inspect_pr"
             | "publish"
             | "refresh_base"
             | "edit"
             | "request_review"
             | "upload_evidence"
             | GitHubPublicationAction["action"];
+          pullRequestUrl?: string;
           evidence?: GitHubPublicationEvidence;
           conflictsResolved?: boolean;
           baseCommit?: string;
@@ -123,6 +142,28 @@ export function createGitHubPublishTool(
       }
       if (input.draft !== undefined && input.action && input.action !== "publish") {
         throw new Error("draft only selects the state when publishing a new PR.");
+      }
+      if (input.action === "inspect_pr") {
+        if (
+          !input.pullRequestUrl ||
+          Object.keys(input).some((key) => !["action", "pullRequestUrl"].includes(key))
+        ) {
+          throw new Error(
+            "inspect_pr accepts only the pullRequestUrl to inspect, without publication or workspace fields.",
+          );
+        }
+        return jsonResult(
+          await callGateway<SessionGitHubPullRequestInspectResult>("sessions.github.action", {
+            sessionKey: caller.sessionKey,
+            action: "inspect_pr",
+            pullRequestUrl: input.pullRequestUrl,
+          }),
+        );
+      }
+      if (input.pullRequestUrl !== undefined) {
+        throw new Error(
+          "Only inspect_pr accepts a pullRequestUrl; other actions keep their session-bound target.",
+        );
       }
       if (input.action === "request_review") {
         if (

@@ -10,7 +10,7 @@ import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_publish tool", () => {
-  it.each(["edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
+  it.each(["inspect_pr", "edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
     "rejects draft on %s without changing PR state",
     async (action) => {
       const callGateway = vi.fn();
@@ -27,6 +27,12 @@ describe("github_publish tool", () => {
 
   it("offers current-PR preparation without privileged actions", () => {
     const tool = createGitHubPublishTool();
+    expect(
+      Value.Check(tool.parameters, {
+        action: "inspect_pr",
+        pullRequestUrl: "https://github.com/example/repository/pull/1",
+      }),
+    ).toBe(true);
     expect(Value.Check(tool.parameters, { action: "edit" })).toBe(true);
     expect(
       Value.Check(tool.parameters, {

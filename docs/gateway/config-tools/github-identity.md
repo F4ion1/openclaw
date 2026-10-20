@@ -102,6 +102,27 @@ The default sandbox tool policy also allows `github_publish` in managed Gateway 
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
 
+Use `github_publish` with `action: "inspect_pr"` and `pullRequestUrl` to inspect
+an existing PR authored by a currently verified GitHub account linked to the
+requesting person. The URL must name a PR on the configured GitHub host. The
+Gateway checks numeric account identity, current session access and the selected
+shared publisher. A private repository also requires current repository access
+for the linked account; shared credentials alone do not grant that access.
+
+Inspection returns the canonical PR URL, author, state, base and head repository
+IDs, branches and observed commits. Its `continuation` result distinguishes
+observed repository-write or fork maintainer-edit permission from a blocked or
+unknown outcome. Closed PRs, missing heads, archived repositories, protected
+branches and missing permissions include a concrete explanation. An observed
+permission is not a guarantee that a later push will succeed: GitHub's branch
+rules and the actual transport still apply, and later operations must recheck
+current authority and head state.
+
+This action makes no GitHub or workspace writes, creates no publication receipt,
+and does not bind or prepare the PR in the conversation. Its result is data,
+not authority for another action. The separate `inspect` action below keeps its
+existing full-operator and session-publication requirements.
+
 Use `github_publish` with `action: "edit"` to change the current session's shared
 PR title or description without publishing source. Call it without `title`/`body`
 to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only

@@ -40,6 +40,43 @@ export const GitHubPublicationTitleSchema = Type.String({
 });
 export const GitHubPublicationBodySchema = Type.String({ minLength: 1, maxLength: 8 * 1024 });
 
+export const GitHubPullRequestInspectSchema = closedObject({
+  action: Type.Literal("inspect_pr"),
+  pullRequestUrl: Type.String({ minLength: 1, maxLength: 2048 }),
+});
+const GitHubPullRequestRefSchema = closedObject({
+  repository: NonEmptyString,
+  repositoryId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  branch: NonEmptyString,
+  commit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+});
+export const SessionGitHubPullRequestInspectResultSchema = closedObject({
+  url: NonEmptyString,
+  host: NonEmptyString,
+  number: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  author: PersonalGitHubAccountSchema,
+  state: stringLiteralUnion(["open", "draft", "closed", "merged"]),
+  base: GitHubPullRequestRefSchema,
+  head: Type.Union([GitHubPullRequestRefSchema, Type.Null()]),
+  publisher: GitHubPublicationPublisherSchema,
+  maintainerCanModify: Type.Boolean(),
+  continuation: closedObject({
+    status: stringLiteralUnion(["permission_observed", "blocked", "unknown"]),
+    reason: stringLiteralUnion([
+      "head_repository_write",
+      "maintainer_edits",
+      "closed",
+      "head_unavailable",
+      "head_changed",
+      "repository_archived",
+      "permission_unavailable",
+      "no_head_permission",
+      "protected_branch",
+    ]),
+    message: NonEmptyString,
+  }),
+});
+
 export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
@@ -97,6 +134,11 @@ export const GitHubPublicationEvidenceUploadSchema = closedObject({
   evidence: GitHubPublicationEvidenceSchema,
 });
 export const SessionGitHubActionParamsSchema = Type.Union([
+  closedObject({
+    ...GitHubPullRequestInspectSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
   closedObject({
     ...GitHubPublicationReviewRequestSchema.properties,
     sessionKey: NonEmptyString,
@@ -292,6 +334,9 @@ export const SessionGitHubOptionsResultSchema = closedObject({
 });
 
 export type SessionGitHubBaseRefreshResult = Static<typeof SessionGitHubBaseRefreshResultSchema>;
+export type SessionGitHubPullRequestInspectResult = Static<
+  typeof SessionGitHubPullRequestInspectResultSchema
+>;
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;
 export type GitHubPublicationEdit = Static<typeof GitHubPublicationEditSchema>;
