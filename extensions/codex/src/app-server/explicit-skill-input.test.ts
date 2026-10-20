@@ -9,22 +9,14 @@ describe("resolveCodexExplicitSkillInputs", () => {
   const selections = [{ name: "release", path: skillPath }];
   const resolve = (request: ReturnType<typeof vi.fn>, selected = selections) =>
     resolveCodexExplicitSkillInputs({ client: { request } as never, cwd, selections: selected });
+  const skill = {
+    name: "release",
+    description: "Release workflow",
+    path: skillPath,
+    scope: "repo" as const,
+  };
   const catalog = (enabled: boolean): CodexSkillsListResponse => ({
-    data: [
-      {
-        cwd,
-        skills: [
-          {
-            name: "release",
-            description: "Release workflow",
-            path: skillPath,
-            scope: "repo",
-            enabled,
-          },
-        ],
-        errors: [],
-      },
-    ],
+    data: [{ cwd, skills: [{ ...skill, enabled }], errors: [] }],
   });
 
   it("uses the enabled catalog identity for a path-matched selection", async () => {

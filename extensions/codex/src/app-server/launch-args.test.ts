@@ -8,18 +8,10 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cwd = path.resolve("/original/project");
 const resolve = (args: string[], command = "node", directory = cwd) =>
   resolveCodexPrivateLauncher({ command, cwd: directory, args });
+const nativeArgs = ["--profile", "app-server", "app-server"];
 
 describe("private Codex launcher arguments", () => {
   it("rebases the wrapper and file preloads while preserving Node runtime options", () => {
-    const nativeArgs = [
-      "--profile",
-      "app-server",
-      "-c",
-      "features.hooks=true",
-      "app-server",
-      "--listen",
-      "stdio://",
-    ];
     const result = resolve([
       "--enable-source-maps",
       "--max-old-space-size=4096",
@@ -46,10 +38,7 @@ describe("private Codex launcher arguments", () => {
     const moduleDir = path.join(moduleCwd, "node_modules", "codex-wrapper-preload");
     await fs.mkdir(moduleDir, { recursive: true });
     await fs.writeFile(path.join(moduleDir, "package.json"), '{"main":"index.cjs"}');
-    await fs.writeFile(
-      path.join(moduleDir, "index.cjs"),
-      'throw new Error("do not execute while preparing");',
-    );
+    await fs.writeFile(path.join(moduleDir, "index.cjs"), 'throw new Error("preload executed");');
     expect(
       resolve(["--require", "codex-wrapper-preload", "wrapper.js", "app-server"], "node", moduleCwd)
         .launcherArgs,
@@ -68,13 +57,7 @@ describe("private Codex launcher arguments", () => {
   });
 
   it("does not mistake native root option values for launcher arguments", () => {
-    const args = [
-      "--profile",
-      "app-server",
-      "-c",
-      'openai_base_url="https://example.test"',
-      "app-server",
-    ];
+    const args = ["--profile", "app-server", "-c", "x=1", "app-server"];
     expect(resolve(args, "codex", process.cwd())).toEqual({
       launcherArgs: [],
       nativeArgs: args,

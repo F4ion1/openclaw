@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
+import { createModelFixture as paginatedModel } from "./model-fixture.test-support.js";
 import { createClientHarness } from "./test-support.js";
 
 vi.mock("./auth-bridge.js", async (importOriginal) => ({
@@ -42,36 +43,7 @@ let listAllCodexAppServerModels: typeof import("./models.js").listAllCodexAppSer
 let readModelListResult: typeof import("./models.js").readModelListResult;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.test-support.js").resetSharedCodexAppServerClientForTests;
 
-const validModelListEntry = {
-  id: "gpt-test",
-  model: "gpt-test",
-  displayName: "GPT Test",
-  description: "test model",
-  hidden: false,
-  isDefault: false,
-  defaultReasoningEffort: "medium",
-  multiAgentVersion: "v2",
-  supportedReasoningEfforts: [],
-};
-
-function paginatedModel(id: string, inputModalities: string[]) {
-  return {
-    id,
-    model: id,
-    displayName: id,
-    description: id.toUpperCase(),
-    inputModalities,
-    upgrade: null,
-    upgradeInfo: null,
-    availabilityNux: null,
-    hidden: false,
-    supportedReasoningEfforts: [],
-    defaultReasoningEffort: "medium",
-    supportsPersonality: false,
-    additionalSpeedTiers: [],
-    isDefault: false,
-  };
-}
+const validModelListEntry = paginatedModel("gpt-test");
 
 function modelHarness() {
   const harness = createClientHarness();
@@ -153,13 +125,7 @@ describe("listCodexAppServerModels", () => {
         data: [
           {
             ...paginatedModel("gpt-5.4", ["text", "image"]),
-            upgradeInfo: {
-              model: "gpt-5.6",
-              upgradeCopy: "Try GPT-5.6",
-              modelLink: null,
-              migrationMarkdown: null,
-              retirementAt: 1_800_000_000,
-            },
+            upgradeInfo: { model: "gpt-5.6", retirementAt: 1_800_000_000 },
             supportedReasoningEfforts: [
               { reasoningEffort: "low", description: "fast" },
               { reasoningEffort: "xhigh", description: "deep" },
