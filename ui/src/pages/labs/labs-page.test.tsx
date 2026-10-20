@@ -121,6 +121,31 @@ function codeModeToggle(page: LabsPageElement) {
 }
 
 describe("LabsPage", () => {
+  it("saves delegated creators immediately and removes only that override when switched off", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = labToggle(page, "Delegated human creators");
+    expect(toggle.checked).toBe(false);
+    toggle.click();
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenLastCalledWith({
+      raw: { agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } } },
+      note: "labs: update delegatedCreatorAttribution",
+    });
+    runtimeConfig.state.configSnapshot!.sourceConfig = {
+      agents: {
+        defaults: { experimental: { delegatedCreatorAttribution: true, decisionAssistance: true } },
+      },
+    };
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(toggle.checked).toBe(true));
+    toggle.click();
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
+    expect(runtimeConfig.patch).toHaveBeenLastCalledWith({
+      raw: { agents: { defaults: { experimental: { delegatedCreatorAttribution: null } } } },
+      note: "labs: update delegatedCreatorAttribution",
+    });
+  });
+
   it("defaults predictions off with Utility and saves each model without enabling the lab", async () => {
     const { page, runtimeConfig } = await mountPage({});
     const toggle = labToggle(page, "Composer predictions");

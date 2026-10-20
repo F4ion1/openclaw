@@ -30,7 +30,7 @@ import {
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { advancePreparedModelRuntimeConfig } from "../../prepared-model-runtime.js";
-import type { RequesterOrigin } from "../../requester-origin.js";
+import { requesterCreatorProfileId, type RequesterOrigin } from "../../requester-origin.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
@@ -84,12 +84,15 @@ export function registerParticipantSpawnCases(
       conversationId: parentSessionKey,
     });
   it.each([
-    { visible: false, queued: false },
-    { visible: true, queued: false },
-    { visible: false, queued: true },
+    { visible: false, queued: false, attribution: false },
+    { visible: true, queued: false, attribution: false },
+    { visible: false, queued: true, attribution: false },
+    { visible: false, queued: false, attribution: true },
+    { visible: true, queued: false, attribution: true },
+    { visible: false, queued: true, attribution: true },
   ])(
-    "delegates participant custody (visible=$visible, queued=$queued)",
-    async ({ visible, queued }) => {
+    "delegates participant custody (visible=$visible, queued=$queued, attribution=$attribution)",
+    async ({ visible, queued, attribution }) => {
       const envelopes: ExecutionIdentityAdmissionEnvelope[] = [];
       onTestFinished(
         configureExecutionIdentityAdmissionSink((work) => {
@@ -103,6 +106,15 @@ export function registerParticipantSpawnCases(
       const { source: aliceSource, person: alice } = participant("alice", "Alice");
       const { source: bobSource, person: bob } = participant("bob", "Bob");
       const bound = await createBoundParent(aliceSource.authority);
+      if (attribution) {
+        bound.cfg.agents = {
+          ...bound.cfg.agents,
+          defaults: {
+            ...bound.cfg.agents?.defaults,
+            experimental: { delegatedCreatorAttribution: true },
+          },
+        };
+      }
       const parentEnvelope = expectDefined(
         envelopes.find((entry) => entry.runId === parentRunId),
         "parent admission",
@@ -289,6 +301,15 @@ export function registerParticipantSpawnCases(
                 );
                 expect(authority.profileId).toBe(profileId);
                 expectOrigin(requesterOrigin, profileId);
+                expect(requesterCreatorProfileId(requesterOrigin)).toBe("alice");
+                const persisted = loadSessionEntry({
+                  storePath: bound.storePath,
+                  sessionKey: details.childSessionKey,
+                });
+                expect(persisted?.createdActor?.delegatedBy).toEqual(
+                  attribution ? { type: "human", source: "profile", id: "alice" } : undefined,
+                );
+                expect(persisted?.createdActor?.type).toBe("agent");
                 if (queued) {
                   expect(tools).toContain("read");
                   expect(tools).not.toContain("write");

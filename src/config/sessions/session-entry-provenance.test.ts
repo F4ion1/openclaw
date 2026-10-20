@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  attributeDelegatedSessionCreator,
+  inheritSessionCreationPolicy,
   inheritSessionGitContributorProfileIds,
+  preserveCreationStamp,
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+  sessionIsolationProfileId,
   isMainGitContributorScope,
   inheritSpawnSessionOwner,
   sessionPersonalProfileId,
@@ -11,7 +17,7 @@ import {
 type Source = Parameters<typeof sessionPersonalProfileId>[0];
 const creator: SessionCreatedActor = { type: "human", source: "profile", id: "profile-creator" };
 const human = (id?: string, label?: string): SessionActor => ({ type: "human", id, label });
-const spawningAgent: SessionActor = { type: "agent", id: "roboclaw" };
+const spawningAgent: SessionCreatedActor = { type: "agent", id: "roboclaw" };
 
 it("resolves personal profiles from assigned humans or authenticated creators only", () => {
   const cases: Array<[Source, string | undefined]> = [
@@ -156,5 +162,58 @@ describe("Git contributor source scope", () => {
     expect(
       inheritSessionGitContributorProfileIds({ ...parent, incognito: true }, source),
     ).toBeUndefined();
+  });
+});
+
+describe("delegated human creators", () => {
+  const config = { agents: { defaults: { experimental: { delegatedCreatorAttribution: true } } } };
+  const actor: SessionCreatedActor = { type: "human", source: "profile", id: "isolation-owner" };
+
+  it("keeps the legacy isolation actor while projecting the captured human creator", () => {
+    const attributed = attributeDelegatedSessionCreator(actor, config, "requester");
+    expect(attributed).toEqual({
+      ...actor,
+      delegatedBy: { type: "human", source: "profile", id: "requester" },
+    });
+    expect(resolveSessionCreatorActor(attributed)).toEqual({
+      type: "human",
+      source: "profile",
+      id: "requester",
+    });
+    expect(sessionCreatorProfileId(attributed)).toBe("requester");
+    expect(sessionIsolationProfileId(attributed)).toBe("isolation-owner");
+    expect(actor).not.toHaveProperty("delegatedBy");
+  });
+
+  it("requires explicit opt-in and a captured human, not an assignee or execution agent", () => {
+    for (const cfg of [
+      {},
+      { agents: { defaults: { experimental: { delegatedCreatorAttribution: false } } } },
+    ]) {
+      expect(attributeDelegatedSessionCreator(spawningAgent, cfg, "requester")).toEqual(
+        spawningAgent,
+      );
+    }
+    expect(attributeDelegatedSessionCreator(spawningAgent, config)).toEqual(spawningAgent);
+    expect(attributeDelegatedSessionCreator(undefined, config, "requester")).toBeUndefined();
+  });
+
+  it("does not rewrite stored attribution when settings, assignment or proposed creator change", () => {
+    const attributed = attributeDelegatedSessionCreator(actor, config, "requester");
+    const stored = {
+      createdActor: attributed,
+      createdVia: "spawn" as const,
+      createdAt: 1,
+      sandbox: "required" as const,
+    };
+    expect(preserveCreationStamp({ ...stored, createdActor: creator }, stored)).toEqual(stored);
+    expect(inheritSessionCreationPolicy(stored, spawningAgent)).toEqual({
+      actor: attributed,
+      sandbox: "required",
+    });
+    expect(sessionPersonalProfileId({ createdActor: attributed })).toBe("requester");
+    expect(
+      sessionPersonalProfileId({ createdActor: attributed, owner: { actor: human("assignee") } }),
+    ).toBe("assignee");
   });
 });

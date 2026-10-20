@@ -169,6 +169,7 @@ describe("Gateway core reload policy", () => {
     ].map((path) => ({ path, restart: true, heartbeat: false })),
     ...[
       "tools.codeMode.enabled",
+      "agents.defaults.experimental.delegatedCreatorAttribution",
       "gateway.controlUi.experimental.customPlugins",
       "gateway.controlUi.experimental.claws",
       "gateway.controlUi.experimental.chatBubbles",
