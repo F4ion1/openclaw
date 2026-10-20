@@ -219,7 +219,7 @@ extensions/discord/src/internal/interactions.ts	1
 extensions/discord/src/internal/modal-fields.ts	4
 extensions/discord/src/internal/rest-body.ts	5
 extensions/discord/src/internal/rest-errors.ts	1
-extensions/discord/src/internal/structures.ts	7
+extensions/discord/src/internal/structures.ts	6
 extensions/discord/src/internal/undefined-fields.ts	1
 extensions/discord/src/internal/voice.ts	1
 extensions/discord/src/markdown.ts	1
@@ -236,11 +236,9 @@ extensions/discord/src/monitor/message-text.ts	1
 extensions/discord/src/monitor/model-picker-preferences.ts	1
 extensions/discord/src/monitor/native-command-reply.ts	2
 extensions/discord/src/monitor/presence.ts	1
-extensions/discord/src/monitor/provider.allowlist.ts	1
 extensions/discord/src/monitor/provider.deploy-errors.ts	9
 extensions/discord/src/monitor/provider.deploy.ts	3
 extensions/discord/src/monitor/provider.lifecycle.ts	2
-extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
 extensions/discord/src/monitor/thread-bindings.discord-api.ts	2
@@ -337,7 +335,7 @@ extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
-extensions/googlechat/src/google-auth.runtime.ts	4
+extensions/googlechat/src/google-auth.runtime.ts	1
 extensions/googlechat/src/monitor-event.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
@@ -730,7 +728,7 @@ extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
-extensions/slack/src/channel.ts	5
+extensions/slack/src/channel.ts	4
 extensions/slack/src/client-delivery.ts	1
 extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
@@ -854,7 +852,7 @@ extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	3
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
-extensions/voice-call/index.ts	2
+extensions/voice-call/index.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
@@ -1060,7 +1058,7 @@ src/acp/server.ts	2
 src/acp/session-mapper.ts	1
 src/acp/tool-status.ts	1
 src/acp/translator.agent-events.ts	11
-src/acp/translator.prompt-stream.ts	7
+src/acp/translator.prompt-stream.ts	5
 src/acp/translator.replay.ts	1
 src/acp/translator.session-lifecycle.ts	1
 src/acp/translator.session-state.ts	1
@@ -1231,7 +1229,7 @@ src/agents/harness/support.ts	1
 src/agents/identity.ts	5
 src/agents/internal-runtime-context.ts	1
 src/agents/lazy-exec-tool.ts	2
-src/agents/lazy-process-tool.ts	2
+src/agents/lazy-process-tool.ts	1
 src/agents/live-cache-regression-policy.ts	2
 src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts	3
 src/agents/main-session-recovery/main-session-restart-recovery-resume-policy.ts	18
@@ -1283,7 +1281,6 @@ src/agents/sandbox/container-engine.ts	1
 src/agents/sandbox/podman-runtime.ts	1
 src/agents/sandbox/test-args.ts	1
 src/agents/session-activity-notes.ts	1
-src/agents/session-dirs.ts	2
 src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-suspension.ts	1
@@ -1303,7 +1300,7 @@ src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
-src/agents/sessions/settings-manager.ts	8
+src/agents/sessions/settings-manager.ts	3
 src/agents/sessions/steering-message-identity.ts	2
 src/agents/sessions/tools/edit.ts	3
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
@@ -1609,7 +1606,6 @@ src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	1
-src/commands/doctor-sqlite-maintenance-lock.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
 src/commands/doctor-workspace.ts	1
@@ -1775,7 +1771,7 @@ src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
-src/flows/doctor-removed-workspaces-state-check.ts	2
+src/flows/doctor-removed-workspaces-state-check.ts	1
 src/flows/search-setup.ts	1
 src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3
@@ -2054,7 +2050,6 @@ src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	2
-src/infra/update-package-manager.ts	1
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	2
 src/infra/windows-port-pids.ts	2
@@ -2178,7 +2173,6 @@ src/plugin-sdk/tool-plugin.ts	10
 src/plugin-sdk/windows-spawn.ts	1
 src/plugin-state/plugin-store-validation.ts	1
 src/plugins/agent-tool-result-middleware.ts	1
-src/plugins/api-facades.ts	1
 src/plugins/bundle-config-shared.ts	1
 src/plugins/bundle-lsp.ts	1
 src/plugins/bundle-mcp.ts	2
@@ -2350,7 +2344,6 @@ src/shared/store-writer-queue.ts	1
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	1
 src/skills/lifecycle/clawhub-store.ts	4
-src/skills/lifecycle/workspace-skill-write.ts	1
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/remote-probe-utils.ts	2
@@ -2416,8 +2409,6 @@ src/utils/delivery-context.shared.ts	2
 src/utils/string-readers.ts	2
 src/utils/usage-format.ts	1
 src/version.ts	4
-src/video-generation/capability-overlays.ts	1
-src/video-generation/runtime.ts	1
 src/web-fetch/runtime.ts	2
 src/web-search/runtime.ts	1
 src/web/provider-runtime-shared.ts	1

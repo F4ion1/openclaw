@@ -46,10 +46,12 @@ internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
 
-An accepted child continuation keeps the restored operator's current identity and
-permission checks independently of the parent's recovery claim. Completing the
-parent does not cancel that child. Revoking the operator, replacing the source
-session, or stopping the Gateway still invalidates the child's authority.
+An accepted child continuation, including a child created with `sessions_spawn`,
+keeps the restored operator's current identity and permission checks independently
+of the parent's recovery claim. Completing the parent does not cancel that child.
+Explicitly stopping the parent still cancels its children. Revoking the operator,
+replacing the source session, or stopping the Gateway still invalidates the child's
+authority.
 
 This includes automation turns running in dashboard main sessions. If a restart
 exhausts its drain budget, cancellation preserves restart recovery even when the
@@ -868,6 +870,10 @@ New input follows the live reply owner's queue policy. Without a live reply, dur
 fences must have terminal evidence before admission can retire them. Successful
 final delivery clears its pending intent and any unclaimed recovery route while
 preserving newer execution or delivery claims.
+Message-tool text and managed media already committed to WebChat history do not
+by themselves create another pending final delivery during turn completion.
+Other payload content and later additions, such as Connect buttons, generated
+speech, or usage footers, retain their delivery custody.
 
 Before readiness, startup invokes the shared Doctor transform to normalize older
 persisted `running` or `queued` values to `interrupted` once, except verified legacy
