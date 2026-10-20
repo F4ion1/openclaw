@@ -35,6 +35,9 @@ function fixture() {
       sessionId,
       pendingFinalDelivery: true,
       pendingFinalDeliveryText: pending.text,
+      pendingFinalDeliveryCreatedAt: pending.createdAt,
+      pendingFinalDeliveryContext: pending.context,
+      pendingFinalDeliveryIntentId: pending.intentId,
     },
   });
   const storePath = path.join(state, "agents/ops/sessions/sessions.json");

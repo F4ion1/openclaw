@@ -534,6 +534,13 @@ it.each<{
     runtimeApiKey: "omlx-local",
   },
   {
+    name: "remote Authorization with plugin local auth",
+    baseUrl: remoteUrl,
+    configured: { headers: { Authorization: "Bearer fixture-request-key" } },
+    sourceApiKey: "omlx-local",
+    runtimeApiKey: "omlx-local",
+  },
+  {
     name: "loopback request header with profile auth",
     baseUrl: localUrl,
     configured: { request: { headers: { authorization: "Bearer fixture-request-key" } } },

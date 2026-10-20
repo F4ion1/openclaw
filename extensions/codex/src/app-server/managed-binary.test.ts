@@ -190,13 +190,15 @@ describe("managed Codex app-server binary", () => {
     {
       order: "package-only",
       desktopCommands: [
-        desktopAppPaths.MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
-        desktopAppPaths.MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
+        "/Applications/ChatGPT.app/Contents/Resources/codex",
+        "/Applications/Codex.app/Contents/Resources/codex",
       ],
     },
     {
       order: "desktop-first",
-      desktopCommands: [desktopAppPaths.MACOS_DESKTOP_CHATGPT_SIGNED_APP_SERVER_COMMAND],
+      desktopCommands: [
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+      ],
     },
   ] as const)(
     "honors macOS $order ordering with desktop bundles present",
@@ -284,6 +286,7 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     await writePackage(platformRoot, `@openai/codex-${target}`);
     await writeExecutable(native, `#!/bin/sh\n${versionScript}\n`);
     await symlink(launcher, path.join(bin, "codex"));
+    return { launcher, native };
   }
 
   /** Makes this process's decision: what discovery reports and what managed starts use. */

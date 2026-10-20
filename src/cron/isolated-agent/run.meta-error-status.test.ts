@@ -152,6 +152,12 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     );
   });
 
+  it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
+    mockAgentRun({ ...failedRun, meta: { aborted: true } });
+    const result = await runTurn();
+    expectObjectFields(result, { status: "error", error: "cron isolated agent run aborted" });
+  });
+
   it.each([false, true])(
     "preserves tool-error status for silent replies (error: %s)",
     async (failed) => {
