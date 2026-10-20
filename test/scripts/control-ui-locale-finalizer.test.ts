@@ -3,8 +3,10 @@ import { createLocaleFinalizerHarness } from "./control-ui-locale-finalizer.test
 
 const it = test.skipIf(process.platform === "win32");
 const harness = createLocaleFinalizerHarness();
-beforeAll(() => harness.prepare());
-afterAll(() => harness.cleanup());
+if (process.platform !== "win32") {
+  beforeAll(() => harness.prepare());
+  afterAll(() => harness.cleanup());
+}
 type Result = Awaited<ReturnType<typeof harness.run>>;
 const id = (key: string) => "localeWorkflowProof." + key;
 const delta = ["edit", "add"].map(id);

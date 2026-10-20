@@ -424,6 +424,18 @@ describe("native Talk action ownership through public plugin registration", () =
         { role: "user", text: "reset-kept" },
       ]);
       expect(rawTranscriptRows()).toEqual(resetRaw);
+      for (let index = 0; index < 20; index++) {
+        append(`${index}:` + "x".repeat(30));
+      }
+      const bounded = await readSessionPreviewItemsFromTranscriptAsync(
+        scope,
+        3,
+        20,
+        "model-context",
+      );
+      expect(bounded).toEqual(
+        [17, 18, 19].map((index) => ({ role: "user", text: `${index}:` + "x".repeat(14) + "..." })),
+      );
     });
   });
 

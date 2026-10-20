@@ -32,6 +32,7 @@ const formParams = (origin: Partial<Origin>): FormParams => ({
     assertCurrent: vi.fn(),
     ...origin,
     runtime: {
+      sessionKey: "agent:main:form",
       sessionId: "form-session",
       workspaceDir: "/workspace",
       configFingerprint: "test",
