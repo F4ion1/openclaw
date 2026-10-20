@@ -32,6 +32,54 @@ all clients connect, including partially warmed samples.
 only that module; place the baseline beside the original so relative imports
 remain valid. Swap the CPU halves for the next pair and compare paired differences.
 
+## Startup with a populated multi-agent fixture
+
+For a bounded multi-agent boot workload, use the opt-in `teamBoot` case:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case teamBoot --fixture-root /path/to/new-fixture --seed-only
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case teamBoot --fixture-root /path/to/new-fixture \
+  --runs 1 --warmup 0 --timeout-ms 90000 --start-at <future-epoch-ms> \
+  --output /path/to/result.json
+```
+
+This fixture has 44 synthetic startup-active plugins, eight local agents, 4,096
+shared session entries, and 128 MiB of inert synthetic shared-state payload. It
+uses the normal database and session writers and keeps clean-close seals. It
+does not provision remote workers or make model/channel calls. Actual database
+sizes and inventory are recorded in `team-boot-fixture.json` and copied into the
+result. Seed each side sequentially outside the measurement window. Payload
+writes checkpoint every 8 MiB and pause between batches; Linux generation stops
+if system dirty pages reach 2 GiB. A failed seed has no completion marker and
+must be regenerated in a new directory.
+
+Startup results include spawn-to-`/readyz` and spawn-to-first-successful
+`sessions.list` timings. The authenticated protocol handshake uses the isolated
+Gateway's loopback `auth: none` policy. Session RPC probing starts when `/healthz`
+first responds, concurrently with `/readyz`, and retries startup refusals until
+the shared deadline. A healthy HTTP endpoint without a successful session RPC
+fails the measurement. The `teamBoot` case also requires the expected seeded
+session; an empty or unrelated roster does not count. `startupTraceLines` preserves every observed startup
+trace line, including repeated spans; `startupTrace` retains the existing numeric
+summary. All benchmark Gateway ports are at least 40000. If the host's ephemeral
+port range cannot provide one, the benchmark reports a setup error after bounded
+attempts instead of waiting indefinitely.
+
+Samples record teardown duration in `shutdownMs` and forced process-tree cleanup
+in `shutdownForced`; the summary includes shutdown timing statistics. The
+`teamBoot` case allows 30 seconds for graceful teardown and fails if the child
+exits nonzero, dies from a signal, or requires forced cleanup. Other cases keep
+their existing teardown policy.
+
+For paired comparisons, prepare separate roots from the same seed inputs and
+pass the same future `--start-at` to both controllers. Use the host's exclusive
+measurement lock, pin each side to its assigned 16-core half, swap the halves on
+the next pair, and compare each pair's candidate-minus-baseline difference.
+Build and seed outside the measurement CPU allocation. Keep every root and
+temporary directory inside the task-owned sandbox and remove them after use.
+
 ## Startup with one checking agent
 
 The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
@@ -238,7 +286,7 @@ visible. Only browser list requests are counted; the controller socket is
 excluded, and the created jobs are removed on exit.
 
 For board/chat document loads, use `--load-runs 5 --load-path /dashboard --duration 12`.
-This mode retains synthetic `cron.list`, `models.list`, and `users.self` parameters,
+This mode retains synthetic `cron.list`, `models.list`, `users.self`, and `sessions.describe` parameters,
 response bytes, `models.snapshot` event counts, paint entries, and native Long Task
 blocking (the sum of each task's duration above 50 ms). It records the first cold
 browser context separately from later documents that retain browser cache and
@@ -259,6 +307,16 @@ It excludes `--activity-session` and `--activity-cron`. Catalog observations
 retain model rows for before/after option comparisons; use only synthetic
 catalogs. Compare warm session-scoped request counts and activity blocking time,
 keeping the initial catalogs separate from the activity window.
+With `--open-details`, the final check reopens Details for the selected conversation
+after the activity window, then compares its session identity, label, model, status
+note, and thinking level with a fresh controller-side descriptor. It records this
+as an input-state comparison, then separately checks the rendered model in Details
+and the visible conversation header's label. The controller read is excluded
+from browser request counts; compare activity requests only between
+`activityStartedAtMs` and `activityEndedAtMs`. Request traces retain the preceding
+event's session key, reason, timestamp, and revision to distinguish event-driven
+reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis,
+then omit it for paired timing.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:

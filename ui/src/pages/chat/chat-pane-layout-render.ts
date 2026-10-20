@@ -307,6 +307,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopRefreshOnPresentation: !this.pendingPanelToggles.requests.has("desktop"),
       desktopAvailable,
       desktopSource,
+      desktopRuntimeConfig: this.context.runtimeConfig,
       portalPresented: slotPresentation("portal"),
       desktopFocusHref: desktopFocus.href,
       onDesktopFocusTargetChange: (target) => {
