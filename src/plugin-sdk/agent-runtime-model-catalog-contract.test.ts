@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
   loadCatalog: vi.fn(),
 }));
+const entries = [{ provider: "test", id: "selected", name: "Selected" }];
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
@@ -39,9 +40,9 @@ describe("agent-runtime model catalog compatibility", () => {
     expect(readCatalog).toHaveBeenCalledOnce();
   });
 
-  it.each([true])("preserves explicit readOnly:%s in the SDK loader", async (readOnly) => {
+  it("preserves explicit readOnly:true in the SDK loader", async () => {
+    const readOnly = true;
     const config = {};
-    const entries = [{ provider: "test", id: "selected", name: "Selected" }];
     mocks.loadCatalog.mockResolvedValue(entries);
 
     await expect(loadPreparedModelCatalog({ config, readOnly })).resolves.toBe(entries);
@@ -56,16 +57,15 @@ describe("agent-runtime model catalog compatibility", () => {
     ["snapshot", () => getPreparedModelCatalogSnapshot()?.entries ?? []],
   ] as const)("keeps %s reads nonblocking", async (_name, read) => {
     mocks.getSnapshot.mockReturnValue({
-      entries: [{ provider: "test", id: "cached", name: "Cached" }],
+      entries,
       routeVariants: [],
     });
 
-    expect(await read()).toEqual([{ provider: "test", id: "cached", name: "Cached" }]);
+    expect(await read()).toEqual(entries);
     expect(mocks.loadCatalog).not.toHaveBeenCalled();
   });
 
   it("preserves explicit refresh intent through the legacy loader", async () => {
-    const entries = [{ provider: "test", id: "refreshed", name: "Refreshed" }];
     mocks.loadCatalog.mockResolvedValue(entries);
 
     await expect(loadModelCatalog({ refreshFullCatalog: true })).resolves.toBe(entries);
@@ -92,25 +92,14 @@ describe("agent-runtime model catalog compatibility", () => {
     expectTypeOf<LegacyMetadataSnapshot>().toMatchTypeOf<AcceptedMetadataSnapshot>();
     expectTypeOf<PluginMetadataSnapshot>().toMatchTypeOf<AcceptedMetadataSnapshot>();
     mocks.loadCatalog.mockResolvedValue([]);
-    const config = {};
-    const env = { OPENCLAW_STATE_DIR: "/tmp/plugin-state" };
-
-    await loadModelCatalog({
+    const options = {
       agentDir: "/tmp/plugin-agent",
-      config,
-      env,
-      metadataSnapshot: {} as never,
-      readOnly: true,
-      useCache: false,
-      workspaceDir: "/tmp/plugin-workspace",
-    });
-
-    expect(mocks.loadCatalog).toHaveBeenCalledWith({
-      agentDir: "/tmp/plugin-agent",
-      config,
-      env,
+      config: {},
+      env: { OPENCLAW_STATE_DIR: "/tmp/plugin-state" },
       readOnly: true,
       workspaceDir: "/tmp/plugin-workspace",
-    });
+    };
+    await loadModelCatalog({ ...options, metadataSnapshot: {} as never, useCache: false });
+    expect(mocks.loadCatalog).toHaveBeenCalledWith(options);
   });
 });

@@ -13,7 +13,6 @@ import {
   expectReadWriteEditTools,
   getTextContent,
 } from "../agents/test-helpers/agent-tools-fs-helpers.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -34,35 +33,28 @@ describe("prepared skill resource boundary", () => {
     async (selection) => {
       const rootDir = temps.make("openclaw-public-skill-resources-");
       const workspaceDir = path.join(rootDir, "workspace");
-      const snapshotDir = path.join(rootDir, "snapshot-skill");
-      const preparedDir = path.join(rootDir, "prepared-skill");
-      for (const directory of [workspaceDir, snapshotDir, preparedDir]) {
-        await fs.mkdir(directory, { recursive: true });
-      }
-      const snapshotPath = path.join(snapshotDir, "SKILL.md");
-      const preparedPath = path.join(preparedDir, "SKILL.md");
-      await fs.writeFile(snapshotPath, "# Public snapshot instructions\n");
-      await fs.writeFile(preparedPath, "# Internal prepared instructions\n");
-      const snapshotSkill = createCanonicalFixtureSkill({
-        name: "snapshot",
-        description: "Public snapshot skill",
-        filePath: snapshotPath,
-        baseDir: snapshotDir,
-        source: "test",
-      });
-      const preparedSkill = createCanonicalFixtureSkill({
-        name: "prepared",
-        description: "Internal prepared skill",
-        filePath: preparedPath,
-        baseDir: preparedDir,
-        source: "test",
-      });
-      const config: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
-      // A variable models JavaScript callers carrying unsupported extra fields.
-      // Neither an empty nor a populated internal list may alter the public factory.
+      await fs.mkdir(workspaceDir);
+      const makeSkill = async (name: string, text: string) => {
+        const baseDir = path.join(rootDir, `${name}-skill`);
+        const filePath = path.join(baseDir, "SKILL.md");
+        await fs.mkdir(baseDir);
+        await fs.writeFile(filePath, `# ${text}\n`);
+        return createCanonicalFixtureSkill({
+          name,
+          description: text,
+          filePath,
+          baseDir,
+          source: "test",
+        });
+      };
+      const snapshotSkill = await makeSkill("snapshot", "Public snapshot instructions");
+      const preparedSkill = await makeSkill("prepared", "Internal prepared instructions");
+      const snapshotPath = snapshotSkill.filePath;
+      const preparedPath = preparedSkill.filePath;
+      // Model JavaScript callers carrying unsupported extra fields.
       const options = {
         workspaceDir,
-        config,
+        config: { tools: { fs: { workspaceOnly: true } } },
         skillsSnapshot: {
           prompt: "",
           skills: [{ name: "snapshot" }],
@@ -79,23 +71,18 @@ describe("prepared skill resource boundary", () => {
       );
 
       const { skillReadResources, ...publicOptions } = options;
-      const internalTools = createOpenClawCodingToolsInternal(publicOptions, skillReadResources);
-      const internal = expectReadWriteEditTools(internalTools);
+      const internal = expectReadWriteEditTools(
+        createOpenClawCodingToolsInternal(publicOptions, skillReadResources),
+      );
+      const readPrepared = () =>
+        internal.readTool.execute("internal-prepared", { path: preparedPath });
       await expect(
         internal.readTool.execute("internal-snapshot", { path: snapshotPath }),
       ).rejects.toThrow(/Path escapes sandbox root/i);
       if (selection === "populated") {
-        expect(
-          getTextContent(
-            await internal.readTool.execute("internal-prepared", {
-              path: preparedPath,
-            }),
-          ),
-        ).toContain("Internal prepared instructions");
+        expect(getTextContent(await readPrepared())).toContain("Internal prepared instructions");
       } else {
-        await expect(
-          internal.readTool.execute("internal-empty", { path: preparedPath }),
-        ).rejects.toThrow(/Path escapes sandbox root/i);
+        await expect(readPrepared()).rejects.toThrow(/Path escapes sandbox root/i);
       }
       await expect(
         internal.writeTool.execute("internal-write", {
