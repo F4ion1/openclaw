@@ -9,22 +9,13 @@ import {
 } from "./allow-from.js";
 
 it.each([
-  ["allows wildcard", { senderId: "attacker", allowFrom: ["*"] }, true],
-  [
-    "rejects when sender is missing",
-    {
-      senderId: "999",
-      allowFrom: ["zl:12345"],
-      stripPrefixRe: /^(zalo|zl):/i,
-    },
-    false,
-  ],
-] satisfies Array<[string, Parameters<typeof isNormalizedSenderAllowed>[0], boolean]>)(
-  "%s",
-  (_name, input, expected) => {
-    expect(isNormalizedSenderAllowed(input)).toBe(expected);
-  },
-);
+  ["*", undefined, true],
+  ["zl:12345", /^(zalo|zl):/i, false],
+] as const)("checks sender against %s", (entry, stripPrefixRe, expected) => {
+  expect(isNormalizedSenderAllowed({ senderId: "999", allowFrom: [entry], stripPrefixRe })).toBe(
+    expected,
+  );
+});
 
 it("trims, strips prefixes, and lowercases entries", () => {
   expect(
@@ -36,12 +27,9 @@ it("trims, strips prefixes, and lowercases entries", () => {
 });
 
 it("filters empty normalized entries", () => {
-  expect(
-    formatNormalizedAllowFromEntries({
-      allowFrom: ["@", "valid"],
-      normalizeEntry: (entry: string) => entry.replace(/^@$/, ""),
-    }),
-  ).toEqual(["valid"]);
+  const normalizeEntry = (entry: string) => entry.replace(/^@$/, "");
+  const entries = formatNormalizedAllowFromEntries({ allowFrom: ["@", "valid"], normalizeEntry });
+  expect(entries).toEqual(["valid"]);
 });
 
 it("preserves wildcard entries and returns the first parser error", () => {

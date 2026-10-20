@@ -61,17 +61,15 @@ describe("createResolvedApproverActionAuthAdapter", () => {
     });
   });
 
-  it("marks empty-approver fallback auth as implicit", () => {
-    const result = authorize(signalAuth([]), "uuid:attacker");
-
-    expect(result).toEqual({ authorized: true });
-    expect(isImplicitSameChatApprovalAuthorization(result)).toBe(true);
-  });
-
-  it("does not mark configured-approver auth as implicit", () => {
-    const result = authorize(signalAuth(["uuid:owner"]), "uuid:owner");
-
-    expect(result).toEqual({ authorized: true });
-    expect(isImplicitSameChatApprovalAuthorization(result)).toBe(false);
-  });
+  it.each([
+    [[], "uuid:attacker", true],
+    [["uuid:owner"], "uuid:owner", false],
+  ] satisfies Array<[string[], string, boolean]>)(
+    "marks %j approvers / %s sender as implicit: %s",
+    (approvers, sender, implicit) => {
+      const result = authorize(signalAuth(approvers), sender);
+      expect(result).toEqual({ authorized: true });
+      expect(isImplicitSameChatApprovalAuthorization(result)).toBe(implicit);
+    },
+  );
 });
