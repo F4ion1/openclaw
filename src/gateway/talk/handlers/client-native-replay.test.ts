@@ -13,6 +13,7 @@ import {
   connectNativeSession,
   installNativePluginTestHooks,
   nativeDelegation,
+  nativeResult,
   upstream,
   withNativePlugin,
 } from "./client-native-control.test-support.js";
@@ -37,13 +38,17 @@ describe("registered native delegation replay", () => {
             throw new Error("Missing registered source admission");
           }
           expect(resolveClientVoiceRunBinding(params.runId)).toBeDefined();
+          const identity = {
+            agentId: AGENT_ID,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            runId: params.runId,
+          };
+          const text = "Native effect completed.";
           const host = createAgentHarnessHostCapabilities({
             pluginId: "replay-fixed-model",
             attempt: {
-              agentId: AGENT_ID,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              runId: params.runId,
+              ...identity,
               workspaceDir: params.workspaceDir,
               cwd: params.cwd,
               config: params.config,
@@ -60,10 +65,7 @@ describe("registered native delegation replay", () => {
               ...policy,
               config: params.config,
               cwd: params.workspaceDir,
-              agentId: AGENT_ID,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              runId: params.runId,
+              ...identity,
               allowBackground: false,
             }),
           ]);
@@ -80,11 +82,8 @@ describe("registered native delegation replay", () => {
             effects.push(result.details);
             runIds.push(params.runId);
             return {
-              payloads: [{ text: "Native effect completed." }],
-              meta: {
-                durationMs: 0,
-                terminalReply: { disposition: "visible", text: "Native effect completed." },
-              },
+              ...nativeResult(text),
+              meta: { durationMs: 0, terminalReply: { disposition: "visible", text } },
             } satisfies EmbeddedAgentRunResult;
           } finally {
             host.close();

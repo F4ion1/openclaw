@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { expectRecordFields } from "./responses.test-support.js";
@@ -17,6 +16,18 @@ export function createTalkConfig(apiKey: unknown): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function realtimeConfig(model: string, voice: string, explicit = true): OpenClawConfig {
+  return {
+    talk: {
+      realtime: {
+        ...(explicit ? { provider: "openai" } : {}),
+        model,
+        providers: { openai: { model, voice } },
+      },
+    },
+  };
+}
+
 /** Runs public wire/privacy cases inside the owning handler suite's isolated harness. */
 export function defineRealtimeConfigProjectionTests(
   requestConfig: (
@@ -31,18 +42,10 @@ export function defineRealtimeConfigProjectionTests(
   ] as const)(
     "projects opaque OpenAI models through the cold bundled policy surface includeSecrets=$includeSecrets provider=$providerSelection",
     async ({ includeSecrets, providerSelection }) => {
-      const runtimeConfig = {
-        talk: {
-          realtime: {
-            ...(providerSelection === "explicit" ? { provider: "openai" } : {}),
-            model: "gpt-live-test-canary",
-            providers: {
-              openai: { model: "gpt-live-test-canary", voice: "marin" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      const response = await requestConfig(runtimeConfig, includeSecrets);
+      const response = await requestConfig(
+        realtimeConfig("gpt-live-test-canary", "marin", providerSelection === "explicit"),
+        includeSecrets,
+      );
       const realtime = expectRecordFields(response.config?.talk?.realtime, {
         provider: "openai",
       });
@@ -63,18 +66,10 @@ export function defineRealtimeConfigProjectionTests(
   it.each([false, true])(
     "preserves the released OpenAI realtime route through the cold bundled policy surface includeSecrets=%s",
     async (includeSecrets) => {
-      const runtimeConfig = {
-        talk: {
-          realtime: {
-            provider: "openai",
-            model: "gpt-live-1-codex",
-            providers: {
-              openai: { model: "gpt-live-1-codex", voice: "spruce" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      const response = await requestConfig(runtimeConfig, includeSecrets);
+      const response = await requestConfig(
+        realtimeConfig("gpt-live-1-codex", "spruce"),
+        includeSecrets,
+      );
       const realtime = expectRecordFields(response.config?.talk?.realtime, {
         provider: "openai",
         model: "gpt-live-1-codex",
@@ -91,9 +86,7 @@ export function defineRealtimeConfigProjectionTests(
     (
       JSON.parse(
         readFileSync(
-          fileURLToPath(
-            new URL("../../../../test/fixtures/talk-realtime-relay-contract.json", import.meta.url),
-          ),
+          new URL("../../../../test/fixtures/talk-realtime-relay-contract.json", import.meta.url),
           "utf8",
         ),
       ) as { cases: Array<{ id: string; source: OpenClawConfig; config: Record<string, unknown> }> }

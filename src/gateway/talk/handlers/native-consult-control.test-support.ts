@@ -2,6 +2,7 @@ import { describe, expect, it, vi, type Mock } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -40,6 +41,12 @@ type NativeControlHarness = {
 };
 
 export function registerNativeConsultExactControlTests(harness: NativeControlHarness) {
+  const cancel = { text: "cancel", mode: "cancel" };
+  const created = async (method: string, params: Record<string, unknown>) => {
+    const respond = await harness.dispatch(method, params);
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    return respond.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
+  };
   describe.each(["browser-rpc", "browser-provider", "relay"] as const)(
     "native %s exact control",
     (surface) => {
@@ -60,13 +67,10 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
         });
         const abortOther = vi.fn();
         harness.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-          const handle = {
+          const handle = createEmbeddedRunHandle({
             runId: params.runId,
-            queueMessage: async () => undefined,
-            isStreaming: () => true,
-            isCompacting: () => false,
             abort: abortOwned,
-          };
+          });
           const operation = getCurrentSessionControllerOwner();
           if (!operation) {
             throw new Error("Talk consult has no controller-owned turn");
@@ -99,9 +103,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           transport: browser ? "webrtc" : "gateway-relay",
           ...(browser ? { capabilities: ["gateway-control-v1"] } : {}),
         };
-        const respond = await harness.dispatch(createMethod, createParams);
-        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-        const result = respond.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
+        const result = await created(createMethod, createParams);
         let controlSessionId = result.sessionId;
         const cancelsOriginal =
           replacement === "foreign global" ||
@@ -122,12 +124,10 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             sessionId: active.sessionId,
           });
           if (replacement === "other call" || replacement === "same call") {
-            const next = await harness.dispatch(createMethod, {
+            const call = await created(createMethod, {
               ...createParams,
               ...(replacement === "same call" ? { voiceSessionId: result.voiceSessionId } : {}),
             });
-            expect(next).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-            const call = next.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
             expect(
               (call.voiceSessionId ?? call.sessionId) ===
                 (result.voiceSessionId ?? result.sessionId),
@@ -154,13 +154,10 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             }
             setActiveEmbeddedRun(
               replacement === "replaced run" ? active.sessionId : "other-agent-session",
-              {
+              createEmbeddedRunHandle({
                 runId: replacement === "reused run ID" ? active.runId : "other-run",
-                queueMessage: async () => undefined,
-                isStreaming: () => true,
-                isCompacting: () => false,
                 abort: abortOther,
-              },
+              }),
               "global",
               undefined,
               foreignOperation ? "primary" : "voice",
@@ -170,8 +167,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           expect(
             await harness.dispatch("talk.client.steer", {
               sessionKey: "agent:primary:main",
-              text: "cancel",
-              mode: "cancel",
+              ...cancel,
             }),
           ).toHaveBeenCalledWith(
             false,
@@ -183,7 +179,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
               callId: "control",
               itemId: "control",
               name: "openclaw_agent_control",
-              args: { text: "cancel", mode: "cancel" },
+              args: { ...cancel },
             });
             await vi.waitFor(() =>
               expect(harness.submitProviderResult).toHaveBeenCalledWith(
@@ -197,8 +193,7 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
               {
                 ...(browser ? {} : { sessionId: controlSessionId }),
                 sessionKey: "main",
-                text: "cancel",
-                mode: "cancel",
+                ...cancel,
               },
             );
             expect(control).toHaveBeenCalledWith(
