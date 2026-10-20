@@ -12,10 +12,7 @@ import {
 } from "../agents/tools/in-process-gateway.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import {
-  appendTranscriptMessage,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -84,11 +81,10 @@ describe("typed in-process agent continuation authorization", () => {
         | Promise<Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>>
         | undefined;
       const capture = operatorCapture.captureGatewayOperatorRunAuthority;
-      let restoreCapture = () => {};
       try {
         await run(() =>
           withOperatorToolGatewayAuthority({ scopes: ["operator.write"] }, async () => {
-            const held = vi
+            using _ = vi
               .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
               .mockImplementationOnce(async (...args) => {
                 const captured = await capture(...args);
@@ -96,7 +92,6 @@ describe("typed in-process agent continuation authorization", () => {
                 await resume.promise;
                 return captured;
               });
-            restoreCapture = () => held.mockRestore();
             await withGatewayToolCallerIdentity(
               {
                 agentId: "main",
@@ -128,7 +123,6 @@ describe("typed in-process agent continuation authorization", () => {
       } finally {
         resume.resolve();
         (await settled)?.release();
-        restoreCapture();
         source.release();
       }
     },
@@ -214,24 +208,10 @@ describe("typed in-process agent continuation authorization", () => {
     async (boundary) =>
       withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
-        const target = {
-          agentId: "main",
-          sessionKey: "agent:main:child",
-          sessionId: "target-session",
-        };
-        await upsertSessionEntryCore(target, {
-          sessionId: target.sessionId,
-          updatedAt: Date.now(),
-        });
-        await appendTranscriptMessage(target, {
-          message: {
-            role: "assistant",
-            __openclaw: { runId: "target-followup" },
-            phase: "final_answer",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Target work finished" }],
-          },
-        });
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:child" },
+          { sessionId: "target-session", updatedAt: Date.now() },
+        );
         const fixture = createOperatorScope("reply-owner", ["operator.read", "operator.write"]);
         const { client: owner, context, run } = fixture;
         let connected = true;

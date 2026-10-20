@@ -12,6 +12,7 @@ import { startGatewayServer } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
+const proxyKeys = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"];
 const NETWORK_GATEWAY_ENV_KEYS = [
   "HOME",
   ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
@@ -26,14 +27,8 @@ const NETWORK_GATEWAY_ENV_KEYS = [
   "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_TEST_MINIMAL_GATEWAY",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-  "NO_PROXY",
-  "no_proxy",
+  ...proxyKeys,
+  ...proxyKeys.map((key) => key.toUpperCase()),
 ] as const;
 
 describe("gateway network runtime", () => {

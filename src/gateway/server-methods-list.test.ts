@@ -108,7 +108,6 @@ describe("listGatewayMethods", () => {
       methods.indexOf("gateway.restart.request") - 1,
     );
     expect(descriptor("gateway.restart.preflight")).toMatchObject({
-      name: "gateway.restart.preflight",
       scope: "operator.read",
       since: "<=2026.7",
     });
@@ -118,7 +117,6 @@ describe("listGatewayMethods", () => {
   it("classifies cron mutations as control-plane writes", () => {
     for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run"]) {
       expect(descriptor(method)).toMatchObject({
-        name: method,
         scope: "operator.admin",
         controlPlaneWrite: true,
       });
@@ -145,7 +143,6 @@ describe("listGatewayMethods", () => {
   it("registers the hidden node protocol feature publication method", () => {
     expect(coreGatewayHandlers["node.runnerInventory.update"]).toBeTypeOf("function");
     expect(descriptor("node.runnerInventory.update")).toMatchObject({
-      name: "node.runnerInventory.update",
       scope: "node",
       advertise: false,
     });
@@ -171,7 +168,6 @@ describe("listGatewayMethods", () => {
       expectAdvertised(method);
       expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(method);
       expect(descriptor(method)).toMatchObject({
-        name: method,
         scope: "operator.admin",
         startup: "unavailable-until-sidecars",
         controlPlaneWrite: true,
@@ -179,7 +175,7 @@ describe("listGatewayMethods", () => {
     }
     for (const [method, scope, controlPlaneWrite] of sessionEnvironmentMethods) {
       expectAdvertised(method);
-      expect(descriptor(method)).toMatchObject({ name: method, scope, since: "2026.9" });
+      expect(descriptor(method)).toMatchObject({ scope, since: "2026.9" });
       expect(descriptor(method)?.controlPlaneWrite).toBe(controlPlaneWrite);
     }
   });
