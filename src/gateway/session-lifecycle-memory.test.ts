@@ -82,23 +82,13 @@ it("reads committed actor changes through Gateway target and creation preparatio
   ).toMatchObject({ ok: true, value: { displayName: "Current title" } });
 });
 
-it("resets the selected session after cleanup writes metadata without requiring its old row", async () => {
-  const { patch, owner, reset } = await fixture();
-  const result = await deleteIncognitoSessionForReset({
-    ...reset,
-    async beforeDelete() {
-      await patch({ displayName: "Cleanup complete", updatedAt: 2 });
-    },
-  });
-  expect(result).toEqual({ ok: true, value: { deletedSessionId: "original" } });
-  expect(owner.readSession(key, authority)).toBeUndefined();
-});
-
-it("checks live deletion authority after asynchronous cleanup", async () => {
-  const { owner, reset } = await fixture();
-  let allowed = true;
-  await expect(
-    deleteIncognitoSessionForReset({
+it.each(["metadata update", "authority revocation"])(
+  "resets after cleanup: %s",
+  async (cleanup) => {
+    const { patch, owner, reset } = await fixture();
+    const revoked = cleanup === "authority revocation";
+    let allowed = true;
+    const pending = deleteIncognitoSessionForReset({
       ...reset,
       commitGuard() {
         if (!allowed) {
@@ -106,9 +96,19 @@ it("checks live deletion authority after asynchronous cleanup", async () => {
         }
       },
       async beforeDelete() {
-        allowed = false;
+        if (revoked) {
+          allowed = false;
+        } else {
+          await patch({ displayName: "Cleanup complete", updatedAt: 2 });
+        }
       },
-    }),
-  ).rejects.toThrow("Deletion authority revoked");
-  expect(owner.readSession(key, authority)?.entry?.sessionId).toBe("original");
-});
+    });
+    if (revoked) {
+      await expect(pending).rejects.toThrow("Deletion authority revoked");
+      expect(owner.readSession(key, authority)?.entry?.sessionId).toBe("original");
+    } else {
+      expect(await pending).toEqual({ ok: true, value: { deletedSessionId: "original" } });
+      expect(owner.readSession(key, authority)).toBeUndefined();
+    }
+  },
+);
