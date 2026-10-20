@@ -189,8 +189,6 @@ private struct DashboardAlertContent: View {
                     }
                     if index == 0 {
                         button.keyboardShortcut(.defaultAction)
-                    } else if index == self.buttonTitles.count - 1 {
-                        button.keyboardShortcut(.cancelAction)
                     } else {
                         button
                     }

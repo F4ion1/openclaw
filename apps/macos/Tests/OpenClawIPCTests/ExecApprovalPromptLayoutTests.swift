@@ -84,6 +84,38 @@ struct ExecApprovalPromptLayoutTests {
         }
     }
 
+    @Test func `escape cancels fallback consent instead of choosing the final button`() throws {
+        _ = AppKitTestSupport.application
+        let presenter = DashboardAlertPresenter()
+        defer { presenter.dismissAll() }
+        let alert = NSAlert()
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
+        alert.addButton(withTitle: "Allow").keyEquivalent = ""
+        _ = alert.window
+        let windows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        var response: NSApplication.ModalResponse?
+        presenter.present(alert, over: nil) { response = $0 }
+        let panel = try #require(NSApp.windows.first { !windows.contains(ObjectIdentifier($0)) && $0 is NSPanel })
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.makeFirstResponder(panel.contentView)
+        let escape = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: panel.windowNumber,
+            context: nil,
+            characters: "\u{1B}",
+            charactersIgnoringModifiers: "\u{1B}",
+            isARepeat: false,
+            keyCode: 53))
+        if !panel.performKeyEquivalent(with: escape) {
+            panel.sendEvent(escape)
+        }
+        #expect(response == .cancel)
+        #expect(presenter._testPendingAlerts.isEmpty)
+    }
+
     @Test func `closing one prompt does not enable input while another owner is pending`() throws {
         let state = ApprovalPromptState()
         let panel = UUID()
