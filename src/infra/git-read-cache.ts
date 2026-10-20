@@ -114,7 +114,7 @@ function createReadCache<Input, Output>(
       let currentRevision: string | null | undefined;
       if (revision && !waitingToRetry) {
         // Share only overlapping checks of identical inputs, never a settled revision.
-        const revisionInput = gitEnvironmentKey(input);
+        const revisionInput = keyOf === gitEnvironmentKey ? key : gitEnvironmentKey(input);
         let check = revisions.get(revisionInput);
         if (!check) {
           const controller = new AbortController();
