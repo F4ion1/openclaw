@@ -48,8 +48,11 @@ export function assertNativeProtocolContract(
     return;
   }
   for (const [name, schema] of Object.entries(ProtocolSchemas)) {
-    if (IsObject(schema) && !source.includes(`public struct ${name}:`)) {
-      throw new Error(`Missing Swift model for ProtocolSchemas.${name}`);
+    if (IsObject(schema)) {
+      if (!source.includes(`public struct ${name}:`)) {
+        throw new Error(`Missing Swift model for ProtocolSchemas.${name}`);
+      }
+      continue;
     }
     const variants = IsUnion(schema) ? schema.anyOf : undefined;
     if (!variants || variants.length < 2 || !variants.every(IsLiteralString)) {

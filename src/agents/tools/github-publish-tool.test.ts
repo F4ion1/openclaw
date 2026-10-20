@@ -10,20 +10,24 @@ import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_publish tool", () => {
-  it.each(["inspect_pr", "edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
-    "rejects draft on %s without changing PR state",
-    async (action) => {
-      const callGateway = vi.fn();
-      const tool = createGitHubPublishTool({ callGateway, actionsAvailable: true });
-      await expect(
-        withGatewayToolCallerIdentity(
-          { agentId: "main", sessionKey: "agent:main:host-owned" },
-          () => tool.execute("choice", { action, draft: false }),
-        ),
-      ).rejects.toThrow("draft only selects the state when publishing a new PR");
-      expect(callGateway).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "inspect_pr",
+    "prepare_pr",
+    "edit",
+    "refresh_base",
+    "ready",
+    "request_review",
+    "upload_evidence",
+  ])("rejects draft on %s without changing PR state", async (action) => {
+    const callGateway = vi.fn();
+    const tool = createGitHubPublishTool({ callGateway, actionsAvailable: true });
+    await expect(
+      withGatewayToolCallerIdentity({ agentId: "main", sessionKey: "agent:main:host-owned" }, () =>
+        tool.execute("choice", { action, draft: false }),
+      ),
+    ).rejects.toThrow("draft only selects the state when publishing a new PR");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 
   it("offers current-PR preparation without privileged actions", () => {
     const tool = createGitHubPublishTool();
@@ -33,6 +37,17 @@ describe("github_publish tool", () => {
         pullRequestUrl: "https://github.com/example/repository/pull/1",
       }),
     ).toBe(true);
+    const prepare = {
+      action: "prepare_pr",
+      pullRequestUrl: "https://github.com/example/repository/pull/1",
+    };
+    expect(Value.Check(tool.parameters, prepare)).toBe(true);
+    expect(
+      Value.Check(
+        createGitHubPublishTool({ publicationAvailable: false, actionsAvailable: true }).parameters,
+        prepare,
+      ),
+    ).toBe(false);
     expect(Value.Check(tool.parameters, { action: "edit" })).toBe(true);
     expect(
       Value.Check(tool.parameters, {

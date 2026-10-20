@@ -284,6 +284,11 @@ function requirePublicationWorktreeOwner(
   expected?: ExpectedWorktree,
 ) {
   const entry = loaded.entry;
+  if (entry.worktree?.githubPullRequest) {
+    throw new GitHubPublicationWorkspaceChangedError(
+      "This workspace continues an existing PR. Publishing to its original branch is not available yet; saved work was preserved.",
+    );
+  }
   if (
     !entry.worktree?.id ||
     !worktree ||
@@ -642,7 +647,7 @@ export async function hasSupportedGitHubPublicationTarget(
 
   const initial = requirePublicationSessionOwner(session, sessionRead.readCurrent(), true);
   context.admission.assertCurrent();
-  if (initial.entry.archivedAt !== undefined) {
+  if (initial.entry.archivedAt !== undefined || initial.entry.worktree?.githubPullRequest) {
     return false;
   }
   const workspaceId = initial.entry.repositoryWorkspaceId;
