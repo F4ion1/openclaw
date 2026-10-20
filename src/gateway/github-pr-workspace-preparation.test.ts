@@ -28,7 +28,10 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
+import {
+  linkCanonicalUserProfileEmail,
+  syncCanonicalGitHubIdentity,
+} from "../state/user-profile-writes.js";
 import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
 import {
   commandResult,
@@ -636,6 +639,92 @@ describe("existing PR preparation through the registered agent action", () => {
     expect(f.writes).toEqual([]);
     expect(f.externalWrites).toEqual([]);
   });
+
+  it.each(["authorized", "wrong author", "role", "linked identity"])(
+    "keeps private source transfer bound to the current requester (%s)",
+    async (variant) => {
+      const f = await fixture({ fork: true });
+      f.pr.base.repo.private = true;
+      f.pr.head.repo.private = true;
+      if (variant === "wrong author") {
+        f.pr.user.id = 999;
+      }
+      const snapshot = async () => ({
+        worktree: structuredClone(f.readSession().worktree),
+        hostHead: await f.git("rev-parse", "HEAD"),
+        guestHead: await f.guestGit("rev-parse", "HEAD"),
+        hostIndex: await f.git("write-tree"),
+        guestIndex: await f.guestGit("write-tree"),
+        hostStatus: await f.git("status", "--porcelain"),
+        guestStatus: await f.guestGit("status", "--porcelain"),
+      });
+      const before = await snapshot();
+      const transport = mocks.runCommand.getMockImplementation()!;
+      let privateAccessReads = 0;
+      let fetched = false;
+      let authorityChanged = false;
+      mocks.runCommand.mockImplementation(
+        async (
+          argv: string[],
+          options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
+        ) => {
+          if (argv[0] === "gh" && argv.includes("GET") && argv.at(-1) === "user/101") {
+            return commandResult(JSON.stringify({ id: 101, login: "contributor" }));
+          }
+          if (
+            argv[0] === "gh" &&
+            argv.includes("GET") &&
+            argv.at(-1)?.endsWith("/collaborators/contributor/permission")
+          ) {
+            privateAccessReads += 1;
+            return commandResult(
+              JSON.stringify({ permission: "read", user: { id: 101, login: "contributor" } }),
+            );
+          }
+          const result = await transport(argv, options);
+          if (argv.includes("fetch") && argv.includes(f.headCommit)) {
+            expect(result.code).toBe(0);
+            fetched = true;
+            if (!authorityChanged && variant === "role") {
+              await f.revoke();
+              authorityChanged = true;
+            } else if (!authorityChanged && variant === "linked identity") {
+              await linkCanonicalUserProfileEmail(
+                "publication-guest@example.test",
+                f.maintainerProfile,
+              );
+              authorityChanged = true;
+            }
+          }
+          return result;
+        },
+      );
+      if (variant === "authorized") {
+        await expect(f.invoke()).resolves.toMatchObject({
+          status: "prepared",
+          headCommit: f.headCommit,
+        });
+        expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+          "original PR contents\n",
+        );
+      } else {
+        await expect(f.invoke()).rejects.toThrow(
+          variant === "wrong author" ? "could not be verified as yours" : undefined,
+        );
+        expect(await snapshot()).toEqual(before);
+        for (const directory of [f.cwd, f.projection]) {
+          await expect(fs.stat(path.join(directory, "pr.txt"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+      }
+      expect(privateAccessReads).toBeGreaterThan(0);
+      expect(fetched).toBe(variant !== "wrong author");
+      expect(authorityChanged).toBe(variant === "role" || variant === "linked identity");
+      expect(f.writes).toEqual([]);
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
 
   it("checks current write eligibility before binding or changing the workspace", async () => {
     const f = await fixture({ fork: true });
