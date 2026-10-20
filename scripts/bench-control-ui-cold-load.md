@@ -72,6 +72,11 @@ in diagnostic traces distinguish transcript, sidebar, and composer cache
 completions; a completion callback can include later render microtasks and is
 not a measurement of native IndexedDB cost alone.
 
+`--rotate-board-tickets` returns a fresh synthetic view ticket on every `board.get`
+while preserving the widget revision and generation. `--cross-site-sandbox` uses
+`localhost` for the sandbox alongside the `127.0.0.1` app host, exercising Chromium's
+cross-site frame isolation rather than only a different port on the same site.
+
 `--live-events` adds 125 synthetic live frames over 20 seconds after each reload
 settles. The stream mixes full presence snapshots, session patches for displayed,
 held-but-hidden, and outside-window rows, open-session messages and assistant

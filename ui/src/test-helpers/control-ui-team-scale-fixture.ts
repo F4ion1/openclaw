@@ -69,6 +69,7 @@ type FixtureOptions = {
   /** Supply the real canvas sandbox fixture for browser/widget measurements. */
   sandboxUrl?: string;
   sandboxPort?: number;
+  sandboxOrigin?: string;
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
@@ -289,7 +290,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         : widgetHtml(0),
     });
   }
-  const sandbox = { sandboxUrl: options.sandboxUrl, sandboxPort: options.sandboxPort };
+  const sandbox = {
+    sandboxUrl: options.sandboxUrl,
+    sandboxPort: options.sandboxPort,
+    sandboxOrigin: options.sandboxOrigin,
+  };
   const dashboardAssetPath = "/__openclaw__/fixture-dashboard";
   const dashboardAssetOrigin = options.sandboxPort
     ? `http://127.0.0.1:${options.sandboxPort}`

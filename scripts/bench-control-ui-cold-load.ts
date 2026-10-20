@@ -200,6 +200,8 @@ const { values } = parseArgs({
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
+    "rotate-board-tickets": { type: "boolean", default: false },
+    "cross-site-sandbox": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string", default: "0" },
     "transcript-messages": { type: "string" },
     "overlay-probe": { type: "boolean", default: false },
@@ -424,10 +426,11 @@ const fixture = createControlUiTeamScaleFixture({
     resourceDomains: values["dashboard-mcp-app"]
       ? [`http://127.0.0.1:${address.port}`]
       : values["dashboard-widget"]
-        ? [new URL(server.baseUrl).origin]
+        ? [new URL(server.baseUrl).origin, `http://127.0.0.1:${address.port}`]
         : undefined,
   }),
   sandboxPort: address.port,
+  sandboxOrigin: values["cross-site-sandbox"] ? `http://localhost:${address.port}` : undefined,
   liveRun: values["live-events"] || values["streaming-reply"],
   sidebarListChurn: values["sidebar-list-churn"],
   sidebarLiveChurn: values["sidebar-live-churn"],
@@ -449,6 +452,24 @@ const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
+if (values["rotate-board-tickets"]) {
+  extraInitScripts.unshift(`{
+    const board = ${JSON.stringify(fixture.scenario.methodResponses?.["board.get"])};
+    window.openclawControlUiE2eGateway.setRequestHandler("board.get", ({ respond }) => {
+      const count = Number(sessionStorage.getItem("bench-board-ticket") || 0) + 1;
+      sessionStorage.setItem("bench-board-ticket", String(count));
+      const snapshot = structuredClone(board);
+      for (const widget of snapshot.widgets) {
+        if (!widget.viewTicket) continue;
+        widget.viewTicket = "fixture-ticket-" + count;
+        const url = new URL(widget.frameUrl);
+        url.searchParams.set("bt", widget.viewTicket);
+        widget.frameUrl = url.href;
+      }
+      respond(snapshot);
+    });
+  }`);
+}
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
@@ -1410,6 +1431,8 @@ try {
         methodLatencyMs,
         connectNotBeforeMs,
         dashboardWidget: values["dashboard-widget"],
+        rotateBoardTickets: values["rotate-board-tickets"],
+        crossSiteSandbox: values["cross-site-sandbox"],
         face,
         shortRoute: values["short-route"],
         fullUuidRoute: values["full-uuid-route"],
