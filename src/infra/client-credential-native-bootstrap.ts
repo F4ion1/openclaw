@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { readGeneratedSqliteCatalog } from "../state/postgres-schema.generated/sqlite-catalogs.js";
 import {
   sourceRows,
   validateSource,
@@ -10,6 +12,16 @@ import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
+
+// The native app can create this companion before credential engine selection.
+// Reuse the generated canonical table and index contract without admitting shared state.
+const portGuardianTables = readGeneratedSqliteCatalog(OPENCLAW_STATE_SCHEMA_SQL)?.tables.filter(
+  ({ name }) => name === "macos_port_guardian_records",
+);
+if (!portGuardianTables?.length) {
+  throw new Error("Native PortGuardian companion has no canonical schema catalog.");
+}
+const NATIVE_PORT_GUARDIAN_SCHEMA = { tables: portGuardianTables, views: [] };
 
 /** Read-only classification for the native credential bootstrap that predates engine selection. */
 export function isNativeClientCredentialBootstrap(database: DatabaseSync): boolean {
@@ -29,9 +41,21 @@ export function isNativeClientCredentialBootstrap(database: DatabaseSync): boole
     "index:idx_device_identities_device",
     "table:device_auth_tokens",
     "index:idx_device_auth_tokens_updated",
+    "table:macos_port_guardian_records",
+    "index:idx_macos_port_guardian_records_port",
   ]);
   if (!objects.length || objects.some((object) => !allowed.has(`${object.type}:${object.name}`))) {
     return false;
+  }
+  if (
+    facts.tables.has("macos_port_guardian_records") ||
+    facts.indexes.has("idx_macos_port_guardian_records_port")
+  ) {
+    assertSqliteSchemaContains(
+      database,
+      "Native PortGuardian companion",
+      NATIVE_PORT_GUARDIAN_SCHEMA,
+    );
   }
   assertSqliteSchemaContains(
     database,
