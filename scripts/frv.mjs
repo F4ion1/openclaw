@@ -481,6 +481,56 @@ async function recheckArtifactProducers(
 
 const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "candidate"]);
 
+async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
+  if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
+    return { pending: false, producers: [] };
+  }
+  const matches = parentJobs.filter(
+    (job) =>
+      job.name === "Prepare release npm artifacts" &&
+      Number(job.run_attempt) === plan.parentRunAttempt,
+  );
+  if (matches.length !== 1) {
+    throw new Error("Original npm dispatch job is missing or ambiguous");
+  }
+  const [job] = matches;
+  if (!job || job.conclusion === "skipped") {
+    return { pending: false, producers: [] };
+  }
+  if (job.status !== "completed") {
+    return { pending: true, producers: [] };
+  }
+  const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
+  const dispatches = [
+    ...log.matchAll(
+      /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched full-release-artifacts\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+    ),
+  ];
+  if (
+    dispatches.length !== 1 ||
+    dispatches[0][1] !== repository ||
+    !log.includes(`TARGET_SHA: ${plan.targetSha}`)
+  ) {
+    throw new Error("Original npm dispatch identity is unavailable or ambiguous");
+  }
+  return {
+    pending: false,
+    producers: [
+      {
+        request: {
+          stage: "npm",
+          repository,
+          dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-npm`,
+          toolingSha: plan.workflowSha,
+          workflowRef: plan.workflowRef,
+        },
+        runId: dispatches[0][2],
+        runAttempt: dispatches[0][3],
+      },
+    ],
+  };
+}
+
 function artifactRecoveryJobs(workflow) {
   let source;
   try {
@@ -526,6 +576,15 @@ function artifactRecoveryJobs(workflow) {
 }
 
 async function artifactRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
+  let source;
+  try {
+    source = parseYaml(workflow);
+  } catch {
+    throw new Error("Source workflow artifact producer contract is unavailable");
+  }
+  if (source?.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT !== "1") {
+    return legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options);
+  }
   const producers = [];
   let pending = false;
   for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(workflow)) {

@@ -332,6 +332,39 @@ describe("FRV continuation preflight", () => {
     return { client, producer, logs, selected, plan: plan([selected]) };
   }
 
+  it("retains authenticated npm recovery for frozen workflows without the expanded contract", async () => {
+    const fixture = artifactFixture("npm");
+    const evidenceClient = fixture.client.getReleaseEvidenceClient();
+    fixture.client.getReleaseEvidenceClient = () => ({
+      ...evidenceClient,
+      getWorkflowSource: () =>
+        [
+          "name: Full Release Validation",
+          "jobs:",
+          "  prepare_npm_package:",
+          '    name: "Prepare release npm artifacts"',
+          "    steps:",
+          "      - run: node scripts/full-release-artifacts.mjs resolve",
+          "",
+        ].join("\n"),
+    });
+    fixture.logs.dispatch = [
+      `TARGET_SHA: ${TARGET_SHA}`,
+      `Dispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/81 (attempt 1)`,
+    ].join("\n");
+
+    await expect(preflightContinuation(fixture.plan, "77", fixture.client)).resolves.toMatchObject({
+      artifactProducers: [
+        {
+          request: { stage: "npm" },
+          runId: "81",
+          runAttempt: "1",
+        },
+      ],
+      pendingArtifactProducers: false,
+    });
+  });
+
   it.each(["npm", "docker", "candidate"])(
     "retries only failed %s producer jobs, preserves green diagnostics, and verifies the parent",
     async (stage) => {
