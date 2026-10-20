@@ -304,63 +304,88 @@ function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prep
 }
 
 describe("original publication admission reader", () => {
-  it("authenticates a cached plan against its later pre-seal recovery attempt", async () => {
-    const fixture = publicationRestoreFixture();
-    fixture.plan.sealParentRunAttempt = 2;
-    fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
-    const parent = {
-      ...fixture.parentRun,
-      name: "Full Release Validation",
-      display_title: "Full Release Validation",
-      repository: { full_name: "openclaw/openclaw" },
-      head_repository: { full_name: "openclaw/openclaw" },
-    };
-    const resolveJob = {
-      id: 901,
-      name: "Resolve target ref",
-      run_attempt: 1,
-      status: "completed",
-      conclusion: "success",
-      steps: [{ name: "Finalize publication admission", conclusion: "success" }],
-    };
-    const sealer = {
-      id: 902,
-      name: "Seal release execution plan",
-      run_attempt: 2,
-      status: "completed",
-      conclusion: "success",
-      steps: [...publicationPlanSteps(), planDigestStep()],
-    };
-    const client = {
-      getRunAttempt: vi.fn(async () => parent),
-      getWorkflowSource: vi.fn(
-        () =>
-          'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"\n',
-      ),
-      getRunAttemptJobs: vi.fn(async (_runId: string, attempt: number) =>
-        attempt === 1 ? [resolveJob] : [sealer],
-      ),
-      getJobLog: vi.fn(
-        async () => `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${fixture.plan.sha256}\n`,
-      ),
-      loadExecutionPlanEvidence: vi.fn(() => {
-        throw new Error("authenticated cache must avoid artifact download");
-      }),
-    };
-    const restored = await restoreOriginalPublicationAdmission({
-      request: fixture.request,
-      client,
-      cachedPlan: fixture.plan,
-    });
-    expect(restored.plan).toEqual(fixture.plan);
-    expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(1, fixture.runId, 1, {
-      requireComplete: true,
-    });
-    expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(2, fixture.runId, 2, {
-      requireComplete: true,
-    });
-    expect(client.loadExecutionPlanEvidence).not.toHaveBeenCalled();
-  });
+  it.each(["cached", "artifact", "wrong-producer", "wrong-attempt"] as const)(
+    "authenticates a %s plan against its later pre-seal recovery attempt",
+    async (planSource) => {
+      const fixture = publicationRestoreFixture();
+      fixture.plan.sealParentRunAttempt = planSource === "wrong-attempt" ? 3 : 2;
+      fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
+      const parent = {
+        ...fixture.parentRun,
+        name: "Full Release Validation",
+        display_title: "Full Release Validation",
+        repository: { full_name: "openclaw/openclaw" },
+        head_repository: { full_name: "openclaw/openclaw" },
+      };
+      const resolveJob = {
+        id: 901,
+        name: "Resolve target ref",
+        run_attempt: 1,
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: "Finalize publication admission", conclusion: "success" }],
+      };
+      const sealer = {
+        id: 902,
+        name: "Seal release execution plan",
+        run_attempt: 2,
+        status: "completed",
+        conclusion: "success",
+        steps: [...publicationPlanSteps(), planDigestStep()],
+      };
+      const client = {
+        getRunAttempt: vi.fn(async () => parent),
+        getWorkflowSource: vi.fn(
+          () =>
+            'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"\n',
+        ),
+        getRunAttemptJobs: vi.fn(async (_runId: string, attempt: number) =>
+          attempt === 1 ? [resolveJob] : [sealer],
+        ),
+        getJobLog: vi.fn(
+          async () => `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${fixture.plan.sha256}\n`,
+        ),
+        loadExecutionPlanEvidence: vi.fn(() => {
+          if (planSource === "cached") {
+            throw new Error("authenticated cache must avoid artifact download");
+          }
+          return {
+            plan: fixture.plan,
+            artifact: {
+              workflow_run: {
+                head_sha: planSource === "wrong-producer" ? "d".repeat(40) : parent.head_sha,
+                head_branch: parent.head_branch,
+              },
+            },
+          };
+        }),
+      };
+      const operation = restoreOriginalPublicationAdmission({
+        request: fixture.request,
+        client,
+        ...(planSource === "cached" ? { cachedPlan: fixture.plan } : {}),
+      });
+      if (planSource === "wrong-producer") {
+        await expect(operation).rejects.toThrow("artifact producer mismatch");
+        return;
+      }
+      if (planSource === "wrong-attempt") {
+        await expect(operation).rejects.toThrow("sealer/upload did not succeed");
+        return;
+      }
+      const restored = await operation;
+      expect(restored.plan).toEqual(fixture.plan);
+      expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(1, fixture.runId, 1, {
+        requireComplete: true,
+      });
+      expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(2, fixture.runId, 2, {
+        requireComplete: true,
+      });
+      expect(client.loadExecutionPlanEvidence).toHaveBeenCalledTimes(
+        planSource === "cached" ? 0 : 1,
+      );
+    },
+  );
 
   it.each([
     "changed-admission",
@@ -553,7 +578,9 @@ describe("original publication admission reader", () => {
           "continuation differs from the authenticated original publication plan",
         );
       }
-      expect(client.loadExecutionPlanEvidence).toHaveBeenCalledTimes(unsupported ? 0 : 1);
+      expect(client.loadExecutionPlanEvidence).toHaveBeenCalledTimes(
+        fault.endsWith("unsupported") ? 0 : 1,
+      );
       return;
     }
     const result = consumerCase

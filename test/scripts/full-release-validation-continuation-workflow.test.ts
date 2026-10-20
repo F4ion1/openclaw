@@ -474,7 +474,9 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     expect(cache.uses).toContain("actions/cache/restore@");
     expect(save.uses).toContain("actions/cache/save@");
     expect(save.with).toEqual(cache.with);
-    expect(save.if).toBe("${{ always() && steps.plan_witness.outcome == 'success' }}");
+    expect(save.if).toBe(
+      "${{ always() && github.run_attempt == 1 && steps.plan_witness.outcome == 'success' }}",
+    );
     for (const job of ["release_decision", "diagnostic_drain", "summary"]) {
       expect(step(job, "Download immutable release execution plan").with).toMatchObject({
         name: "full-release-execution-plan-${{ github.run_id }}",
