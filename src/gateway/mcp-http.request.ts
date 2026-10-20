@@ -142,6 +142,7 @@ export function validateMcpLoopbackRequest(params: {
   ownerToken: string;
   nonOwnerToken: string;
   onSseResponse?: (res: ServerResponse) => void;
+  nativeProjection?: boolean;
 }): McpLoopbackRequestAuth | null {
   const reply = (status: number, body: unknown): null => {
     writeJsonWithoutCharset(params.res, status, body);
@@ -159,7 +160,9 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  if (url.pathname !== "/mcp") {
+  if (
+    params.nativeProjection ? !url.pathname.startsWith("/mcp/native/") : url.pathname !== "/mcp"
+  ) {
     logMcpLoopbackTraffic("reject", {
       reason: "not_found",
       method: params.req.method ?? "",
@@ -205,6 +208,10 @@ export function validateMcpLoopbackRequest(params: {
       });
     }
     return reply(401, { error: "unauthorized" });
+  }
+
+  if (params.nativeProjection) {
+    return sender;
   }
 
   if (params.req.method === "GET") {

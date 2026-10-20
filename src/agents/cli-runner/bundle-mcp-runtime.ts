@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { writeJson } from "../../infra/json-files.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
@@ -38,14 +39,14 @@ export async function writeTemporaryBundleMcpJson(
 export function withOpenClawMcpCaptureHeader(
   config: Record<string, unknown>,
   captureKey: string,
+  projectedServerNames: readonly string[] = [],
 ): Record<string, unknown> {
+  const servers = isRecord(config.mcpServers) ? config.mcpServers : {};
   return applyMergePatch(config, {
-    mcpServers: {
-      openclaw: {
-        headers: {
-          "x-openclaw-cli-capture-key": captureKey,
-        },
-      },
-    },
+    mcpServers: Object.fromEntries(
+      ["openclaw", ...projectedServerNames]
+        .filter((name) => Object.hasOwn(servers, name))
+        .map((name) => [name, { headers: { "x-openclaw-cli-capture-key": captureKey } }]),
+    ),
   }) as Record<string, unknown>;
 }

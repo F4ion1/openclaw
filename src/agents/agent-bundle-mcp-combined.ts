@@ -9,7 +9,11 @@ import type {
   McpToolCatalogDiagnostic,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { acquireNativeMcpServer, nativeMcpRuntimeBindings } from "./native-mcp-runtime.js";
+import {
+  getNativeMcpServerCatalog,
+  prepareNativeMcpServer,
+  nativeMcpRuntimeBindings,
+} from "./native-mcp-runtime.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 async function loadCurrentCatalog(part: SessionMcpRuntime): Promise<McpToolCatalog> {
@@ -30,7 +34,7 @@ async function loadCurrentCatalog(part: SessionMcpRuntime): Promise<McpToolCatal
 }
 
 /** Safe names are precomputed from the full declared set, so no re-suffix is needed. */
-function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpToolCatalog {
+export function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpToolCatalog {
   const servers: Record<string, McpServerCatalog> = {};
   const tools: McpCatalogTool[] = [];
   const policyTools: McpCatalogTool[] = [];
@@ -309,14 +313,23 @@ export function createCombinedSessionMcpRuntime(params: {
   };
   nativeMcpRuntimeBindings.set(runtime, {
     hasServer: (name) => parts.some((part) => nativeMcpRuntimeBindings.get(part)?.hasServer(name)),
-    async acquire(name, context) {
+    async getCatalog(name) {
       const owner =
         serverOwner.get(name) ??
         parts.find((part) => nativeMcpRuntimeBindings.get(part)?.hasServer(name));
       if (!owner) {
         throw new Error(`MCP server "${name}" has no projection owner`);
       }
-      return acquireNativeMcpServer(owner, name, context);
+      return getNativeMcpServerCatalog(owner, name);
+    },
+    async prepare(name, context, options) {
+      const owner =
+        serverOwner.get(name) ??
+        parts.find((part) => nativeMcpRuntimeBindings.get(part)?.hasServer(name));
+      if (!owner) {
+        throw new Error(`MCP server "${name}" has no projection owner`);
+      }
+      return prepareNativeMcpServer(owner, name, context, options);
     },
   });
   return runtime;

@@ -104,9 +104,8 @@ async function changeSchema(view: NativeMcpServerView, signal: AbortSignal) {
   const invalidated = new Promise<void>((resolve) => {
     const unsubscribe = view.subscribe((event) => {
       if (
-        event.kind === "invalidated" ||
-        (event.kind === "notification" &&
-          event.notification.method === "notifications/tools/list_changed")
+        event.kind === "notification" &&
+        event.notification.method === "notifications/tools/list_changed"
       ) {
         unsubscribe();
         resolve();

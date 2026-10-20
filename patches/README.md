@@ -2,6 +2,19 @@
 
 Keep existing insertion anchors when extending these patches: pnpm 12 can apply a zero-context, zero-length insertion one line early. After regeneration and installation, verify installed files against the patch's target blob hashes before testing.
 
+`@modelcontextprotocol/server@2.3.1` temporarily preserves forwarded notification params through its subscription bus and supports explicit modern protocol binding through `Server.connect` and `McpServer.connect`. The router retains custom metadata and extension params, replaces the downstream subscription ID, and uses the event URI for both resource filtering and delivery. Both ESM and CommonJS runtime chunks and declarations are patched. Upstream tracking: [issue #3055](https://github.com/modelcontextprotocol/typescript-sdk/issues/3055). Remove this patch and its exact-version guard entry when an upstream release preserves these fields and admits a classified modern request through the public low-level transport.
+
+The patch SHA-256 is `a75fe671e9738ef5a54a49bd5a447a5df59164937e2eb1e1a1171ad02aa85014`. Installed target files were verified byte for byte against the pnpm edit directory.
+
+| Target | Published SHA-256 | Patched SHA-256 |
+| --- | --- | --- |
+| `dist/mcp-DIH4cS6P.mjs` | `2657fbeaebe76ef461e8d0860308da4c3404d2d3b6b1f06960b8ffc578fec1b4` | `09154e2259229481d670a0680130caa055a557190524914c688da3fe62528002` |
+| `dist/mcp-BumlNux0.cjs` | `f845f6f1dd26d7563ad829abc3ebe7944352c455578307c864dc1a09c34fb65b` | `a3d971d79086c657279d69ee5ad13b3b93e87e94d64abbe52f090f126753d3bb` |
+| `dist/createMcpHandler-D4NN8WsG.d.mts` | `eec708161f3f225aa5f3de8160ec8a14f076b35f276ecabcf74330fb77521e53` | `b8d19361c4840da4386540bf3c4e978c1428a49af53f9a08e5e07d0e85e93d98` |
+| `dist/createMcpHandler-DZmmlN8e.d.cts` | `16572322236fbedf18db39179c4a1dc1a88e24e89ced2d9c5bd123cf9afa1128` | `6d57dd27cf45a3f42f8b8d84a621e61b0cab00f1a1c0fcdff77458c5090c432e` |
+| `dist/index.d.mts` | `1df33ce0d949d368005f0adcf99121988dd0e67f9cde991e60070a071b599c0c` | `e2ddef7109928f2f1883bccea5fd5a5861f3127c34bea7ffc3d3e53aac7ea640` |
+| `dist/index.d.cts` | `d0787a639fe04fffa3d65010fb2a2cc248852ccc125ecb732324c546286a74f7` | `8914d0d613c286f7017d665e201edef16e80c8f80f744f0627171e46e96c0440` |
+
 `chrome-devtools-mcp@1.10.1` has an approved exact-version snapshot-identity patch, backported from [ChromeDevTools/chrome-devtools-mcp#2788](https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2788) at `06c8d4bc44f68bde8bd3fcd97dcc47375df81fe9` and forward-ported onto tag commit `e52c6b59b476c5e04d8dd9fd4bd017ba3b3d65df`. Stable IDs include the frame's captured CDP session and document generation; ambiguous IDs stay capture-local, and stale lazy handles cannot resolve into a replacement renderer. Frame-local lookup and retained extra handles preserve actions and labeled screenshots. The 1.10.1 CSS-style lookup resolves the same guarded handle and stays within its captured renderer, failing closed when the embedded DevTools target cannot represent a cross-renderer frame. Version 1.10.1 already exports its bundled `CdpFrame`, so the patch changes only the snapshot owner and its DOM-result caller. Original license notices remain intact, with modifications recorded in `build/src/OPENCLAW_PATCH_NOTICE.md`.
 
 The published integrity is `sha512-Klw6HWDqHC/XS1JwZldd2r49aUhbUJN9m9Mvcx4SEueIPXtzuQX+QelxAViobv8YUkDZ7HWDrmViR6LeYK0wAw==`; the patch SHA-256 is `d31d6e7e187ea9fd4dad87ed3ad08073c77ffcfddd52bc4761b39a2dfce0ac1e`.

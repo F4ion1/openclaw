@@ -666,9 +666,18 @@ retains it.
 `tools.allow` and `tools.deny` also constrain configured native MCP servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
 provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,
-and applies the complete layered policy before process spawn or Codex
-`thread/start`/`thread/resume`. It then projects exact raw names into each
-backend's enforcement contract: Claude receives server omission plus bare
+and applies the complete layered policy before tools can run. For Claude's local
+stdio servers, the generated config points to authenticated routes on the existing
+Gateway loopback listener. Claude's handshake supplies its capabilities and roots;
+the session runtime owns the upstream process and its discovery, so Claude does
+not start a second copy. Server map keys and raw tool names are preserved. The
+route mirrors the protocol negotiation requested by Claude when the upstream
+supports it and enforces policy on both discovery and execution. A server that
+does not support Claude's requested mode is omitted with a diagnostic. HTTP
+servers keep their native transport.
+
+Other native transports receive policy before process spawn or Codex
+`thread/start`/`thread/resume`: Claude receives server omission plus bare
 `--disallowedTools` entries, Codex receives `enabled_tools` and
 `disabled_tools`, and Gemini receives `includeTools` and `excludeTools`.
 Configured server filters and session overrides remain additional
@@ -681,6 +690,11 @@ exposes only that tool from the safe `docs` namespace, while
 omits the affected MCP server. A server whose restrictive catalog cannot be
 established is also omitted and reported instead of being passed through
 unfiltered.
+
+Claude projection routes require the current turn's grant, including when a warm
+Claude process is reused. Reusing the process transfers the new turn's authority;
+old or revoked grants cannot continue tool work. Session reset, Stop, deletion,
+and Gateway shutdown retire the corresponding upstream processes.
 
 Restricted runs such as cron jobs with `toolsAllow` require an exact
 backend-owned translation. The bundled `claude-cli` backend disables Claude's

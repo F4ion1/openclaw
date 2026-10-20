@@ -10,6 +10,7 @@ import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
+  ["@modelcontextprotocol/server@2.3.1", "patches/@modelcontextprotocol__server@2.3.1.patch"],
   ["chrome-devtools-mcp@1.10.1", "patches/chrome-devtools-mcp@1.10.1.patch"],
   ["@novnc/novnc@1.7.0", "patches/@novnc__novnc@1.7.0.patch"],
   ["vitest@5.0.3", "patches/vitest@5.0.3.patch"],

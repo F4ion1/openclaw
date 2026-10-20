@@ -4,6 +4,7 @@ import { filterStringEntries } from "@openclaw/normalization-core/string-normali
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerNativeMcpProjection } from "../../gateway/native-mcp-projection.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -16,6 +17,8 @@ import { extractMcpServerMap } from "../../plugins/bundle-mcp.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import type { CliBackendConfig, CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { mergeMcpToolCatalogs } from "../agent-bundle-mcp-combined.js";
 import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
@@ -26,11 +29,13 @@ import {
 } from "../bundle-mcp-config.js";
 import type { ResolvedConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
+import { resolveMcpTransportConfig } from "../mcp-transport-config.js";
 import {
   applyPreparedNativeMcpPolicy,
   prepareNativeMcpPolicy,
   preparedNativeMcpDenials,
 } from "../native-mcp-policy.js";
+import { getNativeMcpServerCatalog } from "../native-mcp-runtime.js";
 import {
   findClaudeMcpConfigPaths,
   injectClaudeMcpConfigArgs,
@@ -137,10 +142,19 @@ function canonicalizeSystemAgentTurnStateForResume(
   };
 }
 
-function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
+function canonicalizeBundleMcpConfigForResume(
+  config: BundleMcpConfig,
+  projectedDefinitions?: ReadonlyMap<string, BundleMcpServerConfig>,
+): BundleMcpConfig {
   // The OpenClaw loopback MCP port changes across runs. Replace it before
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
   const canonical = mapMcpServers(config, (server, name) => {
+    const definition = projectedDefinitions?.get(name);
+    if (definition) {
+      // Generated view routes share the upstream definition's resume identity;
+      // ephemeral listener and route identity must not restart a warm client.
+      return { nativeProjection: canonicalizeSystemAgentTurnStateForResume(definition) };
+    }
     const canonicalServer = canonicalizeSystemAgentTurnStateForResume(server);
     return name === "openclaw" && typeof canonicalServer.url === "string"
       ? { ...canonicalServer, url: normalizeOpenClawLoopbackUrl(canonicalServer.url) }
@@ -234,6 +248,11 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   env?: Record<string, string>;
   mcpToolsDeny?: Record<string, string[]>;
   webSearchEnabled?: boolean;
+  projectedDefinitions?: ReadonlyMap<string, BundleMcpServerConfig>;
+  projectedPolicy?: {
+    policy: ResolvedConversationCapabilityProfile["policy"];
+    runtimeToolsAllow?: string[];
+  };
 }): Promise<PreparedCliBundleMcpConfig> {
   const mcpToolsDeny = normalizeMcpToolDenials(params.mcpToolsDeny);
   const webSearchDisabled = params.webSearchEnabled === false;
@@ -243,14 +262,18 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   const hashConfig = (config: BundleMcpConfig) =>
     sha256Hex(
       `${JSON.stringify(
-        mcpToolsDeny || webSearchDisabled ? { config, mcpToolsDeny, webSearchDisabled } : config,
+        mcpToolsDeny || webSearchDisabled || params.projectedPolicy
+          ? { config, mcpToolsDeny, webSearchDisabled, projectedPolicy: params.projectedPolicy }
+          : config,
         null,
         2,
       )}\n`,
     );
   const fingerprints = {
     mcpConfigHash: hashConfig(cliConfig),
-    mcpResumeHash: hashConfig(canonicalizeBundleMcpConfigForResume(cliConfig)),
+    mcpResumeHash: hashConfig(
+      canonicalizeBundleMcpConfigForResume(cliConfig, params.projectedDefinitions),
+    ),
   };
 
   if (params.mode === "codex-config-overrides") {
@@ -303,7 +326,13 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     prepareCaptureAttempt: async (captureKey, env) => {
       await fs.writeFile(
         temporary.filePath,
-        `${JSON.stringify(withOpenClawMcpCaptureHeader(claudeConfig, captureKey), null, 2)}\n`,
+        `${JSON.stringify(
+          withOpenClawMcpCaptureHeader(claudeConfig, captureKey, [
+            ...(params.projectedDefinitions?.keys() ?? []),
+          ]),
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       return { env: { ...env, OPENCLAW_MCP_CLI_CAPTURE_KEY: captureKey } };
@@ -353,6 +382,7 @@ export async function prepareCliBundleMcpConfig(params: {
   exclusiveConfig?: BundleMcpConfig;
   env?: Record<string, string>;
   warn?: (message: string) => void;
+  /** Normal CLI turns supply policy; transport-only assembly and exclusive configs do not. */
   nativeMcpPolicy?: {
     sessionId: string;
     sessionKey?: string;
@@ -452,6 +482,11 @@ export async function prepareCliBundleMcpConfig(params: {
   let effectiveConfig = preparedDataDirs.config;
   let effectiveEnv = resolvedBearerConfig.env;
   let effectiveDenials = params.toolOverrides?.mcpToolsDeny;
+  const projectedDefinitions = new Map<string, BundleMcpServerConfig>();
+  const projectionRegistrations: Array<ReturnType<typeof registerNativeMcpProjection>> = [];
+  const closeProjections = async () => {
+    await Promise.all(projectionRegistrations.map((registration) => registration.close()));
+  };
   const policyConfig = filterMcpServers(
     effectiveConfig,
     (name) => !additionalServerNames.has(name),
@@ -476,8 +511,35 @@ export async function prepareCliBundleMcpConfig(params: {
     });
     let retainedServerNames: ReadonlySet<string> | undefined;
     try {
+      const projectedServerNames = new Set(
+        mode === "claude-config-file"
+          ? Object.entries(policyConfig.mcpServers)
+              .filter(
+                ([name, server]) =>
+                  resolveMcpTransportConfig(name, server, { logWarnings: false })?.kind === "stdio",
+              )
+              .map(([name]) => name)
+          : [],
+      );
+      const eagerPolicyConfig = filterMcpServers(
+        policyConfig,
+        (name) => !projectedServerNames.has(name),
+      );
+      const selectedCatalogs =
+        projectedServerNames.size > 0
+          ? await runTasksWithConcurrency({
+              tasks: Object.keys(eagerPolicyConfig.mcpServers).map(
+                (name) => () => getNativeMcpServerCatalog(acquisition.runtime, name),
+              ),
+              limit: 6,
+            })
+          : undefined;
+      if (selectedCatalogs?.hasError) {
+        throw selectedCatalogs.firstError;
+      }
       const policy = await prepareNativeMcpPolicy({
         runtime: acquisition.runtime,
+        ...(selectedCatalogs ? { catalog: mergeMcpToolCatalogs(selectedCatalogs.results) } : {}),
         config: params.config,
         workspaceDir: params.workspaceDir,
         capabilityProfile: params.nativeMcpPolicy.capabilityProfile,
@@ -486,19 +548,20 @@ export async function prepareCliBundleMcpConfig(params: {
       });
       effectiveConfig = {
         mcpServers: {
-          ...applyPreparedNativeMcpPolicy(policyConfig, policy).mcpServers,
+          ...applyPreparedNativeMcpPolicy(eagerPolicyConfig, policy).mcpServers,
           ...filterMcpServers(effectiveConfig, (name) => additionalServerNames.has(name))
             .mcpServers,
         },
       };
-      const preservedAdditionalDenials = Object.fromEntries(
-        Object.entries(params.toolOverrides?.mcpToolsDeny ?? {}).filter(([serverName]) =>
-          additionalServerNames.has(serverName),
+      const preservedExternalDenials = Object.fromEntries(
+        Object.entries(params.toolOverrides?.mcpToolsDeny ?? {}).filter(
+          ([serverName]) =>
+            additionalServerNames.has(serverName) || projectedServerNames.has(serverName),
         ),
       );
       const combinedDenials = {
         ...preparedNativeMcpDenials(policy),
-        ...preservedAdditionalDenials,
+        ...preservedExternalDenials,
       };
       effectiveDenials = Object.keys(combinedDenials).length > 0 ? combinedDenials : undefined;
 
@@ -509,20 +572,85 @@ export async function prepareCliBundleMcpConfig(params: {
       );
       effectiveConfig = selectBundleMcpServers(effectiveConfig, refreshedBearerConfig.config);
       effectiveEnv = refreshedBearerConfig.env;
+      for (const serverName of projectedServerNames) {
+        try {
+          if (!effectiveEnv?.OPENCLAW_MCP_TOKEN) {
+            throw new Error(
+              "Native MCP projection requires an authenticated Gateway loopback grant",
+            );
+          }
+          const definition = nativePolicyConfig.mcpServers[serverName]!;
+          const registration = registerNativeMcpProjection({
+            runtime: acquisition.runtime,
+            serverName,
+            definition,
+            policy: {
+              config: params.config,
+              workspaceDir: params.workspaceDir,
+              capabilityProfile: params.nativeMcpPolicy.capabilityProfile,
+              runtimeToolsAllow: params.nativeMcpPolicy.runtimeToolsAllow,
+              warn: params.warn ?? (() => {}),
+            },
+          });
+          projectionRegistrations.push(registration);
+          projectedDefinitions.set(serverName, definition);
+          effectiveConfig.mcpServers[serverName] = {
+            type: "http",
+            url: registration.url,
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+              "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
+            },
+          };
+        } catch (error) {
+          params.warn?.(
+            `bundle MCP skipped native server ${serverName}: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
       retainedServerNames = new Set(Object.keys(effectiveConfig.mcpServers));
+    } catch (error) {
+      await closeProjections();
+      throw error;
     } finally {
       await releaseSessionMcpRuntime(acquisition, retainedServerNames);
     }
   }
 
-  return await prepareModeSpecificBundleMcpConfig({
-    mode,
-    backend: params.backend,
-    mergedConfig: effectiveConfig,
-    env: effectiveEnv,
-    mcpToolsDeny: effectiveDenials,
-    webSearchEnabled: nativeWebSearchEnabled,
-  });
+  try {
+    const prepared = await prepareModeSpecificBundleMcpConfig({
+      mode,
+      backend: params.backend,
+      mergedConfig: effectiveConfig,
+      env: effectiveEnv,
+      mcpToolsDeny: effectiveDenials,
+      webSearchEnabled: nativeWebSearchEnabled,
+      projectedDefinitions,
+      ...(projectedDefinitions.size > 0 && params.nativeMcpPolicy
+        ? {
+            projectedPolicy: {
+              policy: params.nativeMcpPolicy.capabilityProfile.policy,
+              runtimeToolsAllow: params.nativeMcpPolicy.runtimeToolsAllow,
+            },
+          }
+        : {}),
+    });
+    return projectionRegistrations.length === 0
+      ? prepared
+      : {
+          ...prepared,
+          cleanup: async () => {
+            try {
+              await closeProjections();
+            } finally {
+              await prepared.cleanup?.();
+            }
+          },
+        };
+  } catch (error) {
+    await closeProjections();
+    throw error;
+  }
 }
 
 /** Prepares a per-attempt capture token without changing resume compatibility hashes. */

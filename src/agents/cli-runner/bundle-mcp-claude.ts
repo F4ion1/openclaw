@@ -58,7 +58,7 @@ function mergeClaudeDisallowedTools(args: string[], deniedTools: string[]): stri
   return next;
 }
 
-function normalizeClaudeMcpIdentifierPart(value: string): string {
+export function normalizeClaudeMcpIdentifierPart(value: string): string {
   // Claude Code replaces punctuation before registering MCP permission names.
   // Match that wire identity so a raw-name collision cannot bypass a denial.
   return value.replaceAll(/[^a-zA-Z0-9_-]/g, "_");

@@ -47,6 +47,8 @@ function buildPolicyProjectionTools(catalog: McpToolCatalog) {
 
 export async function prepareNativeMcpPolicy(params: {
   runtime: SessionMcpRuntime;
+  /** Already-discovered owner catalog, when only selected servers need projection. */
+  catalog?: McpToolCatalog;
   config?: OpenClawConfig;
   workspaceDir: string;
   capabilityProfile: ResolvedConversationCapabilityProfile;
@@ -54,7 +56,7 @@ export async function prepareNativeMcpPolicy(params: {
   warn: (message: string) => void;
 }): Promise<PreparedNativeMcpPolicy> {
   params.runtime.markUsed();
-  const catalog = await params.runtime.getCatalog();
+  const catalog = params.catalog ?? (await params.runtime.getCatalog());
   const allTools = buildPolicyProjectionTools(catalog);
   const runtimeAllowed = applyEmbeddedAttemptToolsAllow(allTools, params.runtimeToolsAllow, {
     toolMeta: (tool) => getPluginToolMeta(tool),

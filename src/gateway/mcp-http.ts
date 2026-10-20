@@ -182,6 +182,13 @@ async function startMcpLoopbackServer(
     // Close after the complete response so pooled clients cannot race an idle timeout.
     // Active JSON/SSE streams remain open until res.end().
     res.setHeader("Connection", "close");
+    if (URL.parse(req.url ?? "", "http://127.0.0.1")?.pathname.startsWith("/mcp/native/")) {
+      void work.track(async () => {
+        const { handleNativeMcpProjectionRequest } = await import("./native-mcp-projection.js");
+        await handleNativeMcpProjectionRequest({ req, res, ownerToken, nonOwnerToken, work });
+      });
+      return;
+    }
     const auth = validateMcpLoopbackRequest({
       req,
       res,
@@ -566,13 +573,33 @@ async function startMcpLoopbackServer(
     revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
     unregisterGrantRevocation();
     toolCache.clear();
+    const cleanupErrors: unknown[] = [];
+    try {
+      const { closeNativeMcpProjections } = await import("./native-mcp-projection.js");
+      await closeNativeMcpProjections();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
     try {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));
         closeActiveSseResponses();
       });
-    } finally {
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
       await work.drain();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    if (cleanupErrors.length === 1) {
+      throw cleanupErrors[0];
+    }
+    if (cleanupErrors.length > 1) {
+      throw new AggregateError(cleanupErrors, "MCP loopback cleanup failed", {
+        cause: cleanupErrors[0],
+      });
     }
   };
 }

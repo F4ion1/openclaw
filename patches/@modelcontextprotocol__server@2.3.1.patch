@@ -1,0 +1,305 @@
+diff --git a/dist/createMcpHandler-D4NN8WsG.d.mts b/dist/createMcpHandler-D4NN8WsG.d.mts
+index ccaf4b1587544ca5799746c2319b213850ac7993..ed61f78be518e6f5665445ce19e0fc972d3ced1c 100644
+--- a/dist/createMcpHandler-D4NN8WsG.d.mts
++++ b/dist/createMcpHandler-D4NN8WsG.d.mts
+@@ -2819,6 +2819,11 @@ type ScopeChallengeHandler = (context: {
+ declare function requireScopes(...scopes: readonly [string, ...string[]]): ScopeChallengeHandler;
+ //#endregion
+ //#region src/server/server.d.ts
++/** Options for connecting a server to a transport that serves an already-selected modern revision. */
++type ServerConnectOptions = {
++  /** A supported modern revision selected by the serving entry; omit for a legacy initialize handshake. */
++  protocolVersion: string;
++};
+ type ServerOptions = ProtocolOptions & {
+   /**
+    * Capabilities to advertise as being supported by this server.
+@@ -2949,6 +2954,7 @@ declare class Server extends Protocol<ServerContext> {
+   private _requestStateVerify?;
+   private _inputRequiredServing;
+   private _legacyShim?;
++  private _explicitProtocolVersion;
+   /** Lazily-built legacy shim; the loop lives in legacyInputRequiredShim.ts behind a narrow host contract. */
+   private _legacyInputRequiredShim;
+   /**
+@@ -2959,8 +2965,9 @@ declare class Server extends Protocol<ServerContext> {
+    * Initializes this server with the given name and version information.
+    */
+   constructor(_serverInfo: Implementation, options?: ServerOptions);
+-  /** Attaches to the given transport; rejects while this instance is connected to another one. */
+-  connect(transport: Transport): Promise<void>;
++  /** Attaches to the transport, optionally binding a selected modern revision before it starts. */
++  connect(transport: Transport, options?: ServerConnectOptions): Promise<void>;
++  protected _onclose(): void;
+   /**
+    * Registers the built-in `logging/setLevel` request handler.
+    *
+@@ -3276,7 +3283,7 @@ declare class McpServer {
+    * await server.connect(transport);
+    * ```
+    */
+-  connect(transport: Transport): Promise<void>;
++  connect(transport: Transport, options?: ServerConnectOptions): Promise<void>;
+   /**
+    * Closes the connection.
+    */
+@@ -3785,7 +3792,7 @@ declare class PerRequestHTTPServerTransport implements Transport {
+  * The bus carries the EVENT, not the wire shape — the entry's listen router
+  * owns subscription-id stamping and per-stream filtering.
+  */
+-type ServerEvent = {
++type ServerEvent = ({
+   kind: 'tools_list_changed';
+ } | {
+   kind: 'prompts_list_changed';
+@@ -3794,6 +3801,9 @@ type ServerEvent = {
+ } | {
+   kind: 'resource_updated';
+   uri: string;
++}) & {
++  /** Forwarded notification params; the router stamps its own subscription ID and the event's resource URI. */
++  params?: JSONRPCNotification['params'];
+ };
+ /**
+  * The server-side change-event seam for `subscriptions/listen`.
+@@ -4165,4 +4175,5 @@ declare function isLegacyRequest(request: Request, parsedBody?: unknown, options
+ declare function createMcpHandler(factory: McpServerFactory, options?: CreateMcpHandlerOptions): McpHttpHandler;
+ //#endregion
+ export { isJsonContentType as $, checkResourceAllowed as $a, SetLevelRequestParams as $i, HandlerResultTypeMap as $n, NotificationMethod as $r, InboundModernRoute as $t, RegisteredResource as A, UnsubscribeRequestParams as Aa, Resource as Ai, CreateMessageResult as An, ListPromptsResult as Ar, isJSONRPCResultResponse as At, requireScopes as B, INVALID_REQUEST as Ba, ResultMetaObject as Bi, ElicitResult as Bn, ListToolsResult as Br, InputResponseView as Bt, ListResourcesCallback as C, ToolAnnotations as Ca, RequestId as Ci, CompleteRequestResourceTemplate as Cn, JSONRPCResultResponse as Cr, isInitializeRequest as Ct, ReadResourceCallback as D, ToolResultContent as Da, RequestMethod as Di, CreateMessageRequestParams as Dn, ListChangedHandlers as Dr, isJSONRPCNotification as Dt, PromptCallback as E, ToolListChangedNotification as Ea, RequestMetaObject as Ei, CreateMessageRequest as En, ListChangedCallback as Er, isJSONRPCErrorResponse as Et, ToolCallback as F, CLIENT_CAPABILITIES_META_KEY as Fa, ResourceTemplateReference as Fi, DiscoverResult as Fn, ListRootsRequest as Fr, ResourceNotFoundError as Ft, ReadBuffer as G, PARSE_ERROR as Ga, SamplingContent as Gi, EnumSchema as Gn, MessageExtraInfo as Gr, StandardSchemaV1 as Gt, InMemoryTransport as H, LATEST_PROTOCOL_VERSION as Ha, Role as Hi, ElicitationCompleteNotificationParams as Hn, LoggingMessageNotification as Hr, inputRequired as Ht, Server as I, CLIENT_INFO_META_KEY as Ia, ResourceTemplateType as Ii, ElicitRequest as In, ListRootsResult as Ir, UnsupportedProtocolVersionError as It, serializeMessage as J, SERVER_INFO_META_KEY as Ja, ServerCapabilities as Ji, GetPromptResult as Jn, MissingRequiredClientCapabilityErrorData as Jr, InboundClassificationOutcome as Jt, STDIO_DEFAULT_MAX_BUFFER_SIZE as K, PROTOCOL_VERSION_META_KEY as Ka, SamplingMessage as Ki, GetPromptRequest as Kn, MetaObject as Kr, StandardSchemaV1Sync as Kt, ServerOptions as L, DEFAULT_NEGOTIATED_PROTOCOL_VERSION as La, ResourceUpdatedNotification as Li, ElicitRequestFormParams as Ln, ListTasksRequest as Lr, UrlElicitationRequiredError as Lt, RegisteredTool as M, UntitledMultiSelectEnumSchema as Ma, ResourceLink as Mi, CreateTaskResult as Mn, ListResourceTemplatesResult as Mr, parseJSONRPCMessage as Mt, ResourceMetadata as N, UntitledSingleSelectEnumSchema as Na, ResourceListChangedNotification as Ni, Cursor as Nn, ListResourcesRequest as Nr, MissingRequiredClientCapabilityError as Nt, ReadResourceTemplateCallback as O, ToolUseContent as Oa, RequestParams as Oi, CreateMessageRequestParamsBase as On, ListChangedOptions as Or, isJSONRPCRequest as Ot, ResourceTemplate as P, BAGGAGE_META_KEY as Pa, ResourceRequestParams as Pi, DiscoverRequest as Pn, ListResourcesResult as Pr, ProtocolError as Pt, getDisplayName as Q, TRACESTATE_META_KEY as Qa, SetLevelRequest as Qi, GetTaskResult as Qn, Notification as Qr, InboundLegacyRouteReason as Qt, ScopeChallenge as R, INTERNAL_ERROR as Ra, ResourceUpdatedNotificationParams as Ri, ElicitRequestParams as Rn, ListTasksResult as Rr, ProtocolErrorCode as Rt, CompleteResourceTemplateCallback as S, Tool as Sa, Request$1 as Si, CompleteRequestPrompt as Sn, StoredOAuthTokens as So, JSONRPCResponse as Sr, isCallToolResult as St, McpServerOptions as T, ToolExecution as Ta, RequestMetaEnvelope as Ti, ContentBlock as Tn, LegacyTitledEnumSchema as Tr, isInputRequiredResult as Tt, UriTemplate as U, LOG_LEVEL_META_KEY as Ua, Root as Ui, EmbeddedResource as Un, LoggingMessageNotificationParams as Ur, inputResponse as Ut, preloadSchemas as V, JSONRPC_VERSION as Va, ResultTypeMap as Vi, ElicitationCompleteNotification as Vn, LoggingLevel as Vr, acceptedContent as Vt, Variables as W, METHOD_NOT_FOUND as Wa, RootsListChangedNotification as Wi, EmptyResult as Wn, MessageClassification as Wr, ElicitInputParams as Wt, CacheScope as X, SUPPORTED_PROTOCOL_VERSIONS as Xa, ServerRequest as Xi, GetTaskPayloadResult as Xn, ModelPreferences as Xr, InboundLadderRejection as Xt, CacheHint as Y, SUBSCRIPTION_ID_META_KEY as Ya, ServerNotification as Yi, GetTaskPayloadRequest as Yn, ModelHint as Yr, InboundHttpRequest as Yt, ProtocolEra as Z, TRACEPARENT_META_KEY as Za, ServerResult as Zi, GetTaskRequest as Zn, MultiSelectEnumSchema as Zr, InboundLegacyRoute as Zt, PerRequestHTTPServerTransportOptions as _, TaskStatusNotificationParams as _a, PromptReference as _i, ClientRequest as _n, OAuthTokenRevocationRequest as _o, JSONObject as _r, SpecTypes as _t, McpHandlerRequestOptions as a, SubscriptionsAcknowledgedNotification as aa, PaginatedResult as ai, BaseMetadata as an, OAuthError as ao, InitializeRequestParams as ar, Protocol as at, AnyToolHandler as b, TitledMultiSelectEnumSchema as ba, ReadResourceResult as bi, CompleteRequest as bn, OpenIdProviderMetadata as bo, JSONRPCNotification as br, assertCompleteRequestPrompt as bt, McpServerFactory as c, SubscriptionsListenRequestParams as ca, PrimitiveSchemaDefinition as ci, CallToolRequest as cn, IdJagTokenExchangeResponse as co, InputRequest as cr, RequestOptions as ct, legacyStatelessFallback as d, Task as da, ProgressNotificationParams as di, CancelTaskRequest as dn, OAuthClientInformationMixed as do, InputResponse as dr, mergeCapabilities as dt, SingleSelectEnumSchema as ea, NotificationParams as ei, InboundValidationRung as en, resourceUrlFromServerUrl as eo, Icon as er, BaseContext as et, InMemoryServerEventBus as f, TaskAugmentedRequestParams as fa, ProgressToken as fi, CancelTaskResult as fn, OAuthClientMetadata as fo, InputResponses as fr, FetchLike as ft, PerRequestHTTPServerTransport as g, TaskStatusNotification as ga, PromptMessage as gi, ClientNotification as gn, OAuthProtectedResourceMetadata as go, JSONArray as gr, SpecTypeName as gt, ServerNotifier as h, TaskStatus as ha, PromptListChangedNotification as hi, ClientCapabilities as hn, OAuthMetadata as ho, InvalidRequestError as hr, createFetchWithInit as ht, LegacyStatelessFallbackOptions as i, SubscriptionFilter as ia, PaginatedRequestParams as ii, AuthInfo as in, SdkHttpErrorData as io, InitializeRequest as ir, ProgressCallback as it, RegisteredResourceTemplate as j, UnsupportedProtocolVersionErrorData as ja, ResourceContents as ji, CreateMessageResultWithTools as jn, ListResourceTemplatesRequest as jr, isTaskAugmentedRequestParams as jt, RegisteredPrompt as k, UnsubscribeRequest as ka, RequestTypeMap as ki, CreateMessageRequestParamsWithTools as kn, ListPromptsRequest as kr, isJSONRPCResponse as kt, createMcpHandler as l, SubscriptionsListenResult as la, Progress as li, CallToolRequestParams as ln, OAuthClientInformation as lo, InputRequests as lr, RequestStateAccessor as lt, ServerEventBus as m, TaskMetadata as ma, PromptArgument as mi, CancelledNotificationParams as mn, OAuthErrorResponse as mo, InvalidParamsError as mr, TransportSendOptions as mt, IsLegacyRequestOptions as n, SubscribeRequest as na, NumberSchema as ni, Annotations as nn, SdkErrorCode as no, ImageContent as nr, DEFAULT_REQUEST_TIMEOUT_MSEC as nt, McpHttpHandler as o, SubscriptionsAcknowledgedNotificationParams as oa, ParseError as oi, BlobResourceContents as on, OAuthErrorCode as oo, InitializeResult as or, ProtocolOptions as ot, ServerEvent as p, TaskCreationParams as pa, Prompt as pi, CancelledNotification as pn, OAuthClientRegistrationError as po, InternalError as pr, Transport as pt, deserializeMessage as q, RELATED_TASK_META_KEY as qa, SamplingMessageContentBlock as qi, GetPromptRequestParams as qn, MethodNotFoundError as qr, StandardSchemaWithJSON as qt, LegacyHttpHandler as r, SubscribeRequestParams as ra, PaginatedRequest as ri, AudioContent as rn, SdkHttpError as ro, Implementation as rr, NotificationOptions as rt, McpRequestContext as s, SubscriptionsListenRequest as sa, PingRequest as si, BooleanSchema as sn, AuthorizationServerMetadata as so, InitializedNotification as sr, RequestHandlerSchemas as st, CreateMcpHandlerOptions as t, StringSchema as ta, NotificationTypeMap as ti, classifyInboundRequest as tn, SdkError as to, Icons as tr, ClientContext as tt, isLegacyRequest as u, SubscriptionsListenResultMeta as ua, ProgressNotification as ui, CallToolResult as un, OAuthClientInformationFull as uo, InputRequiredResult as ur, ServerContext as ut, PerRequestMessageExtra as v, TextContent as va, ReadResourceRequest as vi, ClientResult as vn, OAuthTokens as vo, JSONRPCErrorResponse as vr, isSpecType as vt, McpServer as w, ToolChoice as wa, RequestMeta as wi, CompleteResult as wn, JSONValue as wr, isInitializedNotification as wt, BaseToolCallback as x, TitledSingleSelectEnumSchema as xa, RelatedTaskMetadata as xi, CompleteRequestParams as xn, StoredOAuthClientInformation as xo, JSONRPCRequest as xr, assertCompleteRequestResourceTemplate as xt, PerRequestResponseMode as y, TextResourceContents as ya, ReadResourceRequestParams as yi, CompatibilityCallToolResult as yn, OpenIdProviderDiscoveryMetadata as yo, JSONRPCMessage as yr, specTypeSchemas as yt, ScopeChallengeHandler as z, INVALID_PARAMS as za, Result$1 as zi, ElicitRequestURLParams as zn, ListToolsRequest as zr, InputRequiredSpec as zt };
++export type { ServerConnectOptions };
+ //# sourceMappingURL=createMcpHandler-D4NN8WsG.d.mts.map
+\ No newline at end of file
+diff --git a/dist/createMcpHandler-DZmmlN8e.d.cts b/dist/createMcpHandler-DZmmlN8e.d.cts
+index 1f9e74957668fd81bd7e51385cb1a73df0f794d8..82032851b74d22327ba81bad9979750f210a3824 100644
+--- a/dist/createMcpHandler-DZmmlN8e.d.cts
++++ b/dist/createMcpHandler-DZmmlN8e.d.cts
+@@ -2821,6 +2821,11 @@ type ScopeChallengeHandler = (context: {
+ declare function requireScopes(...scopes: readonly [string, ...string[]]): ScopeChallengeHandler;
+ //#endregion
+ //#region src/server/server.d.ts
++/** Options for connecting a server to a transport that serves an already-selected modern revision. */
++type ServerConnectOptions = {
++  /** A supported modern revision selected by the serving entry; omit for a legacy initialize handshake. */
++  protocolVersion: string;
++};
+ type ServerOptions = ProtocolOptions & {
+   /**
+    * Capabilities to advertise as being supported by this server.
+@@ -2951,6 +2956,7 @@ declare class Server extends Protocol<ServerContext> {
+   private _requestStateVerify?;
+   private _inputRequiredServing;
+   private _legacyShim?;
++  private _explicitProtocolVersion;
+   /** Lazily-built legacy shim; the loop lives in legacyInputRequiredShim.ts behind a narrow host contract. */
+   private _legacyInputRequiredShim;
+   /**
+@@ -2961,8 +2967,9 @@ declare class Server extends Protocol<ServerContext> {
+    * Initializes this server with the given name and version information.
+    */
+   constructor(_serverInfo: Implementation, options?: ServerOptions);
+-  /** Attaches to the given transport; rejects while this instance is connected to another one. */
+-  connect(transport: Transport): Promise<void>;
++  /** Attaches to the transport, optionally binding a selected modern revision before it starts. */
++  connect(transport: Transport, options?: ServerConnectOptions): Promise<void>;
++  protected _onclose(): void;
+   /**
+    * Registers the built-in `logging/setLevel` request handler.
+    *
+@@ -3278,7 +3285,7 @@ declare class McpServer {
+    * await server.connect(transport);
+    * ```
+    */
+-  connect(transport: Transport): Promise<void>;
++  connect(transport: Transport, options?: ServerConnectOptions): Promise<void>;
+   /**
+    * Closes the connection.
+    */
+@@ -3787,7 +3794,7 @@ declare class PerRequestHTTPServerTransport implements Transport {
+  * The bus carries the EVENT, not the wire shape — the entry's listen router
+  * owns subscription-id stamping and per-stream filtering.
+  */
+-type ServerEvent = {
++type ServerEvent = ({
+   kind: 'tools_list_changed';
+ } | {
+   kind: 'prompts_list_changed';
+@@ -3796,6 +3803,9 @@ type ServerEvent = {
+ } | {
+   kind: 'resource_updated';
+   uri: string;
++}) & {
++  /** Forwarded notification params; the router stamps its own subscription ID and the event's resource URI. */
++  params?: JSONRPCNotification['params'];
+ };
+ /**
+  * The server-side change-event seam for `subscriptions/listen`.
+@@ -4167,4 +4177,5 @@ declare function isLegacyRequest(request: Request, parsedBody?: unknown, options
+ declare function createMcpHandler(factory: McpServerFactory, options?: CreateMcpHandlerOptions): McpHttpHandler;
+ //#endregion
+ export { isJsonContentType as $, checkResourceAllowed as $a, SetLevelRequestParams as $i, HandlerResultTypeMap as $n, NotificationMethod as $r, InboundModernRoute as $t, RegisteredResource as A, UnsubscribeRequestParams as Aa, Resource as Ai, CreateMessageResult as An, ListPromptsResult as Ar, isJSONRPCResultResponse as At, requireScopes as B, INVALID_REQUEST as Ba, ResultMetaObject as Bi, ElicitResult as Bn, ListToolsResult as Br, InputResponseView as Bt, ListResourcesCallback as C, ToolAnnotations as Ca, RequestId as Ci, CompleteRequestResourceTemplate as Cn, JSONRPCResultResponse as Cr, isInitializeRequest as Ct, ReadResourceCallback as D, ToolResultContent as Da, RequestMethod as Di, CreateMessageRequestParams as Dn, ListChangedHandlers as Dr, isJSONRPCNotification as Dt, PromptCallback as E, ToolListChangedNotification as Ea, RequestMetaObject as Ei, CreateMessageRequest as En, ListChangedCallback as Er, isJSONRPCErrorResponse as Et, ToolCallback as F, CLIENT_CAPABILITIES_META_KEY as Fa, ResourceTemplateReference as Fi, DiscoverResult as Fn, ListRootsRequest as Fr, ResourceNotFoundError as Ft, ReadBuffer as G, PARSE_ERROR as Ga, SamplingContent as Gi, EnumSchema as Gn, MessageExtraInfo as Gr, StandardSchemaV1 as Gt, InMemoryTransport as H, LATEST_PROTOCOL_VERSION as Ha, Role as Hi, ElicitationCompleteNotificationParams as Hn, LoggingMessageNotification as Hr, inputRequired as Ht, Server as I, CLIENT_INFO_META_KEY as Ia, ResourceTemplateType as Ii, ElicitRequest as In, ListRootsResult as Ir, UnsupportedProtocolVersionError as It, serializeMessage as J, SERVER_INFO_META_KEY as Ja, ServerCapabilities as Ji, GetPromptResult as Jn, MissingRequiredClientCapabilityErrorData as Jr, InboundClassificationOutcome as Jt, STDIO_DEFAULT_MAX_BUFFER_SIZE as K, PROTOCOL_VERSION_META_KEY as Ka, SamplingMessage as Ki, GetPromptRequest as Kn, MetaObject as Kr, StandardSchemaV1Sync as Kt, ServerOptions as L, DEFAULT_NEGOTIATED_PROTOCOL_VERSION as La, ResourceUpdatedNotification as Li, ElicitRequestFormParams as Ln, ListTasksRequest as Lr, UrlElicitationRequiredError as Lt, RegisteredTool as M, UntitledMultiSelectEnumSchema as Ma, ResourceLink as Mi, CreateTaskResult as Mn, ListResourceTemplatesResult as Mr, parseJSONRPCMessage as Mt, ResourceMetadata as N, UntitledSingleSelectEnumSchema as Na, ResourceListChangedNotification as Ni, Cursor as Nn, ListResourcesRequest as Nr, MissingRequiredClientCapabilityError as Nt, ReadResourceTemplateCallback as O, ToolUseContent as Oa, RequestParams as Oi, CreateMessageRequestParamsBase as On, ListChangedOptions as Or, isJSONRPCRequest as Ot, ResourceTemplate as P, BAGGAGE_META_KEY as Pa, ResourceRequestParams as Pi, DiscoverRequest as Pn, ListResourcesResult as Pr, ProtocolError as Pt, getDisplayName as Q, TRACESTATE_META_KEY as Qa, SetLevelRequest as Qi, GetTaskResult as Qn, Notification as Qr, InboundLegacyRouteReason as Qt, ScopeChallenge as R, INTERNAL_ERROR as Ra, ResourceUpdatedNotificationParams as Ri, ElicitRequestParams as Rn, ListTasksResult as Rr, ProtocolErrorCode as Rt, CompleteResourceTemplateCallback as S, Tool as Sa, Request$1 as Si, CompleteRequestPrompt as Sn, StoredOAuthTokens as So, JSONRPCResponse as Sr, isCallToolResult as St, McpServerOptions as T, ToolExecution as Ta, RequestMetaEnvelope as Ti, ContentBlock as Tn, LegacyTitledEnumSchema as Tr, isInputRequiredResult as Tt, UriTemplate as U, LOG_LEVEL_META_KEY as Ua, Root as Ui, EmbeddedResource as Un, LoggingMessageNotificationParams as Ur, inputResponse as Ut, preloadSchemas as V, JSONRPC_VERSION as Va, ResultTypeMap as Vi, ElicitationCompleteNotification as Vn, LoggingLevel as Vr, acceptedContent as Vt, Variables as W, METHOD_NOT_FOUND as Wa, RootsListChangedNotification as Wi, EmptyResult as Wn, MessageClassification as Wr, ElicitInputParams as Wt, CacheScope as X, SUPPORTED_PROTOCOL_VERSIONS as Xa, ServerRequest as Xi, GetTaskPayloadResult as Xn, ModelPreferences as Xr, InboundLadderRejection as Xt, CacheHint as Y, SUBSCRIPTION_ID_META_KEY as Ya, ServerNotification as Yi, GetTaskPayloadRequest as Yn, ModelHint as Yr, InboundHttpRequest as Yt, ProtocolEra as Z, TRACEPARENT_META_KEY as Za, ServerResult as Zi, GetTaskRequest as Zn, MultiSelectEnumSchema as Zr, InboundLegacyRoute as Zt, PerRequestHTTPServerTransportOptions as _, TaskStatusNotificationParams as _a, PromptReference as _i, ClientRequest as _n, OAuthTokenRevocationRequest as _o, JSONObject as _r, SpecTypes as _t, McpHandlerRequestOptions as a, SubscriptionsAcknowledgedNotification as aa, PaginatedResult as ai, BaseMetadata as an, OAuthError as ao, InitializeRequestParams as ar, Protocol as at, AnyToolHandler as b, TitledMultiSelectEnumSchema as ba, ReadResourceResult as bi, CompleteRequest as bn, OpenIdProviderMetadata as bo, JSONRPCNotification as br, assertCompleteRequestPrompt as bt, McpServerFactory as c, SubscriptionsListenRequestParams as ca, PrimitiveSchemaDefinition as ci, CallToolRequest as cn, IdJagTokenExchangeResponse as co, InputRequest as cr, RequestOptions as ct, legacyStatelessFallback as d, Task as da, ProgressNotificationParams as di, CancelTaskRequest as dn, OAuthClientInformationMixed as do, InputResponse as dr, mergeCapabilities as dt, SingleSelectEnumSchema as ea, NotificationParams as ei, InboundValidationRung as en, resourceUrlFromServerUrl as eo, Icon as er, BaseContext as et, InMemoryServerEventBus as f, TaskAugmentedRequestParams as fa, ProgressToken as fi, CancelTaskResult as fn, OAuthClientMetadata as fo, InputResponses as fr, FetchLike as ft, PerRequestHTTPServerTransport as g, TaskStatusNotification as ga, PromptMessage as gi, ClientNotification as gn, OAuthProtectedResourceMetadata as go, JSONArray as gr, SpecTypeName as gt, ServerNotifier as h, TaskStatus as ha, PromptListChangedNotification as hi, ClientCapabilities as hn, OAuthMetadata as ho, InvalidRequestError as hr, createFetchWithInit as ht, LegacyStatelessFallbackOptions as i, SubscriptionFilter as ia, PaginatedRequestParams as ii, AuthInfo as in, SdkHttpErrorData as io, InitializeRequest as ir, ProgressCallback as it, RegisteredResourceTemplate as j, UnsupportedProtocolVersionErrorData as ja, ResourceContents as ji, CreateMessageResultWithTools as jn, ListResourceTemplatesRequest as jr, isTaskAugmentedRequestParams as jt, RegisteredPrompt as k, UnsubscribeRequest as ka, RequestTypeMap as ki, CreateMessageRequestParamsWithTools as kn, ListPromptsRequest as kr, isJSONRPCResponse as kt, createMcpHandler as l, SubscriptionsListenResult as la, Progress as li, CallToolRequestParams as ln, OAuthClientInformation as lo, InputRequests as lr, RequestStateAccessor as lt, ServerEventBus as m, TaskMetadata as ma, PromptArgument as mi, CancelledNotificationParams as mn, OAuthErrorResponse as mo, InvalidParamsError as mr, TransportSendOptions as mt, IsLegacyRequestOptions as n, SubscribeRequest as na, NumberSchema as ni, Annotations as nn, SdkErrorCode as no, ImageContent as nr, DEFAULT_REQUEST_TIMEOUT_MSEC as nt, McpHttpHandler as o, SubscriptionsAcknowledgedNotificationParams as oa, ParseError as oi, BlobResourceContents as on, OAuthErrorCode as oo, InitializeResult as or, ProtocolOptions as ot, ServerEvent as p, TaskCreationParams as pa, Prompt as pi, CancelledNotification as pn, OAuthClientRegistrationError as po, InternalError as pr, Transport as pt, deserializeMessage as q, RELATED_TASK_META_KEY as qa, SamplingMessageContentBlock as qi, GetPromptRequestParams as qn, MethodNotFoundError as qr, StandardSchemaWithJSON as qt, LegacyHttpHandler as r, SubscribeRequestParams as ra, PaginatedRequest as ri, AudioContent as rn, SdkHttpError as ro, Implementation as rr, NotificationOptions as rt, McpRequestContext as s, SubscriptionsListenRequest as sa, PingRequest as si, BooleanSchema as sn, AuthorizationServerMetadata as so, InitializedNotification as sr, RequestHandlerSchemas as st, CreateMcpHandlerOptions as t, StringSchema as ta, NotificationTypeMap as ti, classifyInboundRequest as tn, SdkError as to, Icons as tr, ClientContext as tt, isLegacyRequest as u, SubscriptionsListenResultMeta as ua, ProgressNotification as ui, CallToolResult as un, OAuthClientInformationFull as uo, InputRequiredResult as ur, ServerContext as ut, PerRequestMessageExtra as v, TextContent as va, ReadResourceRequest as vi, ClientResult as vn, OAuthTokens as vo, JSONRPCErrorResponse as vr, isSpecType as vt, McpServer as w, ToolChoice as wa, RequestMeta as wi, CompleteResult as wn, JSONValue as wr, isInitializedNotification as wt, BaseToolCallback as x, TitledSingleSelectEnumSchema as xa, RelatedTaskMetadata as xi, CompleteRequestParams as xn, StoredOAuthClientInformation as xo, JSONRPCRequest as xr, assertCompleteRequestResourceTemplate as xt, PerRequestResponseMode as y, TextResourceContents as ya, ReadResourceRequestParams as yi, CompatibilityCallToolResult as yn, OpenIdProviderDiscoveryMetadata as yo, JSONRPCMessage as yr, specTypeSchemas as yt, ScopeChallengeHandler as z, INVALID_PARAMS as za, Result$1 as zi, ElicitRequestURLParams as zn, ListToolsRequest as zr, InputRequiredSpec as zt };
++export type { ServerConnectOptions };
+ //# sourceMappingURL=createMcpHandler-DZmmlN8e.d.cts.map
+\ No newline at end of file
+diff --git a/dist/index.d.cts b/dist/index.d.cts
+index c41b680130088fc74fd38f8c893aeb22fd9b38d5..f75655f4437dc31fa3ee26163180f6fc2bbe79cb 100644
+--- a/dist/index.d.cts
++++ b/dist/index.d.cts
+@@ -807,4 +807,5 @@ declare function readRequestBody(request: Request, maxBytes?: number): Promise<{
+ declare function fromJsonSchema<T = unknown>(schema: JsonSchemaType, validator?: jsonSchemaValidator): StandardSchemaWithJSON<T, T>;
+ //#endregion
+ export { Annotations, type AnyToolHandler, AudioContent, AuthInfo, type AuthMetadataOptions, type AuthorizationServerMetadata, BAGGAGE_META_KEY, type BaseContext, BaseMetadata, type BaseToolCallback, type BearerAuthOptions, BlobResourceContents, BooleanSchema, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, type CacheHint, type CacheScope, CallToolRequest, CallToolRequestParams, CallToolResult, CancelTaskRequest, CancelTaskResult, CancelledNotification, CancelledNotificationParams, ClientCapabilities, type ClientContext, ClientNotification, ClientRequest, ClientResult, CompatibilityCallToolResult, type CompletableSchema, type CompleteCallback, CompleteRequest, CompleteRequestParams, CompleteRequestPrompt, CompleteRequestResourceTemplate, type CompleteResourceTemplateCallback, CompleteResult, ContentBlock, type CreateMcpHandlerOptions, CreateMessageRequest, CreateMessageRequestParams, CreateMessageRequestParamsBase, CreateMessageRequestParamsWithTools, CreateMessageResult, CreateMessageResultWithTools, CreateTaskResult, Cursor, DEFAULT_MAX_REQUEST_BODY_SIZE, DEFAULT_NEGOTIATED_PROTOCOL_VERSION, DEFAULT_REQUEST_TIMEOUT_MSEC, DiscoverRequest, DiscoverResult, type ElicitInputParams, ElicitRequest, ElicitRequestFormParams, ElicitRequestParams, ElicitRequestURLParams, ElicitResult, ElicitationCompleteNotification, ElicitationCompleteNotificationParams, EmbeddedResource, EmptyResult, EnumSchema, type EventId, type EventStore, type FetchLike, GetPromptRequest, GetPromptRequestParams, GetPromptResult, GetTaskPayloadRequest, GetTaskPayloadResult, GetTaskRequest, GetTaskResult, type HandleRequestOptions, HandlerResultTypeMap, type HostHeaderValidationResult, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, Icon, Icons, type IdJagTokenExchangeResponse, ImageContent, Implementation, InMemoryServerEventBus, InMemoryTransport, type InboundClassificationOutcome, type InboundHttpRequest, type InboundLadderRejection, type InboundLegacyRoute, type InboundLegacyRouteReason, type InboundModernRoute, type InboundValidationRung, InitializeRequest, InitializeRequestParams, InitializeResult, InitializedNotification, InputRequest, InputRequests, InputRequiredResult, type InputRequiredSpec, InputResponse, type InputResponseView, InputResponses, InternalError, InvalidParamsError, InvalidRequestError, type IsLegacyRequestOptions, JSONArray, JSONObject, JSONRPCErrorResponse, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONRPCResultResponse, JSONRPC_VERSION, JSONValue, type JsonSchemaType, type JsonSchemaValidator, type JsonSchemaValidatorResult, LATEST_PROTOCOL_VERSION, LOG_LEVEL_META_KEY, type LegacyHttpHandler, type LegacyStatelessFallbackOptions, LegacyTitledEnumSchema, ListChangedCallback, ListChangedHandlers, ListChangedOptions, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult, type ListResourcesCallback, ListResourcesRequest, ListResourcesResult, ListRootsRequest, ListRootsResult, ListTasksRequest, ListTasksResult, ListToolsRequest, ListToolsResult, LoggingLevel, LoggingMessageNotification, LoggingMessageNotificationParams, METHOD_NOT_FOUND, type McpHandlerRequestOptions, type McpHttpHandler, type McpRequestContext, McpServer, type McpServerFactory, type McpServerOptions, MessageClassification, MessageExtraInfo, MetaObject, MethodNotFoundError, MissingRequiredClientCapabilityError, MissingRequiredClientCapabilityErrorData, ModelHint, ModelPreferences, MultiSelectEnumSchema, Notification, NotificationMethod, type NotificationOptions, NotificationParams, NotificationTypeMap, NumberSchema, type OAuthClientInformation, type OAuthClientInformationFull, type OAuthClientInformationMixed, type OAuthClientMetadata, type OAuthClientRegistrationError, OAuthError, OAuthErrorCode, type OAuthErrorResponse, type OAuthMetadata, type OAuthProtectedResourceMetadata, type OAuthTokenRevocationRequest, type OAuthTokenVerifier, type OAuthTokens, type OpenIdProviderDiscoveryMetadata, type OpenIdProviderMetadata, type OriginValidationResult, PARSE_ERROR, PROTOCOL_VERSION_META_KEY, PaginatedRequest, PaginatedRequestParams, PaginatedResult, ParseError, PerRequestHTTPServerTransport, type PerRequestHTTPServerTransportOptions, type PerRequestMessageExtra, type PerRequestResponseMode, PingRequest, PrimitiveSchemaDefinition, Progress, type ProgressCallback, ProgressNotification, ProgressNotificationParams, ProgressToken, Prompt, PromptArgument, type PromptCallback, PromptListChangedNotification, PromptMessage, PromptReference, Protocol, type ProtocolEra, ProtocolError, ProtocolErrorCode, type ProtocolOptions, RELATED_TASK_META_KEY, ReadBuffer, type ReadResourceCallback, ReadResourceRequest, ReadResourceRequestParams, ReadResourceResult, type ReadResourceTemplateCallback, type RegisteredPrompt, type RegisteredResource, type RegisteredResourceTemplate, type RegisteredTool, RelatedTaskMetadata, Request$1 as Request, type RequestHandlerSchemas, RequestId, RequestMeta, RequestMetaEnvelope, RequestMetaObject, RequestMethod, type RequestOptions, RequestParams, type RequestStateAccessor, type RequestStateCodec, type RequestStateCodecOptions, RequestTypeMap, Resource, ResourceContents, ResourceLink, ResourceListChangedNotification, type ResourceMetadata, ResourceNotFoundError, ResourceRequestParams, ResourceTemplate, ResourceTemplateReference, ResourceTemplateType, ResourceUpdatedNotification, ResourceUpdatedNotificationParams, Result, ResultMetaObject, ResultTypeMap, Role, Root, RootsListChangedNotification, SERVER_INFO_META_KEY, STDIO_DEFAULT_MAX_BUFFER_SIZE, SUBSCRIPTION_ID_META_KEY, SUPPORTED_PROTOCOL_VERSIONS, SamplingContent, SamplingMessage, SamplingMessageContentBlock, type ScopeChallenge, type ScopeChallengeHandler, SdkError, SdkErrorCode, SdkHttpError, type SdkHttpErrorData, Server, ServerCapabilities, type ServerContext, type ServerEvent, type ServerEventBus, ServerNotification, type ServerNotifier, type ServerOptions, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SingleSelectEnumSchema, type SpecTypeName, type SpecTypes, type StandardSchemaV1, type StandardSchemaV1Sync, type StandardSchemaWithJSON, type StoredOAuthClientInformation, type StoredOAuthTokens, type StreamId, StringSchema, SubscribeRequest, SubscribeRequestParams, SubscriptionFilter, SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams, SubscriptionsListenRequest, SubscriptionsListenRequestParams, SubscriptionsListenResult, SubscriptionsListenResultMeta, TRACEPARENT_META_KEY, TRACESTATE_META_KEY, Task, TaskAugmentedRequestParams, TaskCreationParams, TaskMetadata, TaskStatus, TaskStatusNotification, TaskStatusNotificationParams, TextContent, TextResourceContents, TitledMultiSelectEnumSchema, TitledSingleSelectEnumSchema, Tool, ToolAnnotations, type ToolCallback, ToolChoice, ToolExecution, ToolListChangedNotification, ToolResultContent, ToolUseContent, type Transport, type TransportSendOptions, UnsubscribeRequest, UnsubscribeRequestParams, UnsupportedProtocolVersionError, UnsupportedProtocolVersionErrorData, UntitledMultiSelectEnumSchema, UntitledSingleSelectEnumSchema, UriTemplate, UrlElicitationRequiredError, type Variables, type VerifyBearerTokenOptions, WebStandardStreamableHTTPServerTransport, type WebStandardStreamableHTTPServerTransportOptions, acceptedContent, assertCompleteRequestPrompt, assertCompleteRequestResourceTemplate, bearerAuthChallengeResponse, buildOAuthProtectedResourceMetadata, checkResourceAllowed, classifyInboundRequest, completable, createFetchWithInit, createMcpHandler, createRequestStateCodec, deserializeMessage, fromJsonSchema, getDisplayName, getOAuthProtectedResourceMetadataUrl, hostHeaderValidationResponse, inputRequired, inputResponse, isCallToolResult, isCompletable, isInitializeRequest, isInitializedNotification, isInputRequiredResult, isJSONRPCErrorResponse, isJSONRPCNotification, isJSONRPCRequest, isJSONRPCResponse, isJSONRPCResultResponse, isJsonContentType, isLegacyRequest, isSpecType, isTaskAugmentedRequestParams, type jsonSchemaValidator, legacyStatelessFallback, localhostAllowedHostnames, localhostAllowedOrigins, mergeCapabilities, oauthMetadataResponse, originValidationResponse, parseJSONRPCMessage, preloadSchemas, readRequestBody, requireBearerAuth, requireScopes, resourceUrlFromServerUrl, serializeMessage, specTypeSchemas, validateHostHeader, validateOriginHeader, verifyBearerToken };
++export type { ServerConnectOptions } from "./createMcpHandler-DZmmlN8e.cjs";
+ //# sourceMappingURL=index.d.cts.map
+\ No newline at end of file
+diff --git a/dist/index.d.mts b/dist/index.d.mts
+index 68f94311edf6c0a089459aaf52747b632e6b449e..0fb6d49ec56275403cb774ab1f52f21bf078a646 100644
+--- a/dist/index.d.mts
++++ b/dist/index.d.mts
+@@ -807,4 +807,5 @@ declare function readRequestBody(request: Request, maxBytes?: number): Promise<{
+ declare function fromJsonSchema<T = unknown>(schema: JsonSchemaType, validator?: jsonSchemaValidator): StandardSchemaWithJSON<T, T>;
+ //#endregion
+ export { Annotations, type AnyToolHandler, AudioContent, AuthInfo, type AuthMetadataOptions, type AuthorizationServerMetadata, BAGGAGE_META_KEY, type BaseContext, BaseMetadata, type BaseToolCallback, type BearerAuthOptions, BlobResourceContents, BooleanSchema, CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, type CacheHint, type CacheScope, CallToolRequest, CallToolRequestParams, CallToolResult, CancelTaskRequest, CancelTaskResult, CancelledNotification, CancelledNotificationParams, ClientCapabilities, type ClientContext, ClientNotification, ClientRequest, ClientResult, CompatibilityCallToolResult, type CompletableSchema, type CompleteCallback, CompleteRequest, CompleteRequestParams, CompleteRequestPrompt, CompleteRequestResourceTemplate, type CompleteResourceTemplateCallback, CompleteResult, ContentBlock, type CreateMcpHandlerOptions, CreateMessageRequest, CreateMessageRequestParams, CreateMessageRequestParamsBase, CreateMessageRequestParamsWithTools, CreateMessageResult, CreateMessageResultWithTools, CreateTaskResult, Cursor, DEFAULT_MAX_REQUEST_BODY_SIZE, DEFAULT_NEGOTIATED_PROTOCOL_VERSION, DEFAULT_REQUEST_TIMEOUT_MSEC, DiscoverRequest, DiscoverResult, type ElicitInputParams, ElicitRequest, ElicitRequestFormParams, ElicitRequestParams, ElicitRequestURLParams, ElicitResult, ElicitationCompleteNotification, ElicitationCompleteNotificationParams, EmbeddedResource, EmptyResult, EnumSchema, type EventId, type EventStore, type FetchLike, GetPromptRequest, GetPromptRequestParams, GetPromptResult, GetTaskPayloadRequest, GetTaskPayloadResult, GetTaskRequest, GetTaskResult, type HandleRequestOptions, HandlerResultTypeMap, type HostHeaderValidationResult, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, Icon, Icons, type IdJagTokenExchangeResponse, ImageContent, Implementation, InMemoryServerEventBus, InMemoryTransport, type InboundClassificationOutcome, type InboundHttpRequest, type InboundLadderRejection, type InboundLegacyRoute, type InboundLegacyRouteReason, type InboundModernRoute, type InboundValidationRung, InitializeRequest, InitializeRequestParams, InitializeResult, InitializedNotification, InputRequest, InputRequests, InputRequiredResult, type InputRequiredSpec, InputResponse, type InputResponseView, InputResponses, InternalError, InvalidParamsError, InvalidRequestError, type IsLegacyRequestOptions, JSONArray, JSONObject, JSONRPCErrorResponse, JSONRPCMessage, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, JSONRPCResultResponse, JSONRPC_VERSION, JSONValue, type JsonSchemaType, type JsonSchemaValidator, type JsonSchemaValidatorResult, LATEST_PROTOCOL_VERSION, LOG_LEVEL_META_KEY, type LegacyHttpHandler, type LegacyStatelessFallbackOptions, LegacyTitledEnumSchema, ListChangedCallback, ListChangedHandlers, ListChangedOptions, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult, type ListResourcesCallback, ListResourcesRequest, ListResourcesResult, ListRootsRequest, ListRootsResult, ListTasksRequest, ListTasksResult, ListToolsRequest, ListToolsResult, LoggingLevel, LoggingMessageNotification, LoggingMessageNotificationParams, METHOD_NOT_FOUND, type McpHandlerRequestOptions, type McpHttpHandler, type McpRequestContext, McpServer, type McpServerFactory, type McpServerOptions, MessageClassification, MessageExtraInfo, MetaObject, MethodNotFoundError, MissingRequiredClientCapabilityError, MissingRequiredClientCapabilityErrorData, ModelHint, ModelPreferences, MultiSelectEnumSchema, Notification, NotificationMethod, type NotificationOptions, NotificationParams, NotificationTypeMap, NumberSchema, type OAuthClientInformation, type OAuthClientInformationFull, type OAuthClientInformationMixed, type OAuthClientMetadata, type OAuthClientRegistrationError, OAuthError, OAuthErrorCode, type OAuthErrorResponse, type OAuthMetadata, type OAuthProtectedResourceMetadata, type OAuthTokenRevocationRequest, type OAuthTokenVerifier, type OAuthTokens, type OpenIdProviderDiscoveryMetadata, type OpenIdProviderMetadata, type OriginValidationResult, PARSE_ERROR, PROTOCOL_VERSION_META_KEY, PaginatedRequest, PaginatedRequestParams, PaginatedResult, ParseError, PerRequestHTTPServerTransport, type PerRequestHTTPServerTransportOptions, type PerRequestMessageExtra, type PerRequestResponseMode, PingRequest, PrimitiveSchemaDefinition, Progress, type ProgressCallback, ProgressNotification, ProgressNotificationParams, ProgressToken, Prompt, PromptArgument, type PromptCallback, PromptListChangedNotification, PromptMessage, PromptReference, Protocol, type ProtocolEra, ProtocolError, ProtocolErrorCode, type ProtocolOptions, RELATED_TASK_META_KEY, ReadBuffer, type ReadResourceCallback, ReadResourceRequest, ReadResourceRequestParams, ReadResourceResult, type ReadResourceTemplateCallback, type RegisteredPrompt, type RegisteredResource, type RegisteredResourceTemplate, type RegisteredTool, RelatedTaskMetadata, Request$1 as Request, type RequestHandlerSchemas, RequestId, RequestMeta, RequestMetaEnvelope, RequestMetaObject, RequestMethod, type RequestOptions, RequestParams, type RequestStateAccessor, type RequestStateCodec, type RequestStateCodecOptions, RequestTypeMap, Resource, ResourceContents, ResourceLink, ResourceListChangedNotification, type ResourceMetadata, ResourceNotFoundError, ResourceRequestParams, ResourceTemplate, ResourceTemplateReference, ResourceTemplateType, ResourceUpdatedNotification, ResourceUpdatedNotificationParams, Result, ResultMetaObject, ResultTypeMap, Role, Root, RootsListChangedNotification, SERVER_INFO_META_KEY, STDIO_DEFAULT_MAX_BUFFER_SIZE, SUBSCRIPTION_ID_META_KEY, SUPPORTED_PROTOCOL_VERSIONS, SamplingContent, SamplingMessage, SamplingMessageContentBlock, type ScopeChallenge, type ScopeChallengeHandler, SdkError, SdkErrorCode, SdkHttpError, type SdkHttpErrorData, Server, ServerCapabilities, type ServerContext, type ServerEvent, type ServerEventBus, ServerNotification, type ServerNotifier, type ServerOptions, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SingleSelectEnumSchema, type SpecTypeName, type SpecTypes, type StandardSchemaV1, type StandardSchemaV1Sync, type StandardSchemaWithJSON, type StoredOAuthClientInformation, type StoredOAuthTokens, type StreamId, StringSchema, SubscribeRequest, SubscribeRequestParams, SubscriptionFilter, SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams, SubscriptionsListenRequest, SubscriptionsListenRequestParams, SubscriptionsListenResult, SubscriptionsListenResultMeta, TRACEPARENT_META_KEY, TRACESTATE_META_KEY, Task, TaskAugmentedRequestParams, TaskCreationParams, TaskMetadata, TaskStatus, TaskStatusNotification, TaskStatusNotificationParams, TextContent, TextResourceContents, TitledMultiSelectEnumSchema, TitledSingleSelectEnumSchema, Tool, ToolAnnotations, type ToolCallback, ToolChoice, ToolExecution, ToolListChangedNotification, ToolResultContent, ToolUseContent, type Transport, type TransportSendOptions, UnsubscribeRequest, UnsubscribeRequestParams, UnsupportedProtocolVersionError, UnsupportedProtocolVersionErrorData, UntitledMultiSelectEnumSchema, UntitledSingleSelectEnumSchema, UriTemplate, UrlElicitationRequiredError, type Variables, type VerifyBearerTokenOptions, WebStandardStreamableHTTPServerTransport, type WebStandardStreamableHTTPServerTransportOptions, acceptedContent, assertCompleteRequestPrompt, assertCompleteRequestResourceTemplate, bearerAuthChallengeResponse, buildOAuthProtectedResourceMetadata, checkResourceAllowed, classifyInboundRequest, completable, createFetchWithInit, createMcpHandler, createRequestStateCodec, deserializeMessage, fromJsonSchema, getDisplayName, getOAuthProtectedResourceMetadataUrl, hostHeaderValidationResponse, inputRequired, inputResponse, isCallToolResult, isCompletable, isInitializeRequest, isInitializedNotification, isInputRequiredResult, isJSONRPCErrorResponse, isJSONRPCNotification, isJSONRPCRequest, isJSONRPCResponse, isJSONRPCResultResponse, isJsonContentType, isLegacyRequest, isSpecType, isTaskAugmentedRequestParams, type jsonSchemaValidator, legacyStatelessFallback, localhostAllowedHostnames, localhostAllowedOrigins, mergeCapabilities, oauthMetadataResponse, originValidationResponse, parseJSONRPCMessage, preloadSchemas, readRequestBody, requireBearerAuth, requireScopes, resourceUrlFromServerUrl, serializeMessage, specTypeSchemas, validateHostHeader, validateOriginHeader, verifyBearerToken };
++export type { ServerConnectOptions } from "./createMcpHandler-D4NN8WsG.mjs";
+ //# sourceMappingURL=index.d.mts.map
+\ No newline at end of file
+diff --git a/dist/mcp-BumlNux0.cjs b/dist/mcp-BumlNux0.cjs
+index a92d1121f8fc7d6f207934d21121610299aa094b..8f238fc3cf51a90dc2b011953dcf41c32516e52c 100644
+--- a/dist/mcp-BumlNux0.cjs
++++ b/dist/mcp-BumlNux0.cjs
+@@ -171,12 +171,12 @@ function honoredSubset(requested, capabilities) {
+ /** Map a {@linkcode ServerEvent} onto its wire notification `{method, params}`. */
+ function serverEventToNotification(event) {
+ 	switch (event.kind) {
+-		case "tools_list_changed": return { method: "notifications/tools/list_changed" };
+-		case "prompts_list_changed": return { method: "notifications/prompts/list_changed" };
+-		case "resources_list_changed": return { method: "notifications/resources/list_changed" };
++		case "tools_list_changed": return { method: "notifications/tools/list_changed", ...(event.params !== void 0 && { params: event.params }) };
++		case "prompts_list_changed": return { method: "notifications/prompts/list_changed", ...(event.params !== void 0 && { params: event.params }) };
++		case "resources_list_changed": return { method: "notifications/resources/list_changed", ...(event.params !== void 0 && { params: event.params }) };
+ 		case "resource_updated": return {
+ 			method: "notifications/resources/updated",
+-			params: { uri: event.uri }
++			params: { ...event.params, uri: event.uri }
+ 		};
+ 	}
+ }
+@@ -1019,6 +1019,7 @@ var Server = class extends require_src.Protocol {
+ 	_requestStateVerify;
+ 	_inputRequiredServing;
+ 	_legacyShim;
++	_explicitProtocolVersion = false;
+ 	/** Lazily-built legacy shim; the loop lives in legacyInputRequiredShim.ts behind a narrow host contract. */
+ 	_legacyInputRequiredShim() {
+ 		return this._legacyShim ??= new LegacyInputRequiredShim({
+@@ -1055,11 +1056,24 @@ var Server = class extends require_src.Protocol {
+ 		if (require_src.modernProtocolVersions(this._supportedProtocolVersions).length > 0) this.setRequestHandler("server/discover", () => this._ondiscover());
+ 		if (this._capabilities.logging) this._registerLoggingHandler();
+ 	}
+-	/** Attaches to the given transport; rejects while this instance is connected to another one. */
+-	async connect(transport) {
++	/** Attaches to the transport, optionally binding a selected modern revision before it starts. */
++	async connect(transport, options) {
+ 		if (this.transport !== void 0) throw new require_src.SdkError(require_src.SdkErrorCode.AlreadyConnected, "Use a separate Server instance per connection: this instance is already connected to a transport. To connect it to a new transport, call close() first.");
++		if (options !== void 0) {
++			const supported = require_src.modernProtocolVersions(this._supportedProtocolVersions);
++			if (!supported.includes(options.protocolVersion)) throw new require_src.UnsupportedProtocolVersionError({ supported, requested: options.protocolVersion });
++			this._negotiatedProtocolVersion = options.protocolVersion;
++			this._explicitProtocolVersion = true;
++		}
+ 		await super.connect(transport);
+ 	}
++	_onclose() {
++		if (this._explicitProtocolVersion) {
++			this._explicitProtocolVersion = false;
++			this._negotiatedProtocolVersion = void 0;
++		}
++		super._onclose();
++	}
+ 	/**
+ 	* Registers the built-in `logging/setLevel` request handler.
+ 	*
+@@ -1710,9 +1724,9 @@ var McpServer = class {
+ 	* await server.connect(transport);
+ 	* ```
+ 	*/
+-	async connect(transport) {
++	async connect(transport, options) {
+ 		if (supportsScopeChallengeResolver(transport)) transport.setScopeChallengeResolver((context) => this.resolveScopeChallenge(context));
+-		return await this.server.connect(transport);
++		return await this.server.connect(transport, options);
+ 	}
+ 	/**
+ 	* Closes the connection.
+diff --git a/dist/mcp-DIH4cS6P.mjs b/dist/mcp-DIH4cS6P.mjs
+index e0a2121099cb85ff1b1702355ca27254bf997383..b58315297ee2efe00fcdde8a801df2188315f9b8 100644
+--- a/dist/mcp-DIH4cS6P.mjs
++++ b/dist/mcp-DIH4cS6P.mjs
+@@ -1,3 +1,4 @@
++import { ft as UnsupportedProtocolVersionError } from "./src-Cqbh3MYc.mjs";
+ import { A as promptArgumentsFromStandardSchema, At as LATEST_PROTOCOL_VERSION, B as scanXMcpHeaderDeclarations, C as REQUEST_STATE_ONLY_LEG_PACING_MS, Ct as CLIENT_CAPABILITIES_META_KEY, E as sleep, H as assertCompleteRequestPrompt, Ht as requiredClientCapabilitiesForInputRequest, It as SERVER_INFO_META_KEY, Kt as SdkError, Lt as SUBSCRIPTION_ID_META_KEY, M as validateStandardSchema, N as parseSchema, T as linkedRoundAbort, U as assertCompleteRequestResourceTemplate, Vt as missingClientCapabilities, Xt as OAuthErrorCode, Yt as OAuthError, _ as mergeCapabilities, _t as normalizeContentlessToolResult, a as UriTemplate, b as withRequestStateValue, bt as legacyProtocolVersions, ct as codecForVersion, dt as ResourceNotFoundError, g as Protocol, gt as attachCacheHintFallback, ht as assertValidCacheHint, j as standardSchemaToJsonSchema, jt as LOG_LEVEL_META_KEY, lt as MissingRequiredClientCapabilityError, mt as ProtocolErrorCode, nt as LoggingLevelSchema, q as isInputRequiredResult, qt as SdkErrorCode, r as normalizeRawShapeSchema, s as validateAndWarnToolName, st as MODERN_WIRE_REVISION, ut as ProtocolError, v as requestStateAccessor, w as inputRequiredRoundsExceededMessage, xt as modernProtocolVersions, yt as isModernProtocolVersion } from "./src-Cqbh3MYc.mjs";
+ import { DefaultJsonSchemaValidator } from "@modelcontextprotocol/server/_shims";
+ 
+@@ -169,12 +170,12 @@ function honoredSubset(requested, capabilities) {
+ /** Map a {@linkcode ServerEvent} onto its wire notification `{method, params}`. */
+ function serverEventToNotification(event) {
+ 	switch (event.kind) {
+-		case "tools_list_changed": return { method: "notifications/tools/list_changed" };
+-		case "prompts_list_changed": return { method: "notifications/prompts/list_changed" };
+-		case "resources_list_changed": return { method: "notifications/resources/list_changed" };
++		case "tools_list_changed": return { method: "notifications/tools/list_changed", ...(event.params !== void 0 && { params: event.params }) };
++		case "prompts_list_changed": return { method: "notifications/prompts/list_changed", ...(event.params !== void 0 && { params: event.params }) };
++		case "resources_list_changed": return { method: "notifications/resources/list_changed", ...(event.params !== void 0 && { params: event.params }) };
+ 		case "resource_updated": return {
+ 			method: "notifications/resources/updated",
+-			params: { uri: event.uri }
++			params: { ...event.params, uri: event.uri }
+ 		};
+ 	}
+ }
+@@ -1017,6 +1018,7 @@ var Server = class extends Protocol {
+ 	_requestStateVerify;
+ 	_inputRequiredServing;
+ 	_legacyShim;
++	_explicitProtocolVersion = false;
+ 	/** Lazily-built legacy shim; the loop lives in legacyInputRequiredShim.ts behind a narrow host contract. */
+ 	_legacyInputRequiredShim() {
+ 		return this._legacyShim ??= new LegacyInputRequiredShim({
+@@ -1053,11 +1055,24 @@ var Server = class extends Protocol {
+ 		if (modernProtocolVersions(this._supportedProtocolVersions).length > 0) this.setRequestHandler("server/discover", () => this._ondiscover());
+ 		if (this._capabilities.logging) this._registerLoggingHandler();
+ 	}
+-	/** Attaches to the given transport; rejects while this instance is connected to another one. */
+-	async connect(transport) {
++	/** Attaches to the transport, optionally binding a selected modern revision before it starts. */
++	async connect(transport, options) {
+ 		if (this.transport !== void 0) throw new SdkError(SdkErrorCode.AlreadyConnected, "Use a separate Server instance per connection: this instance is already connected to a transport. To connect it to a new transport, call close() first.");
++		if (options !== void 0) {
++			const supported = modernProtocolVersions(this._supportedProtocolVersions);
++			if (!supported.includes(options.protocolVersion)) throw new UnsupportedProtocolVersionError({ supported, requested: options.protocolVersion });
++			this._negotiatedProtocolVersion = options.protocolVersion;
++			this._explicitProtocolVersion = true;
++		}
+ 		await super.connect(transport);
+ 	}
++	_onclose() {
++		if (this._explicitProtocolVersion) {
++			this._explicitProtocolVersion = false;
++			this._negotiatedProtocolVersion = void 0;
++		}
++		super._onclose();
++	}
+ 	/**
+ 	* Registers the built-in `logging/setLevel` request handler.
+ 	*
+@@ -1708,9 +1723,9 @@ var McpServer = class {
+ 	* await server.connect(transport);
+ 	* ```
+ 	*/
+-	async connect(transport) {
++	async connect(transport, options) {
+ 		if (supportsScopeChallengeResolver(transport)) transport.setScopeChallengeResolver((context) => this.resolveScopeChallenge(context));
+-		return await this.server.connect(transport);
++		return await this.server.connect(transport, options);
+ 	}
+ 	/**
+ 	* Closes the connection.

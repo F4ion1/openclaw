@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { text } from "node:stream/consumers";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { McpServerConfig } from "../../config/types.mcp.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -9,11 +11,11 @@ import {
 } from "../../plugins/bundle-mcp.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { resolveCliSessionReuse } from "../cli-session.js";
 import {
   type CliMcpParams,
   loopbackConfig,
-  policyConfig,
   prepareMcp as prepareCliBundleMcpConfig,
   readMcpConfig as readConfig,
   trackMcpPreparation,
@@ -30,6 +32,65 @@ import {
 
 setupCliBundleMcpTestHarness();
 
+let policyListener: Awaited<ReturnType<typeof reserveTestPortListener<http.Server>>>;
+beforeAll(async () => {
+  policyListener = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      http.createServer((request, response) => {
+        void (async () => {
+          if (request.method === "DELETE") {
+            response.writeHead(204).end();
+            return;
+          }
+          const message = JSON.parse(await text(request)) as { id?: number; method?: string };
+          if (message.id === undefined) {
+            response.writeHead(202).end();
+            return;
+          }
+          const result =
+            message.method === "initialize"
+              ? {
+                  protocolVersion: "2025-06-18",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "policy-http", version: "1" },
+                }
+              : message.method === "tools/list" && request.url !== "/unavailable"
+                ? {
+                    tools: [
+                      { name: "read_docs", inputSchema: { type: "object" } },
+                      { name: "delete_docs", inputSchema: { type: "object" } },
+                      {
+                        name: "task_docs",
+                        inputSchema: { type: "object" },
+                        execution: { taskSupport: "required" },
+                      },
+                      {
+                        name: "app_docs",
+                        inputSchema: { type: "object" },
+                        _meta: { ui: { visibility: ["app"] } },
+                      },
+                    ],
+                  }
+                : undefined;
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              ...(result ? { result } : { error: { code: -32601, message: "Method unavailable" } }),
+            }),
+          );
+        })().catch(() => response.writeHead(500).end());
+      }),
+  });
+});
+afterAll(async () => {
+  policyListener?.listener.closeAllConnections();
+  await policyListener?.releaseListener();
+  await policyListener?.claim.release();
+});
+
 const prepareBundleProbeCliConfig = (params: Parameters<typeof prepareProbe>[0]) =>
   trackMcpPreparation(prepareProbe(params));
 const prepareClaudeConfig = (params: Partial<CliMcpParams>) =>
@@ -45,10 +106,20 @@ async function preparePolicy(
     tools?: OpenClawConfig["tools"];
     server?: McpServerConfig;
     runtimeToolsAllow?: string[];
+    catalogAvailable?: boolean;
   } & Partial<CliMcpParams> = {},
 ) {
-  const { tools, server, runtimeToolsAllow, ...params } = options;
-  const config = await policyConfig({ tools, server });
+  const { tools, server, runtimeToolsAllow, catalogAvailable, ...params } = options;
+  const config = userMcpConfig(
+    {
+      docs: {
+        transport: "streamable-http",
+        url: `http://127.0.0.1:${policyListener.claim.port}/${catalogAvailable === false ? "unavailable" : "mcp"}`,
+        ...server,
+      },
+    },
+    { tools },
+  );
   return prepareClaudeConfig({
     backend: { command: "claude", args: ["--print"] },
     config,
@@ -194,7 +265,7 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(prepared.backend.resumeArgs).toEqual(prepared.backend.args);
   });
 
-  it("projects durable policy into the first Claude process config and argv", async () => {
+  it("projects HTTP policy into the first Claude process config and argv", async () => {
     const prepared = await preparePolicy("claude-policy", {
       tools: { allow: ["docs__*"], deny: ["docs__delete_docs"] },
       additionalConfig: {
@@ -223,7 +294,7 @@ describe("prepareCliBundleMcpConfig", () => {
     ["claude-policy-empty", { tools: { allow: ["missing__tool"] } }],
     [
       "claude-policy-catalog-failure",
-      { tools: { deny: ["docs__delete_docs"] }, server: { args: ["-e", "process.exit(1)"] } },
+      { tools: { deny: ["docs__delete_docs"] }, catalogAvailable: false },
     ],
   ])(
     "omits Claude servers denied by policy or missing a catalog (%s)",

@@ -6,7 +6,6 @@ import {
   withInputRequired,
   type Client,
   type ClientContext,
-  type InputResponses,
   type RequestOptions,
   type ServerNotification,
   type StandardSchemaV1,
@@ -24,8 +23,9 @@ import {
 } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
 import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
+import { createNativeMcpResourceSubscriptions } from "./native-mcp-resource-subscriptions.js";
 import type {
-  NativeMcpClientContext,
+  NativeMcpRuntimeContext,
   NativeMcpRequestOptions,
   NativeMcpResponse,
   NativeMcpServerEvent,
@@ -33,11 +33,13 @@ import type {
 } from "./native-mcp-runtime.js";
 
 type View = {
-  context: NativeMcpClientContext;
+  context: NativeMcpRuntimeContext;
   signal: AbortSignal;
   assertCurrent: () => void;
   restore: ReturnType<typeof AsyncLocalStorage.snapshot>;
   listeners: Set<(event: NativeMcpServerEvent) => void>;
+  resources: Set<string>;
+  logging: boolean;
 };
 type ActiveRequest = {
   view: View;
@@ -51,7 +53,7 @@ export function createNativeMcpClientBridge(params: {
   client: Client;
   transport: Transport;
   transportType: "stdio" | "sse" | "streamable-http";
-  context: NativeMcpClientContext;
+  context: NativeMcpRuntimeContext;
   signal: AbortSignal;
   invalidateCatalog: () => void;
   validatorForCall: McpToolCatalogMetadata["validatorForCall"];
@@ -66,9 +68,14 @@ export function createNativeMcpClientBridge(params: {
   ) => Promise<T>;
 }) {
   const { client } = params;
+  const resourceCleanup = new AsyncLocalStorage<boolean>();
   const send = params.transport.send.bind(params.transport);
   params.transport.send = async (message, options) => {
-    if ("method" in message && "id" in message) {
+    if (
+      "method" in message &&
+      "id" in message &&
+      !(resourceCleanup.getStore() && message.method === "resources/unsubscribe")
+    ) {
       captureGuardedFetchRequestAuthority()?.();
     }
     await send(message, options);
@@ -114,12 +121,15 @@ export function createNativeMcpClientBridge(params: {
     }
   };
   if (params.context.capabilities.roots) {
-    const roots = params.context.roots;
     client.setRequestHandler("roots/list", (_request, extra) => {
       // Roots belong to this capability context even when no operation is active.
       params.signal.throwIfAborted();
       assertOpen();
       extra.mcpReq.signal.throwIfAborted();
+      const roots = params.context.roots;
+      if (!roots) {
+        throw new Error("MCP legacy roots have not been bound");
+      }
       return roots;
     });
   }
@@ -190,6 +200,17 @@ export function createNativeMcpClientBridge(params: {
       if (owner) {
         emit({ kind: "notification", notification: value }, new Set([owner]));
       }
+    } else if (value.method === "notifications/resources/updated") {
+      emit(
+        { kind: "notification", notification: value },
+        new Set([...views].filter((view) => view.resources.has(value.params.uri))),
+      );
+    } else if (value.method === "notifications/message") {
+      const targets = new Set([...views].filter((view) => view.logging));
+      if (active.size === 1) {
+        targets.add(callbackOwner().view);
+      }
+      emit({ kind: "notification", notification: value }, targets);
     } else if (value.method.endsWith("/list_changed")) {
       params.invalidateCatalog();
       emit({ kind: "notification", notification: value });
@@ -204,7 +225,20 @@ export function createNativeMcpClientBridge(params: {
   client.setNotificationHandler("notifications/message", notification);
   client.setNotificationHandler("notifications/elicitation/complete", notification);
 
-  function bind(context: NativeMcpClientContext) {
+  const resourceSubscriptions = createNativeMcpResourceSubscriptions<View>({
+    client,
+    signal: params.signal,
+    isClosed: () => closed,
+    ended: (uri, owners) => emit({ kind: "resource-subscription-ended", uri }, owners),
+    closeLegacy: (uri) =>
+      resourceCleanup.run(true, () =>
+        params.runRequest(params.signal, (request) =>
+          client.request({ method: "resources/unsubscribe", params: { uri } }, request),
+        ),
+      ),
+  });
+
+  function bind(context: NativeMcpRuntimeContext) {
     const released = new AbortController();
     const pending = new Set<Promise<void>>();
     const viewSignal = AbortSignal.any([params.signal, released.signal]);
@@ -218,6 +252,8 @@ export function createNativeMcpClientBridge(params: {
       },
       restore: AsyncLocalStorage.snapshot(),
       listeners: new Set(),
+      resources: new Set(),
+      logging: false,
     };
     views.add(view);
     const run = async <T>(
@@ -319,7 +355,7 @@ export function createNativeMcpClientBridge(params: {
       return {
         kind: "input-required",
         result,
-        resume(responses: InputResponses, nextOptions: NativeMcpRequestOptions) {
+        resume(responses: Record<string, unknown>, nextOptions: NativeMcpRequestOptions) {
           view.assertCurrent();
           options.signal.throwIfAborted();
           options.assertCurrent();
@@ -346,6 +382,10 @@ export function createNativeMcpClientBridge(params: {
         },
       };
     };
+    const acquireResourceSubscription: NativeMcpServerView["acquireResourceSubscription"] = (
+      input,
+      options,
+    ) => resourceSubscriptions.acquire(view, input, options, (request) => run(options, request));
     const protocol: Omit<NativeMcpServerView, "runtime" | "release"> = {
       getServerInfo: () => client.getServerVersion(),
       getCapabilities: () => client.getServerCapabilities(),
@@ -370,6 +410,18 @@ export function createNativeMcpClientBridge(params: {
         run(options, (request) =>
           client.request({ method: "completion/complete", params: input }, request),
         ),
+      acquireResourceSubscription,
+      subscribeResource: (input, options) =>
+        resourceSubscriptions.subscribe(view, input, options, (request) => run(options, request)),
+      unsubscribeResource: (input, options) =>
+        resourceSubscriptions.unsubscribe(view, input, options),
+      setLoggingLevel: async (input, options) => {
+        const result = await run(options, (request) =>
+          client.request({ method: "logging/setLevel", params: input }, request),
+        );
+        view.logging = true;
+        return result;
+      },
       callTool: async (input, options) => {
         if (params.transportType === "stdio") {
           // Keep dispatch-time catalog validation through every continuation.
@@ -399,13 +451,19 @@ export function createNativeMcpClientBridge(params: {
         run({ signal: viewSignal, assertCurrent: view.assertCurrent }, runInitialize),
       async detach() {
         released.abort(new Error("MCP projection view released"));
+        const outcomes = await resourceSubscriptions.releaseOwner(view);
         await Promise.all(pending);
         views.delete(view);
+        view.resources.clear();
         view.listeners.clear();
         for (const [id, owner] of urlElicitations) {
           if (owner === view) {
             urlElicitations.delete(id);
           }
+        }
+        const failed = outcomes.find((outcome) => outcome.status === "rejected");
+        if (failed) {
+          throw failed.reason;
         }
       },
     };

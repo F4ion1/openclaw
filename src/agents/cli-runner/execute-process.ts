@@ -312,6 +312,7 @@ export async function executeCliProcess(params: {
         mcpCapture: {
           captureKey: params.initialGatewayCaptureKey,
           beginCapture: params.toolTracking.beginGatewayCapture,
+          cancelCapture: params.toolTracking.cancelCapture,
           registerTurnInterrupt: params.toolTracking.registerTurnInterrupt,
           waitForTurnInterrupt: params.toolTracking.waitForTurnInterrupt,
         },

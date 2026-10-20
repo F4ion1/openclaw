@@ -1,6 +1,20 @@
 import { SdkError, SdkErrorCode, type Transport } from "@modelcontextprotocol/client";
 import type { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
+/** The SDK has selected legacy when it emits initialize; keep its negotiation policy. */
+export function gateNativeMcpInitialize(
+  transport: Transport,
+  beforeInitialize: () => Promise<void>,
+) {
+  const originalSend = transport.send.bind(transport);
+  transport.send = async (message, options) => {
+    if ("method" in message && message.method === "initialize") {
+      await beforeInitialize();
+    }
+    await originalSend(message, options);
+  };
+}
+
 /** Observe the one disposable legacy probe without changing SDK negotiation policy. */
 export function observeNativeMcpProbe(transport: OpenClawStdioClientTransport) {
   let closeRequested = false;

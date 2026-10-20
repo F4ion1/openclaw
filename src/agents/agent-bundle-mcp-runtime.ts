@@ -4,9 +4,9 @@ import {
   type Transport,
   type Tool,
   type McpSubscription,
+  type ProtocolEra,
 } from "@modelcontextprotocol/client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
@@ -61,13 +61,19 @@ import {
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
-import { observeNativeMcpProbe } from "./native-mcp-connect.js";
-import { createNativeMcpClientBridge } from "./native-mcp-runtime-client.js";
+import { gateNativeMcpInitialize, observeNativeMcpProbe } from "./native-mcp-connect.js";
 import {
-  acquireNativeMcpServer,
-  nativeMcpRuntimeBindings,
-  type NativeMcpClientContext,
-} from "./native-mcp-runtime.js";
+  bindNativeMcpChild,
+  createNativeMcpServerView,
+  nativeMcpContextKey,
+  registerNativeMcpRuntime,
+  recordNativeMcpEra,
+  type NativeMcpPreparationOwner,
+  type NativeMcpServerRuntime as ServerMcpRuntime,
+  type NativeMcpStage,
+} from "./native-mcp-preparation.js";
+import { createNativeMcpClientBridge } from "./native-mcp-runtime-client.js";
+import type { NativeMcpRuntimeContext, NativeMcpServerView } from "./native-mcp-runtime.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 type BundleMcpSession = {
@@ -100,14 +106,6 @@ type McpServerBackoffState = {
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
 
-type ServerMcpRuntime = SessionMcpRuntime & {
-  readonly pluginOwned: boolean;
-  resetStartupBackoff: () => void;
-  readonly nativeContextKey: string | undefined;
-  readonly nativeCapabilityContext: object | undefined;
-  readonly nativeViewCount: number;
-};
-
 export function createSessionMcpRuntime(
   params: Parameters<CreateSessionMcpRuntime>[0],
   previous = new Map<string, ServerMcpRuntime>(),
@@ -120,7 +118,8 @@ function createServerMcpRuntime(
     serverName: string;
     serverConfig: ReturnType<typeof loadSessionMcpConfig>;
   },
-  nativeContext?: NativeMcpClientContext,
+  nativeContext?: NativeMcpRuntimeContext,
+  nativeStage?: NativeMcpStage,
 ): ServerMcpRuntime {
   const { loaded, fingerprint: computedFingerprint } = params.serverConfig;
   const serverName = params.serverName;
@@ -167,9 +166,8 @@ function createServerMcpRuntime(
   const catalogRetryIsDue = (): boolean =>
     catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
-  const nativeContextKey = nativeContext
-    ? stableStringify({ capabilities: nativeContext.capabilities, roots: nativeContext.roots })
-    : undefined;
+  const contextKey = (context: NativeMcpRuntimeContext, era = nativeStage?.era) =>
+    nativeMcpContextKey(context, era);
   let nativeViewCount = 0;
   const nativeChildren = new Set<ServerMcpRuntime>();
   let awaitSseRecovery = false;
@@ -313,7 +311,7 @@ function createServerMcpRuntime(
     });
 
   const loadCatalog = async (
-    discoveryContext?: NativeMcpClientContext,
+    discoveryContext: NativeMcpRuntimeContext | undefined = nativeContext,
   ): Promise<McpToolCatalog> => {
     failIfDisposed();
     if (catalogInFlight) {
@@ -362,7 +360,14 @@ function createServerMcpRuntime(
           },
           {
             capabilities: nativeContext?.capabilities ?? buildMcpClientCapabilities(mcpAppsEnabled),
-            versionNegotiation: { mode: nativeContext && !legacy ? "auto" : "legacy" },
+            versionNegotiation: {
+              mode:
+                !nativeContext || legacy || nativeStage?.era === "legacy"
+                  ? "legacy"
+                  : nativeStage?.era === "modern"
+                    ? { pin: "2026-07-28" }
+                    : "auto",
+            },
             ...(nativeContext ? { inputRequired: { autoFulfill: false } } : {}),
             jsonSchemaValidator: schemaValidator,
             ...(nativeContext
@@ -436,6 +441,14 @@ function createServerMcpRuntime(
                 ),
               ),
           });
+          if (nativeStage) {
+            gateNativeMcpInitialize(transport.transport, async () => {
+              recordNativeMcpEra(nativeStage, "legacy");
+              await racePromiseWithAbortSignal(nativeStage.bound, lifecycleAbortController.signal);
+              discoveryContext?.assertCurrent();
+              lifecycleAbortController.signal.throwIfAborted();
+            });
+          }
         }
         // The SDK exposes lifecycle hooks as callback properties. A close is
         // terminal for this client/transport pair.
@@ -484,7 +497,9 @@ function createServerMcpRuntime(
             }
           };
           const probe =
-            nativeContext && session.transport instanceof OpenClawStdioClientTransport
+            nativeContext &&
+            !nativeStage?.era &&
+            session.transport instanceof OpenClawStdioClientTransport
               ? observeNativeMcpProbe(session.transport)
               : undefined;
           try {
@@ -495,7 +510,7 @@ function createServerMcpRuntime(
                 try {
                   await connect(session!);
                 } catch (error) {
-                  if (!probe?.canRestartLegacy(error)) {
+                  if (nativeStage?.era || !probe?.canRestartLegacy(error)) {
                     throw error;
                   }
                   probe.detach();
@@ -523,6 +538,16 @@ function createServerMcpRuntime(
             probe?.detach();
           }
         }
+        if (nativeStage) {
+          const connectedEra = session.client.getProtocolEra();
+          if (!connectedEra) {
+            throw new Error("MCP connection completed without a negotiated protocol era");
+          }
+          recordNativeMcpEra(nativeStage, connectedEra);
+          await racePromiseWithAbortSignal(nativeStage.bound, lifecycleAbortController.signal);
+          discoveryContext?.assertCurrent();
+          failIfDisposed();
+        }
         if (
           session.nativeBridge &&
           session.client.getProtocolEra() === "modern" &&
@@ -537,7 +562,7 @@ function createServerMcpRuntime(
             subscribedSession.nativeSubscription = undefined;
             if (!subscribedSession.retiring && !retiredCatalog) {
               invalidateCatalog();
-              subscribedSession.nativeBridge?.emit({ kind: "invalidated" });
+              subscribedSession.nativeBridge?.emit({ kind: "catalog-subscription-ended" });
             }
           });
         }
@@ -636,7 +661,9 @@ function createServerMcpRuntime(
     }
   };
 
-  const getCatalog = async (discoveryContext?: NativeMcpClientContext): Promise<McpToolCatalog> => {
+  const getCatalog = async (
+    discoveryContext: NativeMcpRuntimeContext | undefined = nativeContext,
+  ): Promise<McpToolCatalog> => {
     failIfDisposed();
     // Shared startup failures cannot suppress listing on this session's live connection.
     if (!catalog && !currentSession?.connected) {
@@ -693,9 +720,89 @@ function createServerMcpRuntime(
     return requireConnectedSession();
   };
 
+  const cleanupNativeChild = async (child: ServerMcpRuntime) => {
+    if (child.nativeViewCount !== 0) {
+      return;
+    }
+    lastUsedAt = Math.max(lastUsedAt, child.lastUsedAt);
+    try {
+      await child.dispose();
+      await child.joinCleanup?.();
+      nativeChildren.delete(child);
+    } catch (error) {
+      cleanupFailed = true;
+      recordAgentCleanupFailure();
+      throw error;
+    }
+  };
+  const nativeOwner: NativeMcpPreparationOwner = {
+    serverName,
+    assertCurrent: failIfDisposed,
+    getServerConfig: () => loaded.mcpServers[serverName]!,
+    getConnectionOverride: () => params.connectionOverrides?.get(serverName),
+    children: nativeChildren,
+    createChild(context, stage) {
+      const child = createServerMcpRuntime(params, context, stage);
+      nativeChildren.add(child);
+      return child;
+    },
+    cleanupChild: cleanupNativeChild,
+    bindView: (context, era) => runtime.bindNativeView(context, era),
+  };
+  const bindNativeView = async (
+    context: NativeMcpRuntimeContext,
+    era: ProtocolEra,
+  ): Promise<NativeMcpServerView> => {
+    failIfDisposed();
+    context.assertCurrent();
+    const key = contextKey(context, era);
+    if (
+      !nativeContext ||
+      nativeStage?.era !== era ||
+      contextKey(nativeContext, era) !== key ||
+      nativeContext.capabilityContext !== context.capabilityContext
+    ) {
+      return bindNativeMcpChild(nativeOwner, context, era);
+    }
+    nativeStage?.activate?.();
+    nativeViewCount += 1;
+    const releaseLease = runtime.acquireLease!();
+    try {
+      await getCatalog(context);
+      if (catalogInFlight) {
+        await catalogInFlight;
+      }
+      failIfDisposed();
+      context.assertCurrent();
+      const session = requireConnectedSession();
+      if (!session.nativeBridge) {
+        throw new Error("MCP session has no projection binding");
+      }
+      const bound = session.nativeBridge.bind({
+        ...context,
+        assertCurrent() {
+          failIfDisposed();
+          context.assertCurrent();
+          if (session !== currentSession || !session.connected) {
+            throw new Error("MCP projection connection retired");
+          }
+        },
+      });
+      return createNativeMcpServerView(runtime, bound, () => {
+        nativeViewCount -= 1;
+      });
+    } catch (error) {
+      nativeViewCount -= 1;
+      throw error;
+    } finally {
+      releaseLease();
+    }
+  };
+
   const runtime: ServerMcpRuntime = {
+    bindNativeView,
     get nativeContextKey() {
-      return nativeContextKey;
+      return nativeContext ? contextKey(nativeContext) : undefined;
     },
     get nativeCapabilityContext() {
       return nativeContext?.capabilityContext;
@@ -931,120 +1038,7 @@ function createServerMcpRuntime(
       return disposal;
     },
   };
-  nativeMcpRuntimeBindings.set(runtime, {
-    hasServer: (name) => name === serverName,
-    async acquire(name, context) {
-      failIfDisposed();
-      context.assertCurrent();
-      if (name !== serverName) {
-        throw new Error(`MCP server "${name}" has no projection owner`);
-      }
-      if (context.capabilities.elicitation && !context.elicit) {
-        throw new Error("MCP elicitation capability requires a handler");
-      }
-      if (context.capabilities.sampling && !context.createMessage) {
-        throw new Error("MCP sampling capability requires a handler");
-      }
-      if (context.capabilities.extensions?.["openai/elicitation"] && !context.elicitCustom) {
-        throw new Error("MCP custom elicitation capability requires a handler");
-      }
-      const key = stableStringify({ capabilities: context.capabilities, roots: context.roots });
-      // Ordinary callers retain their legacy context in either acquisition order.
-      if (
-        !nativeContext ||
-        nativeContextKey !== key ||
-        nativeContext.capabilityContext !== context.capabilityContext
-      ) {
-        let child = [...nativeChildren].find(
-          (candidate) =>
-            candidate.nativeContextKey === key &&
-            candidate.nativeCapabilityContext === context.capabilityContext,
-        );
-        if (!child) {
-          child = createServerMcpRuntime(params, context);
-          nativeChildren.add(child);
-        }
-        const selected = child;
-        const cleanupUnused = async () => {
-          if (selected.nativeViewCount === 0) {
-            lastUsedAt = Math.max(lastUsedAt, selected.lastUsedAt);
-            try {
-              await selected.dispose();
-              await selected.joinCleanup?.();
-              nativeChildren.delete(selected);
-            } catch (error) {
-              cleanupFailed = true;
-              recordAgentCleanupFailure();
-              throw error;
-            }
-          }
-        };
-        try {
-          const view = await acquireNativeMcpServer(selected, name, context);
-          let releasePromise: Promise<void> | undefined;
-          return {
-            ...view,
-            release() {
-              return (releasePromise ??= (async () => {
-                try {
-                  await view.release();
-                } finally {
-                  await cleanupUnused();
-                }
-              })());
-            },
-          };
-        } catch (error) {
-          await cleanupUnused();
-          throw error;
-        }
-      }
-      nativeViewCount += 1;
-      const releaseLease = runtime.acquireLease!();
-      let releasePromise: Promise<void> | undefined;
-      try {
-        // Shared owners can outlive their first borrower; discovery uses this acquisition.
-        await getCatalog(context);
-        if (catalogInFlight) {
-          await catalogInFlight;
-        }
-        failIfDisposed();
-        context.assertCurrent();
-        const session = requireConnectedSession();
-        if (!session.nativeBridge) {
-          throw new Error("MCP session has no projection binding");
-        }
-        const bound = session.nativeBridge.bind({
-          ...context,
-          assertCurrent() {
-            failIfDisposed();
-            context.assertCurrent();
-            if (session !== currentSession || !session.connected) {
-              throw new Error("MCP projection connection retired");
-            }
-          },
-        });
-        return {
-          runtime,
-          ...bound.protocol,
-          release() {
-            return (releasePromise ??= (async () => {
-              try {
-                await bound.detach();
-              } finally {
-                nativeViewCount -= 1;
-              }
-            })());
-          },
-        };
-      } catch (error) {
-        nativeViewCount -= 1;
-        throw error;
-      } finally {
-        releaseLease();
-      }
-    },
-  });
+  registerNativeMcpRuntime(nativeOwner, runtime, getCatalog);
   return runtime;
 }
 

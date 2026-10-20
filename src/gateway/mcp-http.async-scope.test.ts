@@ -37,6 +37,7 @@ import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
 import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import * as nativeMcpProjection from "./native-mcp-projection.js";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority as runWithOperatorAuthority,
@@ -277,37 +278,57 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
   expect(adminDispatch).toHaveBeenCalledTimes(1);
 });
 
-it("joins accepted tool cleanup without closing a replacement listener", async () => {
-  const releaseCleanup = createDeferred();
-  const cleanupStarted = createDeferred();
-  let cleanup: Promise<unknown> | undefined;
-  execute.mockImplementationOnce(() => {
-    cleanup = trackAsyncWork(async () => {
-      cleanupStarted.resolve();
-      await releaseCleanup.promise;
-      return trackAsyncWork(() => completed);
-    });
-    return completed;
-  });
-  await ensureMcpLoopbackServer();
-  let closed = false;
-  let closing: Promise<void> | undefined;
-  try {
-    expect(await callTool()).toMatchObject({ result: { isError: false } });
-    await cleanupStarted.promise;
-    closing = closeMcpLoopbackServer().then(() => {
-      closed = true;
+it.each([false, true])(
+  "joins accepted tool cleanup without closing a replacement listener (projection failure: %s)",
+  async (projectionFails) => {
+    const releaseCleanup = createDeferred();
+    const cleanupStarted = createDeferred();
+    const projectionFailure = new Error("Native MCP projection cleanup failed");
+    const closeProjection = projectionFails
+      ? vi
+          .spyOn(nativeMcpProjection, "closeNativeMcpProjections")
+          .mockRejectedValueOnce(projectionFailure)
+      : undefined;
+    let cleanup: Promise<unknown> | undefined;
+    execute.mockImplementationOnce(() => {
+      cleanup = trackAsyncWork(async () => {
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+        return trackAsyncWork(() => completed);
+      });
+      return completed;
     });
     await ensureMcpLoopbackServer();
-    expect(await callTool()).toMatchObject({ result: { isError: false } });
-    expect(closed).toBe(false);
-    releaseCleanup.resolve();
-    await closing;
-    await expect(cleanup).resolves.toEqual(completed);
-    expect(await callTool()).toMatchObject({ result: { isError: false } });
-  } finally {
-    releaseCleanup.resolve();
-    await cleanup;
-    await closing;
-  }
-});
+    const previousPort = mcp.runtime().port;
+    let closed = false;
+    let closing: Promise<unknown> | undefined;
+    try {
+      expect(await callTool()).toMatchObject({ result: { isError: false } });
+      await cleanupStarted.promise;
+      closing = closeMcpLoopbackServer().then(
+        () => {
+          closed = true;
+        },
+        (error: unknown) => {
+          closed = true;
+          return error;
+        },
+      );
+      await ensureMcpLoopbackServer(previousPort);
+      expect(await callTool()).toMatchObject({ result: { isError: false } });
+      expect(closed).toBe(false);
+      releaseCleanup.resolve();
+      expect(await closing).toBe(projectionFails ? projectionFailure : undefined);
+      await expect(cleanup).resolves.toEqual(completed);
+      expect(await callTool()).toMatchObject({ result: { isError: false } });
+    } finally {
+      releaseCleanup.resolve();
+      try {
+        await cleanup;
+        await closing;
+      } finally {
+        closeProjection?.mockRestore();
+      }
+    }
+  },
+);

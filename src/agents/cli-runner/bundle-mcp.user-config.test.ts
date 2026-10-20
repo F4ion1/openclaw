@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
+  setActiveMcpLoopbackRuntime,
+} from "../../gateway/mcp-http.loopback-runtime.js";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { peekSessionMcpRuntime, retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
@@ -163,6 +167,9 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
   });
 
   it("omits unavailable OAuth servers without blocking the CLI agent", async () => {
+    const ownerToken = "oauth-omission-projection-owner";
+    setActiveMcpLoopbackRuntime({ port: 23119, ownerToken, nonOwnerToken: "fixture-non-owner" });
+    onTestFinished(() => clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken));
     authMocks.resolveMcpOAuthAccessToken.mockRejectedValueOnce(
       new Error('MCP server "gbrain" requires OAuth authorization.'),
     );
@@ -188,13 +195,13 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     const prepared = await prepareClaudeConfig({
       config,
       nativeMcpPolicy: cliNativeMcpPolicyContext(config, sessionId),
+      env: { OPENCLAW_MCP_TOKEN: "fixture-turn-token", OPENCLAW_MCP_CLI_CAPTURE_KEY: "" },
       warn,
     });
 
     expect(Object.keys((await readServers(prepared)) ?? {})).toEqual(["localTools"]);
-    expect([...new Set(catalogTools(sessionId)?.map((tool) => tool.serverName))]).toEqual([
-      "localTools",
-    ]);
+    expect((await readServers(prepared))?.localTools?.url).toMatch(/\/mcp\/native\//);
+    expect(catalogTools(sessionId)).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("skipped unavailable OAuth server gbrain"),
     );
@@ -241,6 +248,38 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     expect(proof.authorizationHeaders.some((value) => value?.includes("OPENCLAW_MCP_AUTH"))).toBe(
       false,
     );
+  });
+
+  it("discovers HTTP policy without starting neighboring projected stdio servers", async () => {
+    const proof = await startOAuthMcpProofServer();
+    const ownerToken = "mixed-transports-projection-owner";
+    setActiveMcpLoopbackRuntime({ port: 23119, ownerToken, nonOwnerToken: "fixture-non-owner" });
+    onTestFinished(() => clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken));
+    authMocks.resolveMcpOAuthAccessToken.mockResolvedValue("fresh-token");
+    const startedPath = path.join(
+      cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      "mixed-unexpected-start",
+    );
+    const config = userConfig({
+      docs: { transport: "streamable-http", url: proof.url, auth: "oauth" },
+      localTools: {
+        command: process.execPath,
+        args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(startedPath)}, 'started')`],
+      },
+    });
+    const prepared = await prepareClaudeConfig(
+      {
+        config,
+        nativeMcpPolicy: cliNativeMcpPolicyContext(config, "mixed-transports-policy"),
+        env: { OPENCLAW_MCP_TOKEN: "fixture-turn-token", OPENCLAW_MCP_CLI_CAPTURE_KEY: "" },
+      },
+      proof.close,
+    );
+    const servers = await readServers(prepared);
+    expect(servers?.docs?.url).toBe(proof.url);
+    expect(proof.authorizationHeaders).not.toHaveLength(0);
+    expect(servers?.localTools?.url).toMatch(/\/mcp\/native\//);
+    await expect(fs.stat(startedPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("user mcp.servers do not override the loopback additionalConfig", async () => {

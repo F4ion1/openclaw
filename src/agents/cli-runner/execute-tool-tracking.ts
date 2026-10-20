@@ -671,6 +671,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   });
   return {
     beginGatewayCapture,
+    cancelCapture(this: void) {
+      if (gatewayCaptureKey) {
+        context.preparedBackend.mcpClientGrantCapture?.deactivate(gatewayCaptureKey);
+      }
+    },
     registerTurnInterrupt(this: void, interrupt: CliBackendTurnInterrupt | undefined) {
       turnInterrupt = interrupt;
       supportsTurnInterrupt ||= interrupt !== undefined;

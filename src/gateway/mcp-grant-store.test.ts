@@ -296,8 +296,21 @@ describe("mcp-grant-store", () => {
         runtimeOwnerToken: "runtime-one",
         admittedRunContext: await admitted("run-late-binding"),
       });
-    expect(await bind()).toBe(true);
-    expect(await bind()).toBe(false);
+    const events: Array<Parameters<Parameters<typeof registerRevocations>[0]>[0]> = [];
+    const unregister = registerRevocations((event) => events.push(event));
+    try {
+      expect(await bind()).toBe(true);
+      expect(await bind()).toBe(false);
+      expect(activateCapture(grantParams(grant.token, "late-capture"))).toBeTruthy();
+      expect(deactivateCapture(grantParams(grant.token, "late-capture"))).toBe(true);
+      expect(events).toEqual([
+        { kind: "replaced", token: grant.token, runtimeOwnerToken: "runtime-one" },
+        { kind: "replaced", token: grant.token, runtimeOwnerToken: "runtime-one" },
+        { kind: "replaced", token: grant.token, runtimeOwnerToken: "runtime-one" },
+      ]);
+    } finally {
+      unregister();
+    }
   });
 
   it("transfers fresh turn authority onto a process-stable bearer", async () => {
@@ -336,7 +349,7 @@ describe("mcp-grant-store", () => {
     firstController.abort();
     expect(revokeClient(stable.token)).toBe(true);
     expect(first?.isCurrent()).toBe(false);
-    const revocations: Array<{ token: string; runtimeOwnerToken: string }> = [];
+    const revocations: Array<Parameters<Parameters<typeof registerRevocations>[0]>[0]> = [];
     const unregister = registerRevocations((event) => {
       revocations.push(event);
     });
@@ -375,8 +388,8 @@ describe("mcp-grant-store", () => {
     expect(first?.isCurrent()).toBe(false);
     expect(activateCapture(grantParams(next.token, "forged-source-capture"))).toBe(false);
     expect(revocations).toEqual([
-      { token: stable.token, runtimeOwnerToken: "runtime-one" },
-      { token: next.token, runtimeOwnerToken: "runtime-one" },
+      { kind: "replaced", token: stable.token, runtimeOwnerToken: "runtime-one" },
+      { kind: "removed", token: next.token, runtimeOwnerToken: "runtime-one" },
     ]);
     nextController.abort();
     expect(transferred?.isCurrent()).toBe(false);
@@ -388,7 +401,7 @@ describe("mcp-grant-store", () => {
       context: { sessionKey: "agent:main:successor" },
       runtimeOwnerToken: "runtime-two",
     });
-    const events: Array<{ token: string; runtimeOwnerToken: string }> = [];
+    const events: Array<Parameters<Parameters<typeof registerRevocations>[0]>[0]> = [];
     const unregister = registerRevocations((event) => {
       events.push(event);
     });
@@ -400,8 +413,8 @@ describe("mcp-grant-store", () => {
       expect(revokeClient(first.token)).toBe(false);
       expect(revokeRuntime("runtime-one")).toBe(1);
       expect(events).toEqual([
-        { token: first.token, runtimeOwnerToken: "runtime-one" },
-        { token: second.token, runtimeOwnerToken: "runtime-one" },
+        { kind: "removed", token: first.token, runtimeOwnerToken: "runtime-one" },
+        { kind: "removed", token: second.token, runtimeOwnerToken: "runtime-one" },
       ]);
     } finally {
       unregister();

@@ -396,6 +396,7 @@ export async function executePluginOwnedProcess(params: {
   mcpCapture?: {
     captureKey?: string;
     beginCapture: (captureKey: string | undefined, assertCurrent: () => void) => void;
+    cancelCapture: () => void;
     registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt | undefined) => void;
     waitForTurnInterrupt?: () => Promise<void>;
   };
@@ -483,6 +484,7 @@ export async function executePluginOwnedProcess(params: {
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
   let terminalResult: "none" | "success" | "error" = "none";
+  let executionFailed = false;
   try {
     // Host policy preparation cannot produce CLI output; start execution clocks after it.
     const requestToolPermission = await racePromiseWithAbortSignal(
@@ -658,6 +660,7 @@ export async function executePluginOwnedProcess(params: {
     }
     await params.mcpCapture?.waitForTurnInterrupt?.();
   } catch (error) {
+    executionFailed = true;
     if (run.abortSignal?.aborted || termination.reason === "manual-cancel") {
       const reason = isSignalTimeoutReason(run.abortSignal?.reason) ? "timeout" : "aborted";
       if (!params.onInterrupted?.(reason)) {
@@ -686,6 +689,10 @@ export async function executePluginOwnedProcess(params: {
       throw error;
     }
   } finally {
+    // Pending input has no live HTTP request; retire it before the outer capture drain.
+    if (executionFailed || signal.aborted || termination.reason !== "exit") {
+      params.mcpCapture?.cancelCapture();
+    }
     params.mcpCapture?.registerTurnInterrupt?.(undefined);
     watchdog?.dispose();
     stopAskUserDeadlineListener?.();

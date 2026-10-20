@@ -191,6 +191,7 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
 };
 
 type McpLoopbackClientGrantRevocation = {
+  kind: "replaced" | "removed";
   token: string;
   runtimeOwnerToken: string;
 };
@@ -331,6 +332,7 @@ function replaceMcpLoopbackClientGrant(grant: StoredMcpLoopbackClientGrant): voi
   clientGrantsByToken.set(grant.token, grant);
   // Cached tools capture a row's authority even when token and capture strings stay unchanged.
   notifyMcpLoopbackClientGrantRevoked({
+    kind: "replaced",
     token: grant.token,
     runtimeOwnerToken: grant.runtimeOwnerToken,
   });
@@ -488,10 +490,12 @@ export function transferMcpLoopbackClientGrant(params: {
   // map swap so a request can observe either the old grant or the new grant,
   // never a partially updated authority.
   notifyMcpLoopbackClientGrantRevoked({
+    kind: "replaced",
     token: params.targetToken,
     runtimeOwnerToken: params.runtimeOwnerToken,
   });
   notifyMcpLoopbackClientGrantRevoked({
+    kind: "removed",
     token: params.sourceToken,
     runtimeOwnerToken: params.runtimeOwnerToken,
   });
@@ -591,7 +595,11 @@ export function revokeMcpLoopbackClientGrant(token: string): boolean {
   }
   // Revocation must also release server-owned projections whose closures retain
   // this grant's prepared credentials.
-  notifyMcpLoopbackClientGrantRevoked({ token, runtimeOwnerToken: grant.runtimeOwnerToken });
+  notifyMcpLoopbackClientGrantRevoked({
+    kind: "removed",
+    token,
+    runtimeOwnerToken: grant.runtimeOwnerToken,
+  });
   return true;
 }
 

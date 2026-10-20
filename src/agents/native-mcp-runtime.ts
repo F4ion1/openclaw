@@ -6,12 +6,13 @@ import type {
   CompleteResult,
   CreateMessageRequestParams,
   CreateMessageResult,
+  CreateMessageResultWithTools,
   ElicitRequestParams,
   ElicitResult,
+  EmptyResult,
   GetPromptRequestParams,
   GetPromptResult,
   InputRequiredResult,
-  InputResponses,
   ListPromptsResult,
   ListResourceTemplatesResult,
   ListResourcesResult,
@@ -22,12 +23,15 @@ import type {
   ReadResourceResult,
   RequestOptions,
   ServerNotification,
+  SetLevelRequestParams,
+  SubscribeRequestParams,
+  UnsubscribeRequestParams,
 } from "@modelcontextprotocol/client";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import type { McpElicitationHandler } from "./mcp-client-elicitation.js";
 
-export type NativeMcpCallbackOptions = { signal: AbortSignal };
+type NativeMcpCallbackOptions = { signal: AbortSignal };
 export type NativeMcpClientContext = {
   /** Identity of the native client's capability lifecycle, shared by identical snapshots. */
   readonly capabilityContext: object;
@@ -46,8 +50,26 @@ export type NativeMcpClientContext = {
   createMessage?: (
     params: CreateMessageRequestParams,
     options: NativeMcpCallbackOptions,
-  ) => Promise<CreateMessageResult>;
+  ) => Promise<CreateMessageResult | CreateMessageResultWithTools>;
 };
+
+export type NativeMcpPreparationContext = Omit<NativeMcpClientContext, "roots">;
+/** Modern roots travel in request continuations; legacy roots are an immutable snapshot. */
+export type NativeMcpRuntimeContext = NativeMcpPreparationContext & {
+  readonly roots?: ListRootsResult;
+};
+
+export type NativeMcpServerPreparation =
+  | {
+      readonly era: "legacy";
+      bind: (roots: ListRootsResult) => Promise<NativeMcpServerView>;
+      release: () => Promise<void>;
+    }
+  | {
+      readonly era: "modern";
+      bind: () => Promise<NativeMcpServerView>;
+      release: () => Promise<void>;
+    };
 
 export type NativeMcpRequestOptions = NativeMcpCallbackOptions & {
   assertCurrent: () => void;
@@ -61,14 +83,15 @@ export type NativeMcpResponse<T> =
       kind: "input-required";
       result: InputRequiredResult;
       resume: (
-        responses: InputResponses,
+        responses: Record<string, unknown>,
         options: NativeMcpRequestOptions,
       ) => Promise<NativeMcpResponse<T>>;
     };
 
 export type NativeMcpServerEvent =
   | { kind: "notification"; notification: ServerNotification }
-  | { kind: "invalidated" }
+  | { kind: "resource-subscription-ended"; uri: string }
+  | { kind: "catalog-subscription-ended" }
   | { kind: "closed" };
 
 type Page<P, R> = (params: P, options: NativeMcpRequestOptions) => Promise<R>;
@@ -90,6 +113,10 @@ export type NativeMcpServerView = {
   readResource: Flow<ReadResourceRequestParams, ReadResourceResult>;
   getPrompt: Flow<GetPromptRequestParams, GetPromptResult>;
   complete: Page<CompleteRequestParams, CompleteResult>;
+  acquireResourceSubscription: Page<SubscribeRequestParams, { release: () => Promise<void> }>;
+  subscribeResource: Page<SubscribeRequestParams, EmptyResult>;
+  unsubscribeResource: Page<UnsubscribeRequestParams, EmptyResult>;
+  setLoggingLevel: Page<SetLevelRequestParams, EmptyResult>;
   /** Announces this snapshot; a different roots snapshot belongs to a new acquisition. */
   rootsChanged: (options: NativeMcpRequestOptions) => Promise<void>;
   subscribe: (listener: (event: NativeMcpServerEvent) => void) => () => void;
@@ -98,7 +125,12 @@ export type NativeMcpServerView = {
 
 export type NativeMcpRuntimeBinding = {
   hasServer: (serverName: string) => boolean;
-  acquire: (serverName: string, context: NativeMcpClientContext) => Promise<NativeMcpServerView>;
+  getCatalog: (serverName: string) => Promise<McpToolCatalog>;
+  prepare: (
+    serverName: string,
+    context: NativeMcpPreparationContext,
+    options?: { negotiation: "auto" | "legacy" },
+  ) => Promise<NativeMcpServerPreparation>;
 };
 
 // A binding exposes operations; the session runtime remains the only transport/lifecycle owner.
@@ -107,22 +139,61 @@ export const nativeMcpRuntimeBindings = resolveGlobalSingleton(
   () => new WeakMap<SessionMcpRuntime, NativeMcpRuntimeBinding>(),
 );
 
-export async function acquireNativeMcpServer(
+export async function getNativeMcpServerCatalog(
   runtime: SessionMcpRuntime,
   serverName: string,
-  context: NativeMcpClientContext,
-): Promise<NativeMcpServerView> {
+): Promise<McpToolCatalog> {
+  const binding = nativeMcpRuntimeBindings.get(runtime);
+  if (!binding) {
+    throw new Error("MCP runtime has no projection binding");
+  }
+  return binding.getCatalog(serverName);
+}
+
+export async function prepareNativeMcpServer(
+  runtime: SessionMcpRuntime,
+  serverName: string,
+  context: NativeMcpPreparationContext,
+  options?: { negotiation: "auto" | "legacy" },
+): Promise<NativeMcpServerPreparation> {
   context.assertCurrent();
   const binding = nativeMcpRuntimeBindings.get(runtime);
   if (!binding) {
     throw new Error("MCP runtime has no projection binding");
   }
-  const view = await binding.acquire(serverName, context);
+  // Project only preparation fields: structurally compatible callers may still carry roots.
+  const preparation = await binding.prepare(
+    serverName,
+    {
+      capabilityContext: context.capabilityContext,
+      capabilities: context.capabilities,
+      assertCurrent: () => context.assertCurrent(),
+      ...(context.elicit ? { elicit: context.elicit } : {}),
+      ...(context.elicitCustom ? { elicitCustom: context.elicitCustom } : {}),
+      ...(context.createMessage ? { createMessage: context.createMessage } : {}),
+    },
+    options,
+  );
   try {
     context.assertCurrent();
-    return view;
+    return preparation;
   } catch (error) {
-    await view.release();
+    await preparation.release();
     throw error;
+  }
+}
+
+export async function acquireNativeMcpServer(
+  runtime: SessionMcpRuntime,
+  serverName: string,
+  context: NativeMcpClientContext,
+): Promise<NativeMcpServerView> {
+  const preparation = await prepareNativeMcpServer(runtime, serverName, context);
+  try {
+    return await (preparation.era === "legacy"
+      ? preparation.bind(context.roots)
+      : preparation.bind());
+  } finally {
+    await preparation.release();
   }
 }

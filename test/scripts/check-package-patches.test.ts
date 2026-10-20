@@ -34,6 +34,7 @@ afterEach(() => {
 describe("check-package-patches", () => {
   it("allows approved pnpm patches together", () => {
     const approvedPatches = [
+      ["@modelcontextprotocol/server@2.3.1", "patches/@modelcontextprotocol__server@2.3.1.patch"],
       ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
       ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
       ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
