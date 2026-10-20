@@ -5,6 +5,7 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceIdentity,
   type QaEvidenceStatus,
+  type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
@@ -30,6 +31,27 @@ const identity: QaEvidenceIdentity = {
 const readTaxonomy = () =>
   readQaMaturityTaxonomySource(path.resolve(import.meta.dirname, "../../../taxonomy.yaml"));
 const passing = { first: "pass", second: "pass" } as const;
+const makeEntry = (
+  id: string,
+  status: QaEvidenceStatus,
+  coverage: QaEvidenceSummaryEntry["coverage"] = [],
+  kind: "flow" | "script" = "script",
+) => ({ test: { id, title: id, kind }, coverage, result: { status } });
+
+function receipt(id: string, phase: "runtime" | "prepared", launch = identity) {
+  const runtime = phase === "runtime";
+  return {
+    id,
+    phase,
+    identity: launch,
+    artifact: {
+      kind: runtime ? "fixture" : "producer-evidence",
+      source: runtime ? "qa-suite" : "script",
+      path: runtime ? "fixture.json" : "qa-evidence.json",
+      sha256: (runtime ? "a" : "b").repeat(64),
+    },
+  };
+}
 
 function inspect(params: Parameters<typeof buildQaScorecardGapReport>[0]) {
   const before = JSON.stringify(params);
@@ -50,20 +72,11 @@ function fixture(
   const [primary, secondary] = coverageIds;
   const taxonomy = readTaxonomy();
   const surface = taxonomy.surfaces.find((item) => !item.archived)!;
-  taxonomy.surfaces = [
-    {
-      ...surface,
-      categories: [
-        {
-          ...surface.categories[0]!,
-          features: coverageIds.map((id) => ({
-            name: id,
-            coverageIds: [id],
-          })),
-        },
-      ],
-    },
-  ];
+  const category = {
+    ...surface.categories[0]!,
+    features: coverageIds.map((id) => ({ name: id, coverageIds: [id] })),
+  };
+  taxonomy.surfaces = [{ ...surface, categories: [category] }];
   const requirements: QaProofRequirements = [
     {
       id: "declared-proof",
@@ -87,6 +100,9 @@ function fixture(
       coverage: [{ id: primary, role: "primary" }],
     })),
   };
+  const cells = [
+    { scenarioId: scenario.id, executionKind: scenario.execution.kind, channel: null },
+  ];
   const plan = () =>
     qaProfileEvidencePlan.build({
       profile: "all",
@@ -95,18 +111,10 @@ function fixture(
       membershipScenarios: [scenario],
       selectedScenarios: [scenario],
       excludedScenarios: [],
-      expectedCells: [
-        { scenarioId: scenario.id, executionKind: scenario.execution.kind, channel: null },
-      ],
-      observedCells: [
-        { scenarioId: scenario.id, executionKind: scenario.execution.kind, channel: null },
-      ],
+      expectedCells: cells,
+      observedCells: cells,
     });
-  const owner = createQaEvidenceInvocation({
-    scenarios: [scenario],
-    channel: null,
-    launch,
-  });
+  const owner = createQaEvidenceInvocation({ scenarios: [scenario], channel: null, launch });
   function complete(
     statuses: Partial<Record<"first" | "second", QaEvidenceStatus>> = passing,
     terminalStatus: QaEvidenceStatus = "pass",
@@ -114,26 +122,13 @@ function fixture(
     const id = owner.begin(0);
     owner.complete(id, {
       status: terminalStatus,
-      entries: Object.entries(statuses).map(([assertionId, status]) => ({
-        test: { id: scenario.id, title: "Fixture", kind: "flow" },
-        coverage: [{ id: primary, role: "primary" }],
-        binding: { occurrenceId: id, assertionId, receiptId: "receipt" },
-        effective: true,
-        result: { status },
-      })),
-      receipts: [
-        {
-          id: "receipt",
-          phase: "runtime",
-          identity: launch,
-          artifact: {
-            kind: "fixture",
-            path: "fixture.json",
-            source: "qa-suite",
-            sha256: "a".repeat(64),
-          },
-        },
-      ],
+      entries: Object.entries(statuses).map(([assertionId, status]) =>
+        Object.assign(makeEntry(scenario.id, status, [{ id: primary, role: "primary" }], "flow"), {
+          binding: { occurrenceId: id, assertionId, receiptId: "receipt" },
+          effective: true,
+        }),
+      ),
+      receipts: [receipt("receipt", "runtime", launch)],
     });
     owner.select(0, id);
     return id;
@@ -199,19 +194,10 @@ describe("scorecard gap report", () => {
     };
     f.complete();
     const matched = f.report(mode);
-    expect(matched.coverage.find((row) => row.coverageId === primary)).toMatchObject({
-      catalogStatus: "primary",
-      qualification: "qualified",
-    });
-    expect(matched.coverage.find((row) => row.coverageId === secondary)).toMatchObject({
-      catalogStatus: "secondary-only",
-      qualification: "unknown",
-      observed: [],
-    });
-    expect(matched.coverage.find((row) => row.coverageId === unrelated)).toMatchObject({
-      catalogStatus: "unmapped",
-      qualification: "unknown",
-      observed: [],
+    expect(Object.fromEntries(matched.coverage.map((row) => [row.coverageId, row]))).toMatchObject({
+      [primary]: { catalogStatus: "primary", qualification: "qualified" },
+      [secondary]: { catalogStatus: "secondary-only", qualification: "unknown", observed: [] },
+      [unrelated]: { catalogStatus: "unmapped", qualification: "unknown", observed: [] },
     });
     for (const alternative of [
       { protocol: "fixture-wecom-bot-json-webhook", accountRef: "fixture-bot-account" },
@@ -222,9 +208,9 @@ describe("scorecard gap report", () => {
       expect(mismatched.coverage.find((row) => row.coverageId === primary)?.qualification).toBe(
         "gap",
       );
-      expect(mismatched.declarations[0]?.checks).toEqual([
-        expect.objectContaining({ assertionId: "first", status: "stale" }),
-        expect.objectContaining({ assertionId: "second", status: "stale" }),
+      expect(mismatched.declarations[0]?.checks).toMatchObject([
+        { assertionId: "first", status: "stale" },
+        { assertionId: "second", status: "stale" },
       ]);
     }
   });
@@ -505,26 +491,8 @@ describe("scorecard gap report", () => {
       status: "fail",
       childEvidence: f.evidence(),
       childCoverage: [{ id: "channels.dm", role }],
-      entries: [
-        {
-          test: { kind: "script", id: "outer", title: "outer" },
-          coverage: [],
-          result: { status: "fail" },
-        },
-      ],
-      receipts: [
-        {
-          id: "bundle",
-          phase: "prepared",
-          identity,
-          artifact: {
-            kind: "producer-evidence",
-            source: "script",
-            path: "qa-evidence.json",
-            sha256: "b".repeat(64),
-          },
-        },
-      ],
+      entries: [makeEntry("outer", "fail")],
+      receipts: [receipt("bundle", "prepared")],
     });
     parent.select(0, id);
     const evidence = {
@@ -548,16 +516,8 @@ describe("scorecard gap report", () => {
       evidenceMode: "full",
       profile: "all",
       entries: [
-        {
-          test: { id: "unmapped", title: "Unmapped diagnostic", kind: "script" },
-          coverage: [],
-          result: { status: "blocked" },
-        },
-        {
-          test: { id: "retired", title: "Retired observation", kind: "script" },
-          coverage: [{ id: "channels.retired", role: "primary" }],
-          result: { status: "fail" },
-        },
+        makeEntry("unmapped", "blocked"),
+        makeEntry("retired", "fail", [{ id: "channels.retired", role: "primary" }]),
       ],
     });
     const report = f.reportEvidence(evidence);

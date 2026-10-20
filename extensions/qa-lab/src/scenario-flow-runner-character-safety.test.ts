@@ -39,10 +39,7 @@ function createCharacterScenarioApi(
     normalizeLowercaseStringOrEmpty,
     resolveQaLiveTurnTimeoutMs: () => 10,
     waitForOutboundMessage: async (
-      state: ReturnType<typeof createQaBusState>,
-      predicate: Parameters<typeof waitForOutboundMessage>[1],
-      timeoutMs: number,
-      options?: Parameters<typeof waitForOutboundMessage>[3],
+      ...[state, predicate, timeoutMs, options]: Parameters<typeof waitForOutboundMessage>
     ) => {
       onWaitForOutboundMessage?.(state);
       return await waitForOutboundMessage(state, predicate, timeoutMs, {

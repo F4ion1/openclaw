@@ -27,43 +27,33 @@ function normalizeModelRef(raw: string) {
 
 async function runToolContinuity(
   params: {
-    alternateReplyText?: string;
-    alternateOutboundText?: string;
-    alternateResponseModel?: string;
-    alternateRerouted?: boolean;
-    alternateEffective?: { provider?: string; model?: string };
-    unrelatedLaterOutboundText?: string;
+    reply?: string;
+    outbound?: string;
+    responseModel?: string;
+    rerouted?: boolean;
+    effective?: { provider?: string; model?: string };
+    laterText?: string;
   } = {},
 ) {
   const state = createQaBusState();
+  const send = (text: string) =>
+    state.addOutboundMessage({ accountId: "qa-channel", to: "dm:qa-operator", text });
   let call = 0;
   const runAgentPrompt = vi.fn(
     async (_env: unknown, prompt: { provider?: string; model?: string }) => {
       call += 1;
+      const alternate: typeof params = call === 2 ? params : {};
       const runId = `run-${call}`;
-      const provider = prompt.provider ?? "openai";
-      const model = prompt.model ?? "primary-model";
-      const effective = {
-        provider: (call === 2 ? params?.alternateEffective?.provider : undefined) ?? provider,
-        model: (call === 2 ? params?.alternateEffective?.model : undefined) ?? model,
-      };
-      const responseModel =
-        call === 2 ? (params?.alternateResponseModel ?? effective.model) : effective.model;
+      const { provider = "openai", model = "primary-model" } = prompt;
+      const effective = { provider, model, ...alternate.effective };
+      const responseModel = alternate.responseModel ?? effective.model;
       const replyText =
         call === 1
           ? "the QA scenario pack verifies source and docs"
-          : (params.alternateReplyText ?? continuity);
-      state.addOutboundMessage({
-        accountId: "qa-channel",
-        to: "dm:qa-operator",
-        text: call === 1 ? replyText : (params?.alternateOutboundText ?? replyText),
-      });
-      if (call === 2 && params?.unrelatedLaterOutboundText) {
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-operator",
-          text: params.unrelatedLaterOutboundText,
-        });
+          : (alternate.reply ?? continuity);
+      send(alternate.outbound ?? replyText);
+      if (alternate.laterText) {
+        send(alternate.laterText);
       }
       return {
         started: { runId },
@@ -79,8 +69,7 @@ async function runToolContinuity(
             effective: { ...effective, responseModel },
             successfulToolNames: ["read"],
             rerouted:
-              (call === 2 ? params?.alternateRerouted : undefined) ??
-              (effective.provider !== provider || responseModel !== model),
+              alternate.rerouted ?? (effective.provider !== provider || responseModel !== model),
             terminalDisposition: "visible",
           },
         },
@@ -110,10 +99,10 @@ async function runToolContinuity(
 describe("model-switch tool continuity terminal evidence", () => {
   it("invokes the canonical alias target and accepts run-owned delivery", async () => {
     const { result, runAgentPrompt } = await runToolContinuity({
-      alternateReplyText: richContinuity,
-      alternateOutboundText: continuity,
-      alternateResponseModel: "alternate-model-concrete",
-      alternateRerouted: false,
+      reply: richContinuity,
+      outbound: continuity,
+      responseModel: "alternate-model-concrete",
+      rerouted: false,
     });
 
     expect(result.status).toBe("pass");
@@ -132,32 +121,24 @@ describe("model-switch tool continuity terminal evidence", () => {
   });
 
   it.each([
-    { changed: "model", alternateEffective: { model: "fallback-model" } },
-    { changed: "provider", alternateEffective: { provider: "fallback-provider" } },
-  ])(
-    "requires a changed alternate effective $changed to be marked rerouted",
-    async ({ alternateEffective }) => {
-      const { result } = await runToolContinuity({
-        alternateEffective,
-        alternateRerouted: true,
-      });
-      expect(result.status).toBe("pass");
+    { changed: "model", effective: { model: "fallback-model" } },
+    { changed: "provider", effective: { provider: "fallback-provider" } },
+  ])("requires changed $changed to be marked rerouted", async ({ effective }) => {
+    const { result } = await runToolContinuity({ effective, rerouted: true });
+    expect(result.status).toBe("pass");
 
-      await expect(
-        runToolContinuity({ alternateEffective, alternateRerouted: false }),
-      ).rejects.toThrow(readError);
-    },
-  );
+    await expect(runToolContinuity({ effective, rerouted: false })).rejects.toThrow(readError);
+  });
 
   it("rejects an unchanged alternate route reported as rerouted", async () => {
-    await expect(runToolContinuity({ alternateRerouted: true })).rejects.toThrow(readError);
+    await expect(runToolContinuity({ rerouted: true })).rejects.toThrow(readError);
   });
 
   it("rejects unrelated later continuity text when the alternate reply lacks it", async () => {
     await expect(
       runToolContinuity({
-        alternateReplyText: "the alternate tool run completed",
-        unrelatedLaterOutboundText: continuity,
+        reply: "the alternate tool run completed",
+        laterText: continuity,
       }),
     ).rejects.toThrow("alternate-model terminal reply missed kickoff continuity");
   });

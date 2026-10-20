@@ -2,6 +2,7 @@ import type { WorkerProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { createStaticSshWorkerProvider } from "./static-ssh-worker-provider.js";
 
+const provider = createStaticSshWorkerProvider();
 const KEY_REF = {
   source: "file" as const,
   provider: "default",
@@ -22,7 +23,6 @@ const invalid = (label: string, overrides: WorkerProfile) => ({
 
 describe("QA Lab static-SSH worker provider", () => {
   it("provisions a deterministic logical lease with the default SSH port", async () => {
-    const provider = createStaticSshWorkerProvider();
     const profile = {
       ...PROFILE,
       host: " worker.example.test ",
@@ -56,8 +56,6 @@ describe("QA Lab static-SSH worker provider", () => {
   });
 
   it("preserves an explicit positive SSH port", async () => {
-    const provider = createStaticSshWorkerProvider();
-
     await expect(
       provider.provision({ ...PROFILE, port: 2222 }, "operation-456", authority),
     ).resolves.toMatchObject({ ssh: { port: 2222 } });
@@ -86,16 +84,12 @@ describe("QA Lab static-SSH worker provider", () => {
     invalid("hostKey", { hostKey: "ssh-ed25519 A" }),
     invalid("hostKey", { hostKey: [HOST_KEY, "x".repeat(16_384)].join(" ") }),
   ])("rejects an invalid $label", async ({ label, profile }) => {
-    const provider = createStaticSshWorkerProvider();
-
     const provision = provider.provision(profile, "operation-invalid", authority);
     await expect(provision).rejects.toThrow(label);
     await expect(provision).rejects.toMatchObject({ code: "invalid_profile" });
   });
 
   it("reports only its deterministic lease ids as active", async () => {
-    const provider = createStaticSshWorkerProvider();
-
     await expect(
       provider.inspect({ leaseId: "static-ssh:operation-123", profile: PROFILE }),
     ).resolves.toStrictEqual({
@@ -111,8 +105,6 @@ describe("QA Lab static-SSH worker provider", () => {
   });
 
   it("destroys logical leases idempotently", async () => {
-    const provider = createStaticSshWorkerProvider();
-
     const lease = { leaseId: "static-ssh:operation-123", profile: PROFILE };
     await expect(provider.destroy(lease)).resolves.toBeUndefined();
     await expect(provider.destroy(lease)).resolves.toBeUndefined();
