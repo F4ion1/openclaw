@@ -25,7 +25,8 @@ import {
 } from "./requester-cron-authority.test-support.js";
 
 // Node inventory is unrelated to causal creator capture at the Cron commit boundary.
-vi.mock("../../agents/node-exec-availability.js", () => ({
+vi.mock("../../agents/node-exec-availability.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/node-exec-availability.js")>()),
   loadNodeExecAvailability: async () => ({ cacheKey: "no-nodes", isAvailable: () => false }),
 }));
 
