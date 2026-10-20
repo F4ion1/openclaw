@@ -1301,6 +1301,10 @@ directory, and requires recovery within two seconds. Do not combine it with
 mutation, churn, or extra polling fixtures. The report includes
 `missingRecoveryMs`; both revisions must return identical absent-checkout
 responses. Compare at least two simultaneous pairs with swapped CPU halves.
+RPC reports also include `processCpuMsPerRpc`, the Gateway process's CPU during
+the measured window divided by completed requests. This includes its worker
+threads but excludes child Git processes; compare it with command counts and
+latency, not as total system CPU.
 
 Add `--nested-cwd` to launch each session from the fixture's `new/` subdirectory.
 This exercises checkout discovery through a session's working directory instead

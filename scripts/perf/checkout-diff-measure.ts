@@ -642,6 +642,7 @@ async function measureRpc(fixture: object) {
       }
     };
     measured = true;
+    const cpuStarted = process.cpuUsage();
     const started = performance.now();
     deadline = started + durationMs;
     await Promise.all([
@@ -755,6 +756,8 @@ async function measureRpc(fixture: object) {
       })(),
     ]);
     const elapsedMs = performance.now() - started;
+    const cpuUsed = process.cpuUsage(cpuStarted);
+    const processCpuMs = (cpuUsed.user + cpuUsed.system) / 1_000;
     await waitForDiagnosticEventsDrained();
     measured = false;
     let missingRecoveryMs: number | null = null;
@@ -928,6 +931,8 @@ async function measureRpc(fixture: object) {
       pollMs,
       node: process.version,
       elapsedMs,
+      processCpuMs,
+      processCpuMsPerRpc: processCpuMs / rpcSamples.length,
       rpcLatencyMs: summarize(rpcSamples.map((sample) => sample.elapsedMs)),
       rpcRoundLatencyMs: summarize([...roundMaxMs.values()]),
       heavyContentMs: heavyMs.length ? summarize(heavyMs) : null,
