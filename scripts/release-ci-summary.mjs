@@ -530,7 +530,35 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
   ) {
     throw new Error("publication original admission did not succeed; use a fresh parent");
   }
-  const sealAttempt = cachedPlan?.sealParentRunAttempt ?? 1;
+  const expectedPlan = {
+    publicationAdmissionContract: "1",
+    sourceAdmissionContract: "1",
+    repository: request.repository,
+    parentRunId: request.runId,
+    sourceParentRunAttempt: 1,
+    targetSha: request.candidateSha,
+    targetContextRef: request.targetContextRef,
+    trustedWorkflowFullRef: request.tooling.ref,
+    trustedWorkflowSha: request.tooling.sha,
+    workflowRef: branch,
+    workflowSha: request.workflow.sha,
+    releaseProfile: request.coverage.release_profile,
+    rerunGroup: request.coverage.rerun_group,
+  };
+  const loadedEvidence =
+    cachedPlan === undefined ? evidenceClient.loadExecutionPlanEvidence(request.runId) : undefined;
+  if (
+    loadedEvidence?.artifact &&
+    (loadedEvidence.artifact.workflow_run?.head_sha !== original.head_sha ||
+      loadedEvidence.artifact.workflow_run?.head_branch !== original.head_branch)
+  ) {
+    throw new Error("publication original plan artifact producer mismatch");
+  }
+  const candidatePlan = validateReleaseExecutionPlanArtifact(
+    cachedPlan ?? loadedEvidence?.plan,
+    expectedPlan,
+  );
+  const sealAttempt = candidatePlan.sealParentRunAttempt ?? 1;
   const sealJobs =
     sealAttempt === 1
       ? jobs
@@ -582,7 +610,7 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
   const retained =
     originalDigest && cachedPlan !== undefined
       ? { plan: cachedPlan }
-      : evidenceClient.loadExecutionPlanEvidence(request.runId);
+      : (loadedEvidence ?? evidenceClient.loadExecutionPlanEvidence(request.runId));
   if (
     !retained ||
     (retained.artifact &&
@@ -597,21 +625,7 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
       throw new Error("publication original plan artifact producer mismatch");
     }
   }
-  const plan = validateReleaseExecutionPlanArtifact(retained.plan, {
-    publicationAdmissionContract: "1",
-    sourceAdmissionContract: "1",
-    repository: request.repository,
-    parentRunId: request.runId,
-    sourceParentRunAttempt: 1,
-    targetSha: request.candidateSha,
-    targetContextRef: request.targetContextRef,
-    trustedWorkflowFullRef: request.tooling.ref,
-    trustedWorkflowSha: request.tooling.sha,
-    workflowRef: branch,
-    workflowSha: request.workflow.sha,
-    releaseProfile: request.coverage.release_profile,
-    rerunGroup: request.coverage.rerun_group,
-  });
+  const plan = validateReleaseExecutionPlanArtifact(retained.plan, expectedPlan);
   if (
     (originalDigest && plan.sha256 !== originalDigest) ||
     (cachedPlan !== undefined &&

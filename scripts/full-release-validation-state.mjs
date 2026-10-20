@@ -860,13 +860,28 @@ async function publicationMode(mode) {
       const inputs = parsePlanInputs(
         JSON.stringify(readArtifact(inputsPath, "execution plan inputs")),
       );
-      const record = {
+      const inputRecord = {
         sourceAdmissionContract: inputs.sourceAdmissionContract,
         sourceAdmission: inputs.sourceAdmission,
-        publicationAdmissionContract: inputs.publicationAdmissionContract,
-        publicationAdmission: inputs.publicationAdmission,
       };
-      const source = validatePublicationSourceBinding(record, {
+      const source = validatePublicationSourceBinding(inputRecord, {
+        repository: request.repository,
+        targetSha: request.candidateSha,
+        targetContextRef: request.targetContextRef,
+        trustedWorkflowFullRef: request.tooling.ref,
+        trustedWorkflowSha: request.tooling.sha,
+        parentRunId: request.runId,
+        sourceParentRunAttempt: 1,
+        workflowRef: request.workflow.ref.replace(/^refs\/(?:heads|tags)\//u, ""),
+        workflowSha: request.workflow.sha,
+        releaseProfile: request.coverage.release_profile,
+        rerunGroup: request.coverage.rerun_group,
+      });
+      const record = readArtifact(
+        join(dirname(inputsPath), "publication-admission.json"),
+        "pre-seal publication admission",
+      );
+      const checkpointSource = validatePublicationSourceBinding(record, {
         repository: request.repository,
         targetSha: request.candidateSha,
         targetContextRef: request.targetContextRef,
@@ -880,6 +895,7 @@ async function publicationMode(mode) {
         rerunGroup: request.coverage.rerun_group,
       });
       if (
+        publicationSourceJson(source) !== publicationSourceJson(checkpointSource) ||
         publicationSourceJson(source.coverage) !== publicationSourceJson(request.coverage) ||
         publicationSourceJson(source.publicationSelection) !==
           publicationSourceJson(request.publicationSelection) ||
