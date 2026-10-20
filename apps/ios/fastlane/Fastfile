@@ -547,10 +547,10 @@ def build_watch_screenshot_app
   app_path
 end
 
-def capture_watch_screenshot(diagnostics: nil)
+def capture_watch_screenshot(diagnostics: nil, output_directory: nil)
   device = resolve_simulator_device(watch_snapshot_device, diagnostics: diagnostics)
   device_name = device.fetch("name")
-  output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
+  output_dir = output_directory || File.join(ios_root, "fastlane", "screenshots", "en-US")
   output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
 
   FileUtils.mkdir_p(output_dir)
@@ -2404,6 +2404,19 @@ platform :ios do
       )
     end
 
+    # Capture Watch before the per-device iOS cleanup removes the available
+    # Watch inventory. Stage it separately so the exact iOS manifest stays valid.
+    watch_screenshot_staging_directory = File.join(ios_root, "build", "SnapshotWatchScreenshots")
+    FileUtils.rm_rf(watch_screenshot_staging_directory)
+    watch_screenshot_path = unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
+      capture_watch_screenshot(
+        diagnostics: diagnostics,
+        output_directory: watch_screenshot_staging_directory
+      ) do
+        File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+      end
+    end
+
     # SnapshotHelper.swift consumes these files from SIMULATOR_HOST_HOME.
     snapshot_cache_directory = File.expand_path("~/Library/Caches/tools.fastlane")
     FileUtils.mkdir_p(File.join(snapshot_cache_directory, "screenshots"))
@@ -2445,13 +2458,12 @@ platform :ios do
     # Snapshot fixes its result bundles under the screenshot root. Keep successful
     # evidence in build/ so Deliver sees only locale directories during validation.
     FileUtils.rm_rf(File.join(output_directory, "test_output"))
-
-    unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
-      # The fresh OpenClawUITests build also compiles its Watch app dependency.
-      # Keep this product in the same invocation; standalone capture builds separately.
-      capture_watch_screenshot(diagnostics: diagnostics) do
-        File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
-      end
+    if watch_screenshot_path
+      FileUtils.mv(
+        watch_screenshot_path,
+        File.join(output_directory, "en-US", File.basename(watch_screenshot_path))
+      )
+      FileUtils.rm_rf(watch_screenshot_staging_directory)
     end
   end
 

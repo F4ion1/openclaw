@@ -876,7 +876,7 @@ puts JSON.generate(rows)
     expect(rootTabs).toContain("self.selectedSidebarDestination.rawValue");
   });
 
-  it("requires the exact nonempty PNG manifest before Watch capture", () => {
+  it("captures Watch before iOS simulator cleanup and validates the exact iOS manifest", () => {
     const fastfile = readFastfile();
     const screenshots = laneBody(fastfile, "screenshots");
     const snapshotDevices = functionBody(fastfile, "snapshot_devices");
@@ -894,11 +894,15 @@ puts JSON.generate(rows)
     expect(verifier).toContain("actual_names - expected_names");
     expect(verifier).toContain("File.size?(path)");
     expect(verifier).toContain("PNG_SIGNATURE");
+    expect(screenshots.indexOf("capture_watch_screenshot")).toBeLessThan(
+      screenshots.indexOf("selected_devices.each"),
+    );
     expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeGreaterThan(
       screenshots.indexOf("RELEASE_IOS_SCREENSHOT_TESTS.each"),
     );
-    expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeLessThan(
-      screenshots.indexOf("capture_watch_screenshot"),
+    expect(screenshots).toContain("output_directory: watch_screenshot_staging_directory");
+    expect(screenshots.indexOf("FileUtils.mv(")).toBeGreaterThan(
+      screenshots.indexOf("verify_release_ios_screenshot_manifest!"),
     );
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
   });
@@ -1080,8 +1084,12 @@ def sh(command, *arguments, **_options)
     device["state"] = @scenario == "boot-ended" && device.fetch("name").include?("Apple Watch") ? "Shutdown" : "Booted"
     raise "boot failed" if @scenario == "boot-failure"
   elsif args[0, 3] == ["xcrun", "simctl", "shutdown"]
-    raise "cleanup failed" if @scenario == "capture-cleanup-failure" || @scenario == "cleanup-failure"
-    @owned.fetch(args[3])["state"] = "Shutdown"
+    device = @owned.fetch(args[3])
+    if !device.fetch("name").include?("Apple Watch") &&
+        (@scenario == "capture-cleanup-failure" || @scenario == "cleanup-failure")
+      raise "cleanup failed"
+    end
+    device["state"] = "Shutdown"
   elsif args[0, 3] == ["xcrun", "simctl", "delete"]
     @owned.delete(args[3])
   elsif args.include?("xcodebuild") && args.include?("build")
@@ -1238,8 +1246,8 @@ puts JSON.generate(results)
     for (const scenario of ["missing", "invalid-plist", "invalid-install"]) {
       expect(row(scenario), scenario).toMatchObject({
         builds: ["snapshot"],
-        pngs: 8,
-        xcresults: 8,
+        pngs: 0,
+        xcresults: 0,
         attempts: true,
       });
     }
@@ -1271,14 +1279,14 @@ puts JSON.generate(results)
       row("combined")
         .lifecycle.filter(([operation]) => operation === "create")
         .map(([, name]) => name),
-    ).toEqual(["iPhone 17 Pro Max", "iPad Pro 13-inch", "Apple Watch Ultra 3 (49mm)"]);
+    ).toEqual(["Apple Watch Ultra 3 (49mm)", "iPhone 17 Pro Max", "iPad Pro 13-inch"]);
     expect(row("busy").error).toContain("shut down the 1 active simulator");
     expect(row("busy").lifecycle).toEqual([]);
     expect(row("boot-failure").error).toBe("boot failed");
     expect(row("boot-ended")).toMatchObject({
       error:
-        "Task-owned screenshot simulator 00000000-0000-0000-0000-000000000003 is Shutdown, not Booted; CoreSimulator ended its session.",
-      pngs: 8,
+        "Task-owned screenshot simulator 00000000-0000-0000-0000-000000000001 is Shutdown, not Booted; CoreSimulator ended its session.",
+      pngs: 0,
     });
     expect(row("boot-ended").lifecycle.slice(-3)).toEqual([
       [
@@ -1287,8 +1295,8 @@ puts JSON.generate(results)
         "watch-type",
         "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
       ],
-      ["bootstatus", "00000000-0000-0000-0000-000000000003", "-b"],
-      ["delete", "00000000-0000-0000-0000-000000000003"],
+      ["bootstatus", "00000000-0000-0000-0000-000000000001", "-b"],
+      ["delete", "00000000-0000-0000-0000-000000000001"],
     ]);
     expect(row("capture-failure").error).toBe("capture failed");
     expect(row("capture-cleanup-failure").error).toBe("capture failed");
