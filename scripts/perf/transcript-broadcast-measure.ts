@@ -89,6 +89,7 @@ const { values } = parseArgs({
     "memory-interval-ms": { type: "string", default: "60000" },
     "worker-memory": { type: "boolean", default: false },
     "worker-snapshots": { type: "boolean", default: false },
+    "models-interval-ms": { type: "string", default: "0" },
     "idle-duration-ms": { type: "string", default: "0" },
     "retained-profile-ms": { type: "string", default: "600000" },
     "reset-every-rounds": { type: "string", default: "20" },
@@ -184,6 +185,10 @@ const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
 const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
 const workerMemory = values["worker-memory"] || values["worker-snapshots"];
+const modelsIntervalMs = integer(values["models-interval-ms"], "--models-interval-ms", 0);
+if (modelsIntervalMs && !workerMemory) {
+  throw new Error("--models-interval-ms requires --worker-memory or --worker-snapshots");
+}
 const idleDurationMs = integer(values["idle-duration-ms"], "--idle-duration-ms", 0);
 if ((workerMemory || idleDurationMs > 0) && !soakScenario) {
   throw new Error("Worker measurements and --idle-duration-ms require --scenario memory-soak");
@@ -1874,6 +1879,7 @@ async function connectClient(index: number) {
   return client;
 }
 let cleanupPromise: Promise<void> | undefined;
+let stopModelSampling: (() => Promise<void>) | undefined;
 async function removeStressCron() {
   if (!stressCronJobId) {
     return;
@@ -1888,6 +1894,7 @@ function cleanup() {
   return (cleanupPromise ??= (async () => {
     closing = true;
     cohort?.release();
+    const modelSamplingStopped = stopModelSampling?.();
     if (stressCronJobId) {
       try {
         await removeStressCron();
@@ -1898,6 +1905,7 @@ function cleanup() {
     for (const client of clients) {
       client.close();
     }
+    await modelSamplingStopped;
     await Promise.all(
       children.map((child) => stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2000 })),
     );
@@ -2249,6 +2257,66 @@ try {
   if (soakScenario) {
     await sampleMemory();
   }
+  const workerRpcRequests: Array<{
+    method: string;
+    cohort: "independent" | "after-churn";
+    client: number;
+    scheduledAtEpochMs?: number;
+    startedAtEpochMs: number;
+    endedAtEpochMs: number;
+    durationMs: number;
+  }> = [];
+  if (modelsIntervalMs) {
+    let sampling = true;
+    let stop!: () => void;
+    const stopped = new Promise<void>((resolve) => {
+      stop = resolve;
+    });
+    // A separate clock avoids selecting only the moments immediately after history reads.
+    const work = Promise.all(
+      clients
+        .map(async (client, index) => {
+          let scheduledAt = Date.now() + (index * modelsIntervalMs) / clients.length;
+          while (true) {
+            await Promise.race([delay(Math.max(0, scheduledAt - Date.now())), stopped]);
+            if (!sampling) {
+              break;
+            }
+            const started = performance.now();
+            const result = await rpc(client, "models.list", {});
+            const ended = performance.now();
+            if (!isRecord(result) || !Array.isArray(result.models) || !result.models.length) {
+              throw new Error("independent models.list did not return a populated model page");
+            }
+            workerRpcRequests.push({
+              method: "models.list",
+              cohort: "independent",
+              client: index,
+              scheduledAtEpochMs: scheduledAt,
+              startedAtEpochMs: performance.timeOrigin + started,
+              endedAtEpochMs: performance.timeOrigin + ended,
+              durationMs: ended - started,
+            });
+            // Skip missed slots instead of turning a delayed request into a catch-up burst.
+            do {
+              scheduledAt += modelsIntervalMs;
+            } while (scheduledAt < Date.now());
+          }
+        })
+        .map((task) =>
+          task.catch((error: unknown) => {
+            subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+            sampling = false;
+            stop();
+          }),
+        ),
+    );
+    stopModelSampling = async () => {
+      sampling = false;
+      stop();
+      await work;
+    };
+  }
   for (
     let round = 0;
     soakScenario ? Date.now() - measurementStartedAt < durationMs : round < rounds;
@@ -2457,6 +2525,7 @@ try {
             ] as const) {
               const started = performance.now();
               const result = await rpc(client, method, params);
+              const ended = performance.now();
               if (
                 !isRecord(result) ||
                 !Array.isArray(result[field]) ||
@@ -2464,7 +2533,17 @@ try {
               ) {
                 throw new Error(`${method} did not return a populated ${field} page`);
               }
-              (workerRpcLatencies[method] ??= []).push(performance.now() - started);
+              (workerRpcLatencies[method] ??= []).push(ended - started);
+              if (modelsIntervalMs) {
+                workerRpcRequests.push({
+                  method,
+                  cohort: "after-churn",
+                  client: index,
+                  startedAtEpochMs: performance.timeOrigin + started,
+                  endedAtEpochMs: performance.timeOrigin + ended,
+                  durationMs: ended - started,
+                });
+              }
             }
           }
         }
@@ -2714,6 +2793,8 @@ try {
       ]);
     }
   }
+  await stopModelSampling?.();
+  assertGatewayAlive();
   const wholeSoakDiagnostics = await finishWholeSoakDiagnostics?.();
   let wholeSoakAllocation;
   if (soakAllocationPath) {
@@ -2907,6 +2988,7 @@ try {
           roundIntervalMs,
           memoryIntervalMs,
           workerMemory,
+          ...(modelsIntervalMs ? { modelsIntervalMs, workerRpcRequests } : {}),
           idleDurationMs,
           retainedProfileMs,
           resetEveryRounds,
