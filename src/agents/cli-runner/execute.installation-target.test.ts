@@ -20,8 +20,9 @@ const scratchEnv = {
   OPENCLAW_CONFIG_PATH: undefined,
   OPENCLAW_WORKSPACE_DIR: "/fixture/execution-cwd",
 };
-const childWithEnv = (env: Record<string, unknown>) =>
-  expect.objectContaining({ env: expect.objectContaining(env) });
+const childEnv = () => supervisorSpawnMock.mock.calls.at(-1)?.[0].env;
+const selectEnv = (env: NodeJS.ProcessEnv | undefined) =>
+  Object.fromEntries(Object.keys(scratchEnv).map((key) => [key, env?.[key]]));
 
 beforeEach(() => {
   supervisorSpawnMock.mockResolvedValue(
@@ -37,13 +38,8 @@ afterEach(() => {
 it.each(["process", "node"] as const)(
   "projects local child environment and fences %s placement",
   async (kind) => {
-    const target = {
-      stateDir: "/fixture/diagnosed",
-      configPath: "/fixture/custom.json",
-      defaultWorkspaceDir: "/fixture/default-workspace",
-    };
+    const target = { stateDir: "/state", configPath: "/config", defaultWorkspaceDir: "/work" };
     const context = buildPreparedCliRunContext({
-      model: "fixture-model",
       backend: {
         command: "/bin/sh",
         args: [],
@@ -64,27 +60,14 @@ it.each(["process", "node"] as const)(
         return;
       }
       await expect(run).resolves.toMatchObject({ text: "done" });
-      const expectedEnv = {
+      expect(selectEnv(childEnv())).toEqual({
         OPENCLAW_STATE_DIR: target.stateDir,
         OPENCLAW_CONFIG_PATH: target.configPath,
         OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
-      };
-      expect(supervisorSpawnMock).toHaveBeenLastCalledWith(childWithEnv(expectedEnv));
-      expect({
-        OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-        OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-        OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
-      }).toEqual(scratchEnv);
+      });
+      expect(selectEnv(process.env)).toEqual(scratchEnv);
       await executePreparedCliRun(context);
-      expect(supervisorSpawnMock).toHaveBeenLastCalledWith(
-        childWithEnv({
-          OPENCLAW_STATE_DIR: "/fixture/scratch",
-          OPENCLAW_WORKSPACE_DIR: "/fixture/execution-cwd",
-        }),
-      );
-      expect(supervisorSpawnMock).not.toHaveBeenLastCalledWith(
-        childWithEnv({ OPENCLAW_CONFIG_PATH: expect.anything() }),
-      );
+      expect(selectEnv(childEnv())).toEqual(scratchEnv);
     });
   },
 );
@@ -97,7 +80,6 @@ it("counts awaited backend setup against the automatic cutoff", async () => {
   ]);
   const context = buildPreparedCliRunContext({
     provider: "codex-cli",
-    model: "fixture-model",
     fastMode: "auto",
     resolveExecutionArgs,
     backend: { command: "/bin/sh", args: ["exec"], output: "text", input: "stdin" },
