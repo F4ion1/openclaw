@@ -50,11 +50,7 @@ it.each([
     const abortSignal = new AbortController().signal;
     await expect(
       spawnLspServerProcess(
-        {
-          command: "typescript-language-server",
-          args: ["--stdio"],
-          ...(env ? { env } : {}),
-        },
+        { command: "typescript-language-server", args: ["--stdio"], ...(env ? { env } : {}) },
         { abortSignal },
       ),
     ).rejects.toThrow("stop after spawn");

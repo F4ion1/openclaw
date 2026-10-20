@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createMcpAppStandaloneTicket } from "../gateway/mcp-app-standalone.js";
+import { fixtureCatalog, fixtureRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import {
   createAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
@@ -59,40 +60,22 @@ vi.mock("./mcp-app-sandbox.js", () => ({
   resolveMcpAppSandboxPort: vi.fn(),
 }));
 vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
-const catalog: McpToolCatalog = {
-  version: 1,
-  generatedAt: 1,
-  servers: { demo: { serverName: "demo", launchSummary: "fixture", toolCount: 1 } },
-  tools: [
-    {
-      serverName: "demo",
-      safeServerName: "demo",
-      toolName: "show",
-      inputSchema: { type: "object", properties: {} },
-      fallbackDescription: "show",
-      uiResourceUri: "ui://demo/app",
-    },
-  ],
-};
+const catalog = fixtureCatalog("demo", [{ toolName: "show", uiResourceUri: "ui://demo/app" }], 1);
+catalog.servers.demo!.launchSummary = "fixture";
 function runtime(privateServer: boolean): SessionMcpRuntime {
-  return {
-    sessionId: "session",
+  return fixtureRuntime(() => catalog, {
     sessionKey: "agent:main:channel",
-    workspaceDir: "/workspace",
-    configFingerprint: "fixture",
     createdAt: 1,
     lastUsedAt: 1,
     mcpAppsEnabled: true,
     requesterScope: { requesterSenderId: "483148469960310784", messageChannel: "discord" },
     isRequesterScopedServer: () => privateServer,
-    getCatalog: async () => catalog,
     peekCatalog: () => catalog,
     markUsed: () => {},
     callTool: async () => ({ content: [] }),
     acquireLease: () => () => {},
-    dispose: async () => {},
     joinCleanup: async () => {},
-  };
+  });
 }
 afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {

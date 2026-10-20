@@ -3,6 +3,11 @@ import { onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
+  bindFixtureIdentity,
+  fixtureCatalog,
+  fixtureRuntime,
+} from "./agent-bundle-mcp-fixture.test-support.js";
+import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
   setSessionMcpRuntimeScheduler,
@@ -128,43 +133,25 @@ export function makeRuntime(
   tools: Array<{ toolName: string; description: string }>,
   serverName = "bundleProbe",
 ): SessionMcpRuntime {
-  const createdAt = Date.now();
-  let lastUsedAt = createdAt;
-  return {
-    sessionId: "session-colliding-tools",
-    workspaceDir: "/tmp",
-    configFingerprint: "fingerprint",
-    createdAt,
-    get lastUsedAt() {
-      return lastUsedAt;
-    },
-    markUsed: () => {
-      lastUsedAt = Date.now();
-    },
-    peekCatalog: () => null,
-    getCatalog: async () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: { [serverName]: { serverName, launchSummary: serverName, toolCount: tools.length } },
-      tools: tools.map((tool) => ({
+  return fixtureRuntime(
+    () =>
+      fixtureCatalog(
         serverName,
-        safeServerName: serverName,
-        toolName: tool.toolName,
-        description: tool.description,
-        inputSchema: {
-          type: "object",
-          properties: { toolName: { type: "string", const: tool.toolName } },
-        },
-        fallbackDescription: tool.description,
-      })),
-    }),
-    callTool: async (_serverName, toolName) => ({
-      content: [{ type: "text", text: toolName }],
-      isError: false,
-    }),
-    joinCleanup: async () => {},
-    dispose: async () => {},
-  };
+        tools.map((tool) => ({
+          ...tool,
+          inputSchema: {
+            type: "object",
+            properties: { toolName: { type: "string", const: tool.toolName } },
+          },
+        })),
+      ),
+    {
+      sessionId: "session-colliding-tools",
+      workspaceDir: "/tmp",
+      configFingerprint: "fingerprint",
+      joinCleanup: async () => {},
+    },
+  );
 }
 
 export function makeManagedRuntime(
@@ -172,14 +159,7 @@ export function makeManagedRuntime(
   tools = [{ toolName: "probe", description: "probe" }],
   serverName?: string,
 ): SessionMcpRuntime {
-  return {
-    ...makeRuntime(tools, serverName),
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-    configFingerprint: params.configFingerprint ?? "fingerprint",
-    requesterScope: params.requesterScope,
-  };
+  return bindFixtureIdentity(makeRuntime(tools, serverName), params);
 }
 
 export type SessionMcpRuntimeManager = ReturnType<typeof createSessionMcpRuntimeManager>;

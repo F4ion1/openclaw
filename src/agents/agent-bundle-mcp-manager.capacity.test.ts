@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withFixtureLeases } from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   createSessionMcpRuntimeManager,
   makeRuntime,
@@ -37,13 +38,13 @@ function setup() {
   >();
   const factory = vi.fn<CreateSessionMcpRuntime>(async (input) => {
     const serverName = input.requesterScope ? "scoped" : "fixture";
-    const runtime = makeRuntime([{ toolName: "echo", description: "Echo a value" }], serverName);
+    const runtime = withFixtureLeases(
+      makeRuntime([{ toolName: "echo", description: "Echo a value" }], serverName),
+    );
     const source: { catalog: McpToolCatalog; pending?: Promise<McpToolCatalog> } = {
       catalog: await runtime.getCatalog(),
     };
     sources.set(runtime, source);
-    const leases = new Set<symbol>();
-    Object.defineProperty(runtime, "activeLeases", { get: () => leases.size });
     return Object.assign(runtime, {
       sessionId: input.sessionId,
       sessionKey: input.sessionKey,
@@ -51,13 +52,6 @@ function setup() {
       agentDir: input.agentDir,
       configFingerprint: input.configFingerprint ?? "fixture",
       requesterScope: input.requesterScope,
-      acquireLease() {
-        const lease = Symbol("mcp-test-lease");
-        leases.add(lease);
-        return () => {
-          leases.delete(lease);
-        };
-      },
       getCatalog: () => source.pending ?? Promise.resolve(source.catalog),
       peekCatalog: () => null,
       callTool: vi.fn(async () => ({ content: [{ type: "text" as const, text: "live echo" }] })),
@@ -88,6 +82,15 @@ function setup() {
   };
   return { manager, factory, sources, fill, materialize, evict, advertise, publish };
 }
+
+const test = it.extend<{ mcp: ReturnType<typeof setup>; requesterMcp: ReturnType<typeof setup> }>({
+  mcp: async ({ task: _task }, use) => {
+    await use(setup());
+  },
+  requesterMcp: async ({ task: _task }, use) => {
+    await withRequester(() => use(setup()));
+  },
+});
 
 type Materialized = Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>>;
 const surface = ({ tools }: Materialized) =>
@@ -122,10 +125,7 @@ const mixedParams = {
   requesterSenderId: "alice",
   cfg: {
     mcp: {
-      servers: {
-        fixture: { command: "true" },
-        scoped: { transport: "streamable-http" as const },
-      },
+      servers: { fixture: { command: "true" }, scoped: { transport: "streamable-http" as const } },
     },
   },
 };
@@ -141,56 +141,54 @@ afterEach(async () => {
 });
 
 describe("MCP capacity catalog continuity", () => {
-  it.each(["full", "requester"])(
+  test.each(["full", "requester"])(
     "evicts the idle requester LRU during an active shared-session turn through %s acquisition",
-    async (scope) => {
-      await withRequester(async () => {
-        const { manager } = setup();
-        const input = (index: number) => ({
-          ...mixedParams,
-          requesterSenderId: `sender-${index}`,
-          cfg: { mcp: { servers: { scoped: { transport: "streamable-http" as const } } } },
-        });
-        const runtimes: SessionMcpRuntime[] = [];
-        for (let index = 0; index < 256; index++) {
-          vi.setSystemTime(index);
-          const lease = (await manager.acquireRequesterScoped(input(index)))!;
-          runtimes.push(lease.runtime);
-          lease.releaseLease();
-        }
-        vi.setSystemTime(256);
-        const refreshed = (await manager.acquireRequesterScoped(input(0)))!;
-        refreshed.releaseLease();
-        const claim = claimAgentRunContext(
-          "mcp-shared-session-turn",
-          { sessionId: params.sessionId, sessionKey: params.sessionKey },
-          { trackOwner: true, ownsContext: true },
-        );
+    async (scope, { requesterMcp: { manager } }) => {
+      const input = (index: number) => ({
+        ...mixedParams,
+        requesterSenderId: `sender-${index}`,
+        cfg: { mcp: { servers: { scoped: { transport: "streamable-http" as const } } } },
+      });
+      const runtimes: SessionMcpRuntime[] = [];
+      for (let index = 0; index < 256; index++) {
+        vi.setSystemTime(index);
+        const lease = (await manager.acquireRequesterScoped(input(index)))!;
+        runtimes.push(lease.runtime);
+        lease.releaseLease();
+      }
+      vi.setSystemTime(256);
+      const refreshed = (await manager.acquireRequesterScoped(input(0)))!;
+      refreshed.releaseLease();
+      const claim = claimAgentRunContext(
+        "mcp-shared-session-turn",
+        { sessionId: params.sessionId, sessionKey: params.sessionKey },
+        { trackOwner: true, ownsContext: true },
+      );
+      try {
+        const lease =
+          scope === "full"
+            ? await manager.acquire(input(256))
+            : (await manager.acquireRequesterScoped(input(256)))!;
+        const tools = await materializeBundleMcpToolsForRun(lease);
         try {
-          const lease =
-            scope === "full"
-              ? await manager.acquire(input(256))
-              : (await manager.acquireRequesterScoped(input(256)))!;
-          const tools = await materializeBundleMcpToolsForRun(lease);
-          try {
-            expect(names(tools)).toEqual(["scoped__echo"]);
-            expect((await tools.tools[0]!.execute("new-sender", {})).content).toEqual(liveContent);
-            expect(runtimes[1]!.dispose).toHaveBeenCalledOnce();
-            for (const runtime of runtimes.filter((_, index) => index !== 1)) {
-              expect(runtime.dispose).not.toHaveBeenCalled();
-            }
-          } finally {
-            await tools.dispose();
+          expect(names(tools)).toEqual(["scoped__echo"]);
+          expect((await tools.tools[0]!.execute("new-sender", {})).content).toEqual(liveContent);
+          expect(runtimes[1]!.dispose).toHaveBeenCalledOnce();
+          for (const runtime of runtimes.filter((_, index) => index !== 1)) {
+            expect(runtime.dispose).not.toHaveBeenCalled();
           }
         } finally {
-          releaseAgentRunContext("mcp-shared-session-turn", claim);
+          await tools.dispose();
         }
-      });
+      } finally {
+        releaseAgentRunContext("mcp-shared-session-turn", claim);
+      }
     },
   );
 
-  it("keeps advertised static schemas after eviction even when the current peek is invalidated", async () => {
-    const { manager, fill, factory, materialize } = setup();
+  test("keeps advertised static schemas after eviction even when the current peek is invalidated", async ({
+    mcp: { manager, fill, factory, materialize },
+  }) => {
     const firstLease = await manager.acquire(params);
     const first = await materializeBundleMcpToolsForRun(firstLease);
     const advertised = surface(first);
@@ -210,166 +208,166 @@ describe("MCP capacity catalog continuity", () => {
     await recovered.dispose();
   });
 
-  it("preserves embedded requester schemas after eviction without contacting MCP", async () => {
-    await withRequester(async () => {
-      const { manager, fill, factory, sources, materialize } = setup();
-      const firstLease = await manager.acquire(mixedParams);
-      const first = await materializeBundleMcpToolsForRun(firstLease);
-      const advertised = surface(first);
-      expect(names(first)).toEqual(["fixture__echo", "scoped__echo"]);
-      await first.dispose();
+  test("preserves embedded requester schemas after eviction without contacting MCP", async ({
+    requesterMcp: { manager, fill, factory, sources, materialize },
+  }) => {
+    const firstLease = await manager.acquire(mixedParams);
+    const first = await materializeBundleMcpToolsForRun(firstLease);
+    const advertised = surface(first);
+    expect(names(first)).toEqual(["fixture__echo", "scoped__echo"]);
+    await first.dispose();
+    await fill();
+    const creations = factory.mock.calls.length;
+    const refused = await materialize(mixedParams);
+    expect(surface(refused)).toEqual(advertised);
+    const result = await refused.tools
+      .find((tool) => tool.name === "scoped__echo")!
+      .execute("refused", {});
+    expect(result.content).toEqual(refusedContent);
+    expect(factory).toHaveBeenCalledTimes(creations);
+    for (const runtime of sources.keys()) {
+      expect(runtime.callTool).not.toHaveBeenCalled();
+    }
+    await refused.dispose();
+    // Another sender must never inherit Alice's embedded catalog.
+    const bob = await materialize({ ...mixedParams, requesterSenderId: "bob" });
+    expect(names(bob)).toEqual(["fixture__echo"]);
+    await bob.dispose();
+  });
+
+  test("bounds requester snapshots and keeps recent schemas reachable for retirement", async ({
+    requesterMcp: { manager, advertise, publish },
+  }) => {
+    const input = (index: number) => ({
+      ...mixedParams,
+      sessionId: `scoped-${index}`,
+      sessionKey: `agent:test:scoped-${index}`,
+    });
+    for (let index = 0; index < 512; index++) {
+      await publish(input(index));
+    }
+    for (let index = 256; index < 512; index++) {
+      held.push((await manager.acquireRequesterScoped(input(index)))!);
+    }
+    const continuing = (await manager.acquireRequesterScoped(input(0)))!;
+    await continuing.runtime.getCatalog();
+    continuing.releaseLease();
+    held.shift()!.releaseLease();
+    const next = (await manager.acquireRequesterScoped(input(512)))!;
+    await advertise(next);
+    held.push(next);
+    expect(manager.getAdvertisedScopedCatalog("scoped-1")).toBeNull();
+    expect(manager.resolveSessionId(input(1).sessionKey)).toBeUndefined();
+    expect(manager.getAdvertisedScopedCatalog("scoped-0")?.tools).toHaveLength(1);
+    expect(manager.listSessionIdsForAgent("test")).toHaveLength(512);
+    const retirement = manager.captureSessionRetirement({ sessionKey: input(0).sessionKey });
+    expect(retirement).toBeDefined();
+    await retirement!.retire(() => {});
+    expect(manager.getAdvertisedScopedCatalog("scoped-0")).toBeNull();
+    expect(manager.resolveSessionId(input(0).sessionKey)).toBeUndefined();
+  });
+
+  test("bounds evicted requester partitions within a session with live owners", async ({
+    requesterMcp: { manager, factory, publish },
+  }) => {
+    const input = (index: number) => ({ ...mixedParams, requesterSenderId: `sender-${index}` });
+    for (let index = 0; index < 513; index++) {
+      await publish(input(index));
+    }
+    for (let index = 257; index < 513; index++) {
+      held.push((await manager.acquireRequesterScoped(input(index)))!);
+    }
+    const aged = (await manager.acquireRequesterScoped(input(0)))!;
+    expect((await aged.runtime.getCatalog()).tools).toEqual([]);
+    aged.releaseLease();
+    const recent = (await manager.acquireRequesterScoped(input(1)))!;
+    expect((await recent.runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
+      "echo",
+    ]);
+    recent.releaseLease();
+    expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.tools).toHaveLength(1);
+    expect(factory).toHaveBeenCalledTimes(513);
+  });
+
+  test("rejects the old publication handle when a live runtime changes agent binding", async ({
+    requesterMcp: { manager, advertise },
+  }) => {
+    const first = (await manager.acquireRequesterScoped(mixedParams))!;
+    const catalog = await first.runtime.getCatalog();
+    const rebound = (await manager.acquireRequesterScoped({ ...mixedParams, agentId: "other" }))!;
+    expect(rebound.runtime).toBe(first.runtime);
+    manager.rememberAdvertisedScopedCatalog(first, catalog);
+    expect(manager.getAdvertisedScopedCatalog(params.sessionId)).toBeNull();
+    await advertise(rebound);
+    expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.tools).toHaveLength(1);
+    first.releaseLease();
+    rebound.releaseLease();
+  });
+
+  test("rejects a discovery result completed after its catalog was cleared by reload", async ({
+    requesterMcp: { manager, sources, advertise },
+  }) => {
+    const first = (await manager.acquireRequesterScoped(mixedParams))!;
+    const source = sources.get(first.runtime)!;
+    const pending = createDeferred<McpToolCatalog>();
+    source.pending = pending.promise;
+    const late = first.runtime.getCatalog();
+    await manager.reloadConfig({ cfg: mixedParams.cfg, manifestRegistry: params.manifestRegistry });
+    const current = (await manager.acquireRequesterScoped(mixedParams))!;
+    pending.resolve(source.catalog);
+    manager.rememberAdvertisedScopedCatalog(first, await late);
+    expect(manager.getAdvertisedScopedCatalog(params.sessionId)).toBeNull();
+    await advertise(current);
+    expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.tools).toHaveLength(1);
+    first.releaseLease();
+    current.releaseLease();
+  });
+
+  test.each(["session", "deferred", "deferred-required", "captured", "agent", "reload"])(
+    "retires evicted static and requester catalogs through %s cleanup",
+    async (retirement, { requesterMcp: { manager, fill, materialize } }) => {
+      const initial = await materialize(mixedParams);
+      expect(names(initial)).toEqual(["fixture__echo", "scoped__echo"]);
+      await initial.dispose();
       await fill();
-      const creations = factory.mock.calls.length;
-      const refused = await materialize(mixedParams);
-      expect(surface(refused)).toEqual(advertised);
-      const result = await refused.tools
-        .find((tool) => tool.name === "scoped__echo")!
-        .execute("refused", {});
-      expect(result.content).toEqual(refusedContent);
-      expect(factory).toHaveBeenCalledTimes(creations);
-      for (const runtime of sources.keys()) {
-        expect(runtime.callTool).not.toHaveBeenCalled();
+      expect(manager.resolveSessionId(params.sessionKey)).toBe(params.sessionId);
+      expect(manager.listSessionIdsForAgent("test")).toContain(params.sessionId);
+      if (retirement === "session") {
+        await manager.disposeSession(params.sessionId);
+      } else if (retirement.startsWith("deferred")) {
+        expect(
+          manager.deferRetirement(params.sessionId, {
+            retainAcrossReuse: retirement === "deferred-required",
+          }),
+        ).toBe(true);
+        expect(await manager.completeDeferredRetirement(params.sessionId)).toBe(true);
+      } else if (retirement === "captured") {
+        const captured = manager.captureSessionRetirement({ sessionKey: params.sessionKey });
+        expect(captured).toBeDefined();
+        await captured!.retire(() => {});
+      } else if (retirement === "agent") {
+        await manager.retireSessionForAgentDeletion(params.sessionId, "other", () => {});
+        expect(manager.getAdvertisedScopedCatalog(params.sessionId)).not.toBeNull();
+        const retained = await materialize(mixedParams);
+        expect(names(retained)).toEqual(["fixture__echo", "scoped__echo"]);
+        await retained.dispose();
+        await manager.retireSessionForAgentDeletion(params.sessionId, "test", () => {});
+      } else {
+        await manager.reloadConfig({
+          cfg: mixedParams.cfg,
+          manifestRegistry: params.manifestRegistry,
+        });
       }
-      await refused.dispose();
-      // Another sender must never inherit Alice's embedded catalog.
-      const bob = await materialize({ ...mixedParams, requesterSenderId: "bob" });
-      expect(names(bob)).toEqual(["fixture__echo"]);
-      await bob.dispose();
-    });
-  });
-
-  it("bounds requester snapshots and keeps recent schemas reachable for retirement", async () => {
-    await withRequester(async () => {
-      const { manager, advertise, publish } = setup();
-      const input = (index: number) => ({
-        ...mixedParams,
-        sessionId: `scoped-${index}`,
-        sessionKey: `agent:test:scoped-${index}`,
-      });
-      for (let index = 0; index < 512; index++) {
-        await publish(input(index));
-      }
-      for (let index = 256; index < 512; index++) {
-        held.push((await manager.acquireRequesterScoped(input(index)))!);
-      }
-      const continuing = (await manager.acquireRequesterScoped(input(0)))!;
-      await continuing.runtime.getCatalog();
-      continuing.releaseLease();
-      held.shift()!.releaseLease();
-      const next = (await manager.acquireRequesterScoped(input(512)))!;
-      await advertise(next);
-      held.push(next);
-      expect(manager.getAdvertisedScopedCatalog("scoped-1")).toBeNull();
-      expect(manager.resolveSessionId(input(1).sessionKey)).toBeUndefined();
-      expect(manager.getAdvertisedScopedCatalog("scoped-0")?.tools).toHaveLength(1);
-      expect(manager.listSessionIdsForAgent("test")).toHaveLength(512);
-      const retirement = manager.captureSessionRetirement({ sessionKey: input(0).sessionKey });
-      expect(retirement).toBeDefined();
-      await retirement!.retire(() => {});
-      expect(manager.getAdvertisedScopedCatalog("scoped-0")).toBeNull();
-      expect(manager.resolveSessionId(input(0).sessionKey)).toBeUndefined();
-    });
-  });
-
-  it("bounds evicted requester partitions within a session with live owners", async () => {
-    await withRequester(async () => {
-      const { manager, factory, publish } = setup();
-      const input = (index: number) => ({ ...mixedParams, requesterSenderId: `sender-${index}` });
-      for (let index = 0; index < 513; index++) {
-        await publish(input(index));
-      }
-      for (let index = 257; index < 513; index++) {
-        held.push((await manager.acquireRequesterScoped(input(index)))!);
-      }
-      const aged = (await manager.acquireRequesterScoped(input(0)))!;
-      expect((await aged.runtime.getCatalog()).tools).toEqual([]);
-      aged.releaseLease();
-      const recent = (await manager.acquireRequesterScoped(input(1)))!;
-      expect((await recent.runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
-        "echo",
-      ]);
-      recent.releaseLease();
-      expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.tools).toHaveLength(1);
-      expect(factory).toHaveBeenCalledTimes(513);
-    });
-  });
-
-  it("rejects the old publication handle when a live runtime changes agent binding", async () => {
-    await withRequester(async () => {
-      const { manager, advertise } = setup();
-      const first = (await manager.acquireRequesterScoped(mixedParams))!;
-      const catalog = await first.runtime.getCatalog();
-      const rebound = (await manager.acquireRequesterScoped({ ...mixedParams, agentId: "other" }))!;
-      expect(rebound.runtime).toBe(first.runtime);
-      manager.rememberAdvertisedScopedCatalog(first, catalog);
       expect(manager.getAdvertisedScopedCatalog(params.sessionId)).toBeNull();
-      await advertise(rebound);
-      expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.tools).toHaveLength(1);
-      first.releaseLease();
-      rebound.releaseLease();
-    });
-  });
-
-  it("rejects a discovery result completed after its catalog was cleared by reload", async () => {
-    await withRequester(async () => {
-      const { manager, sources, advertise } = setup();
-      const first = (await manager.acquireRequesterScoped(mixedParams))!;
-      const source = sources.get(first.runtime)!;
-      const pending = createDeferred<McpToolCatalog>();
-      source.pending = pending.promise;
-      const late = first.runtime.getCatalog();
-      await manager.reloadConfig({
-        cfg: mixedParams.cfg,
-        manifestRegistry: params.manifestRegistry,
-      });
-      const current = (await manager.acquireRequesterScoped(mixedParams))!;
-      pending.resolve(source.catalog);
-      manager.rememberAdvertisedScopedCatalog(first, await late);
-      expect(manager.getAdvertisedScopedCatalog(params.sessionId)).toBeNull();
-      await advertise(current);
-      expect(manager.getAdvertisedScopedCatalog(params.sessionId)?.tools).toHaveLength(1);
-      first.releaseLease();
-      current.releaseLease();
-    });
-  });
-
-  it.each(["session", "deferred", "captured", "agent", "reload"])(
-    "retires evicted requester catalogs through %s cleanup",
-    async (retirement) => {
-      await withRequester(async () => {
-        const { manager, fill, publish } = setup();
-        await publish();
-        await fill();
-        expect(manager.resolveSessionId(params.sessionKey)).toBe(params.sessionId);
-        expect(manager.listSessionIdsForAgent("test")).toContain(params.sessionId);
-        if (retirement === "session") {
-          await manager.disposeSession(params.sessionId);
-        } else if (retirement === "deferred") {
-          expect(manager.deferRetirement(params.sessionId)).toBe(true);
-          expect(await manager.completeDeferredRetirement(params.sessionId)).toBe(true);
-        } else if (retirement === "captured") {
-          const captured = manager.captureSessionRetirement({ sessionKey: params.sessionKey });
-          expect(captured).toBeDefined();
-          await captured!.retire(() => {});
-        } else if (retirement === "agent") {
-          await manager.retireSessionForAgentDeletion(params.sessionId, "other", () => {});
-          expect(manager.getAdvertisedScopedCatalog(params.sessionId)).not.toBeNull();
-          await manager.retireSessionForAgentDeletion(params.sessionId, "test", () => {});
-        } else {
-          await manager.reloadConfig({
-            cfg: mixedParams.cfg,
-            manifestRegistry: params.manifestRegistry,
-          });
-        }
-        expect(manager.getAdvertisedScopedCatalog(params.sessionId)).toBeNull();
-        const refused = (await manager.acquireRequesterScoped(mixedParams))!;
-        expect((await refused.runtime.getCatalog()).tools).toEqual([]);
-        refused.releaseLease();
-      });
+      expect(manager.resolveSessionId(params.sessionKey)).toBeUndefined();
+      const refused = (await manager.acquireRequesterScoped(mixedParams))!;
+      expect((await refused.runtime.getCatalog()).tools).toEqual([]);
+      refused.releaseLease();
+      await expectNoTools(await materialize(mixedParams));
     },
   );
 
-  it.each([
+  test.each([
     { workspaceDir: "/other-workspace" },
     { agentDir: "/agents/other" },
     { agentId: "other" },
@@ -385,70 +383,64 @@ describe("MCP capacity catalog continuity", () => {
     },
   ])(
     "invalidates requester snapshots and advertised schemas on binding change: %j",
-    async (change) => {
-      await withRequester(async () => {
-        const { manager, fill, publish } = setup();
-        await publish();
-        await fill();
-        const refused = (await manager.acquireRequesterScoped({ ...mixedParams, ...change }))!;
-        expect((await refused.runtime.getCatalog()).tools).toEqual([]);
-        expect(manager.getAdvertisedScopedCatalog(params.sessionId)).toBeNull();
-        refused.releaseLease();
-      });
+    async (change, { requesterMcp: { manager, fill, publish } }) => {
+      await publish();
+      await fill();
+      const refused = (await manager.acquireRequesterScoped({ ...mixedParams, ...change }))!;
+      expect((await refused.runtime.getCatalog()).tools).toEqual([]);
+      expect(manager.getAdvertisedScopedCatalog(params.sessionId)).toBeNull();
+      refused.releaseLease();
     },
   );
 
-  it("preserves acquired static tools when requester admission is refused", async () => {
-    await withRequester(async () => {
-      const { manager, fill } = setup();
-      await fill(255);
-      const acquired = await manager.acquire(mixedParams);
-      const tools = await materializeBundleMcpToolsForRun(acquired);
-      expect(names(tools)).toEqual(["fixture__echo"]);
-      expect((await tools.tools[0]!.execute("static-call", {})).content).toEqual(liveContent);
-      expect(manager.peekSession({ sessionId: params.sessionId })!.activeLeases).toBe(1);
-      expect(tools.diagnostics?.[0]?.message).toContain(
-        "This turn will continue without MCP tools",
-      );
-      await tools.dispose();
-      expect(manager.peekSession({ sessionId: params.sessionId })!.activeLeases).toBe(0);
-    });
+  test("preserves acquired static tools when requester admission is refused", async ({
+    requesterMcp: { manager, fill },
+  }) => {
+    await fill(255);
+    const acquired = await manager.acquire(mixedParams);
+    const tools = await materializeBundleMcpToolsForRun(acquired);
+    expect(names(tools)).toEqual(["fixture__echo"]);
+    expect((await tools.tools[0]!.execute("static-call", {})).content).toEqual(liveContent);
+    expect(manager.peekSession({ sessionId: params.sessionId })!.activeLeases).toBe(1);
+    expect(tools.diagnostics?.[0]?.message).toContain("This turn will continue without MCP tools");
+    await tools.dispose();
+    expect(manager.peekSession({ sessionId: params.sessionId })!.activeLeases).toBe(0);
   });
 
-  it("preserves a reusable requester partition when static admission is refused", async () => {
-    await withRequester(async () => {
-      const { manager, fill, materialize, advertise } = setup();
-      const requester = await manager.acquireRequesterScoped(mixedParams);
-      held.push(requester!);
-      await advertise(requester!);
-      await (await materialize({ ...params, requesterSenderId: "alice" })).dispose();
-      expect(
-        manager.getAdvertisedScopedCatalog(params.sessionId)?.tools.map((tool) => tool.toolName),
-      ).toEqual(["echo"]);
-      await fill(255);
-      const tools = await materialize(mixedParams);
-      expect(names(tools)).toEqual(["scoped__echo"]);
-      expect((await tools.tools[0]!.execute("requester-call", {})).content).toEqual(liveContent);
-      await tools.dispose();
-    });
+  test("preserves a reusable requester partition when static admission is refused", async ({
+    requesterMcp: { manager, fill, materialize, advertise },
+  }) => {
+    const requester = await manager.acquireRequesterScoped(mixedParams);
+    held.push(requester!);
+    await advertise(requester!);
+    await (await materialize({ ...params, requesterSenderId: "alice" })).dispose();
+    expect(
+      manager.getAdvertisedScopedCatalog(params.sessionId)?.tools.map((tool) => tool.toolName),
+    ).toEqual(["echo"]);
+    await fill(255);
+    const tools = await materialize(mixedParams);
+    expect(names(tools)).toEqual(["scoped__echo"]);
+    expect((await tools.tools[0]!.execute("requester-call", {})).content).toEqual(liveContent);
+    await tools.dispose();
   });
 
-  it.each([
+  test.each([
     { sessionId: "other-session", sessionKey: "agent:test:other-session" },
     { workspaceDir: "/other-workspace" },
     { agentDir: "/agents/other" },
     { agentId: "other" },
     { cfg: { mcp: { servers: { fixture: { command: "changed" } } } } },
-  ])("invalidates a static snapshot when its binding changes: %j", async (change) => {
-    const { materialize, evict } = setup();
-    await evict();
-    await expectNoTools(await materialize({ ...params, ...change }));
-  });
+  ])(
+    "invalidates a static snapshot when its binding changes: %j",
+    async (change, { mcp: { materialize, evict } }) => {
+      await evict();
+      await expectNoTools(await materialize({ ...params, ...change }));
+    },
+  );
 
-  it.each(["reload", "replacement"])(
+  test.each(["reload", "replacement"])(
     "does not republish an old catalog after %s while discovery is pending",
-    async (invalidation) => {
-      const { manager, sources, fill, materialize } = setup();
+    async (invalidation, { mcp: { manager, sources, fill, materialize } }) => {
       const acquired = await manager.acquire(params);
       const source = sources.get(acquired.runtime)!;
       const pending = createDeferred<McpToolCatalog>();
@@ -472,19 +464,9 @@ describe("MCP capacity catalog continuity", () => {
     },
   );
 
-  it("keeps snapshot-only sessions reachable for agent cleanup and captured retirement", async () => {
-    const { manager, materialize, evict } = setup();
-    await evict();
-    expect(manager.listSessionIdsForAgent("test")).toContain(params.sessionId);
-    expect(manager.resolveSessionId(params.sessionKey)).toBe(params.sessionId);
-    const retirement = manager.captureSessionRetirement({ sessionKey: params.sessionKey });
-    expect(retirement).toBeDefined();
-    await retirement!.retire(() => {});
-    await expectNoTools(await materialize());
-  });
-
-  it("bounds evicted static catalogs and retains the most recently used session", async () => {
-    const { manager } = setup();
+  test("bounds evicted static catalogs and retains the most recently used session", async ({
+    mcp: { manager },
+  }) => {
     const input = (index: number) => ({
       ...params,
       sessionId: `one-off-${index}`,
@@ -515,29 +497,6 @@ describe("MCP capacity catalog continuity", () => {
     retained.releaseLease();
     await manager.disposeSession("one-off-0");
     expect(manager.resolveSessionId(input(0).sessionKey)).toBeUndefined();
-  });
-
-  it.each([false, true])(
-    "retires an evicted static catalog through deferred retirement (retainAcrossReuse=%s)",
-    async (retainAcrossReuse) => {
-      const { manager, materialize, evict } = setup();
-      await evict();
-      expect(manager.deferRetirement(params.sessionId, { retainAcrossReuse })).toBe(true);
-      expect(await manager.completeDeferredRetirement(params.sessionId)).toBe(true);
-      expect(manager.resolveSessionId(params.sessionKey)).toBeUndefined();
-      await expectNoTools(await materialize());
-    },
-  );
-
-  it("allows only the owning agent to retire an evicted static catalog", async () => {
-    const { manager, materialize, evict } = setup();
-    await evict();
-    await manager.retireSessionForAgentDeletion(params.sessionId, "other", () => {});
-    const retained = await materialize();
-    expect(names(retained)).toEqual(["fixture__echo"]);
-    await retained.dispose();
-    await manager.retireSessionForAgentDeletion(params.sessionId, "test", () => {});
-    await expectNoTools(await materialize());
   });
 
   it.each(["static", "requester"])(
