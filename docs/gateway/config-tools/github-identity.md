@@ -147,9 +147,20 @@ deleted.
 An interrupted initial preparation retains the same accepted source for retry.
 If recovery returns `headChanged: true`, it completed that original accepted
 head while GitHub has since advanced. Preparation makes no GitHub writes
-and is not a publication receipt. Publication and other PR actions for an
-imported association remain unavailable; they refuse instead of creating a
-replacement PR or acting on an earlier publication from this conversation.
+and is not a publication receipt.
+
+After preparation, ordinary shared publication appends changes to the original
+PR's head repository and branch. It preserves the PR number, author, existing
+commits, discussion and draft state. The Gateway rechecks the linked author,
+repository access, publisher permission and remote head before pushing. A fork
+can use GitHub's maintainer-edit permission without granting the publisher direct
+write access to the fork. Publisher credentials remain outside the sandbox.
+
+A remote change not already accepted through preparation or an earlier successful
+publication refuses the update and preserves local work. An interrupted push is
+reconciled against its original commit and PR before another write; it never
+creates a replacement PR. Other PR actions for an imported association remain
+unavailable until their own support is enabled.
 Keep the updated Gateway when continuing an imported workspace; older versions
 do not understand this association.
 

@@ -466,9 +466,12 @@ describe("existing PR preparation through the registered agent action", () => {
           code: "ENOENT",
         });
       }
-      await expect(f.invoke({ action: "publish", pullRequestUrl: undefined })).rejects.toThrow(
-        "original branch",
-      );
+      await expect(
+        f.invoke({ action: "publish", pullRequestUrl: undefined }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        code: "push_rejected",
+      });
       await expect(f.invoke({ action: "refresh_base", pullRequestUrl: undefined })).rejects.toThrow(
         "prepare_pr",
       );
