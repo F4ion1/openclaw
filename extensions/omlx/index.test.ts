@@ -9,15 +9,15 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
+const localUrl = "http://127.0.0.1:8000/v1";
+const remoteUrl = "https://omlx.example.test/v1";
+
 function configWithProvider(overrides: Partial<ModelProviderConfig>): OpenClawConfig {
-  return {
-    models: {
-      providers: { omlx: { baseUrl: "http://127.0.0.1:8000/v1", models: [], ...overrides } },
-    },
-  };
+  const omlx = { baseUrl: localUrl, models: [], ...overrides };
+  return { models: { providers: { omlx } } };
 }
 
 function headerAuth<T extends SecretInput>(
@@ -30,10 +30,13 @@ function bearerAuth<T extends SecretInput>(token: T): { mode: "authorization-bea
   return { mode: "authorization-bearer", token };
 }
 
-function embeddingFetch(observe: (request: Request) => void) {
+function embeddingFetch(
+  observe: (request: Request) => void | Promise<void>,
+  data = [{ index: 0, embedding: [1, 0] }],
+) {
   const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    observe(new Request(input, init));
-    return Response.json({ data: [{ index: 0, embedding: [1, 0] }] });
+    await observe(new Request(input, init));
+    return Response.json({ data });
   });
   vi.stubGlobal("fetch", fetch);
   return fetch;
@@ -46,9 +49,7 @@ afterEach(() => {
 
 function embeddingAdapter() {
   const adapter = capturePluginRegistration(plugin).embeddingProviders[0];
-  if (!adapter) {
-    throw new Error("oMLX did not register its embedding provider");
-  }
+  assert(adapter, "oMLX did not register its embedding provider");
   return adapter;
 }
 
@@ -63,9 +64,9 @@ describe("oMLX registered embedding provider", () => {
         },
       });
       const requests: Array<[string, string | null]> = [];
-      embeddingFetch((request) =>
-        requests.push([request.url, request.headers.get("authorization")]),
-      );
+      embeddingFetch(({ url, headers }) => {
+        requests.push([url, headers.get("authorization")]);
+      });
       for (const scenario of [
         { envKey: undefined, apiKey: "OMLX_API_KEY", remote: undefined },
         { envKey: undefined, apiKey: "omlx:default", remote: undefined },
@@ -93,10 +94,10 @@ describe("oMLX registered embedding provider", () => {
         await expect(result.provider?.embed("orchard")).resolves.toEqual([1, 0]);
       }
       expect(requests).toEqual([
-        ["http://127.0.0.1:8000/v1/embeddings", "Bearer fixture-saved-omlx-key"],
-        ["http://127.0.0.1:8000/v1/embeddings", "Bearer fixture-saved-omlx-key"],
-        ["http://127.0.0.1:8000/v1/embeddings", "Bearer fixture-env-omlx-key"],
-        ["http://127.0.0.1:8000/v1/embeddings", "Bearer fixture-literal-omlx-key"],
+        [`${localUrl}/embeddings`, "Bearer fixture-saved-omlx-key"],
+        [`${localUrl}/embeddings`, "Bearer fixture-saved-omlx-key"],
+        [`${localUrl}/embeddings`, "Bearer fixture-env-omlx-key"],
+        [`${localUrl}/embeddings`, "Bearer fixture-literal-omlx-key"],
         ["http://127.0.0.1:18002/v1/embeddings", "Bearer fixture-memory-omlx-key"],
       ]);
     });
@@ -107,28 +108,28 @@ describe("oMLX registered embedding provider", () => {
       name: "the default keyless server",
       config: {},
       remote: undefined,
-      endpoint: "http://127.0.0.1:8000/v1/embeddings",
+      endpoint: `${localUrl}/embeddings`,
       authorization: null,
     },
     {
       name: "the configured keyless server",
       config: configWithProvider({ api: "openai-completions", apiKey: "omlx-local" }),
       remote: undefined,
-      endpoint: "http://127.0.0.1:8000/v1/embeddings",
+      endpoint: `${localUrl}/embeddings`,
       authorization: null,
     },
     {
       name: "a same-endpoint memory key without a profile",
       config: configWithProvider({ api: "openai-completions", apiKey: "OMLX_API_KEY" }),
       remote: { apiKey: "fixture-memory-key" },
-      endpoint: "http://127.0.0.1:8000/v1/embeddings",
+      endpoint: `${localUrl}/embeddings`,
       authorization: "Bearer fixture-memory-key",
     },
     {
       name: "a same-endpoint memory header without a profile",
       config: configWithProvider({ api: "openai-completions", apiKey: "OMLX_API_KEY" }),
       remote: { headers: { authorization: "Bearer fixture-memory-header" } },
-      endpoint: "http://127.0.0.1:8000/v1/embeddings",
+      endpoint: `${localUrl}/embeddings`,
       authorization: "Bearer fixture-memory-header",
     },
     {
@@ -163,22 +164,18 @@ describe("oMLX registered embedding provider", () => {
   }>)("embeds through $name", async ({ config, remote, endpoint, authorization }) => {
     vi.stubEnv("OMLX_API_KEY", undefined);
     const requests: Array<{ url: string; body: unknown; authorization: string | null }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-        const request = new Request(url, init);
+    embeddingFetch(
+      async (request) => {
         requests.push({
           url: request.url,
           body: await request.json(),
           authorization: request.headers.get("authorization"),
         });
-        return Response.json({
-          data: [
-            { index: 1, embedding: [0, 1] },
-            { index: 0, embedding: [1, 0] },
-          ],
-        });
-      }),
+      },
+      [
+        { index: 1, embedding: [0, 1] },
+        { index: 0, embedding: [1, 0] },
+      ],
     );
     const result = await embeddingAdapter().create({
       config,
@@ -200,153 +197,133 @@ describe("oMLX registered embedding provider", () => {
     ]);
   });
 
-  it.each<{
-    name: string;
-    request: NonNullable<ModelProviderConfig["request"]>;
-    remoteHeaders?: Record<string, string>;
-    remoteApiKey?: string;
-    authorization: string | null;
-    customKey: string | null;
-    deployment?: string;
-  }>([
-    {
-      name: "request headers",
-      request: { headers: { authorization: "Bearer fixture-omlx-key" } },
-      authorization: "Bearer fixture-omlx-key",
-      customKey: null,
-    },
-    {
-      name: "bearer authentication",
-      request: {
+  it.each<
+    [
+      name: string,
+      request: NonNullable<ModelProviderConfig["request"]>,
+      remote: { headers?: Record<string, string>; apiKey?: string } | undefined,
+      expected: [authorization: string | null, customKey: string | null, deployment?: string],
+    ]
+  >([
+    [
+      "request headers",
+      { headers: { authorization: "Bearer fixture-omlx-key" } },
+      undefined,
+      ["Bearer fixture-omlx-key", null],
+    ],
+    [
+      "bearer authentication",
+      {
         headers: { authorization: "${OMLX_STALE_TEST_AUTH}" },
         auth: bearerAuth("${OMLX_EMBED_TEST_KEY}"),
       },
-      authorization: "Bearer fixture-omlx-key",
-      customKey: null,
-    },
-    {
-      name: "custom header authentication",
-      request: {
+      undefined,
+      ["Bearer fixture-omlx-key", null],
+    ],
+    [
+      "custom header authentication",
+      {
         headers: {
           authorization: "${OMLX_STALE_TEST_AUTH}",
           "X-oMLX-Key": "${OMLX_STALE_TEST_AUTH}",
         },
         auth: headerAuth("${OMLX_EMBED_TEST_KEY}"),
       },
-      authorization: null,
-      customKey: "fixture-omlx-key",
-    },
-    {
-      name: "memory header override of provider headers",
-      request: {},
-      remoteHeaders: { authorization: "Bearer fixture-memory-key" },
-      authorization: "Bearer fixture-memory-key",
-      customKey: null,
-    },
-    {
-      name: "memory header override of bearer auth",
-      request: {
-        auth: bearerAuth({ source: "env", provider: "default", id: "OMLX_STALE_TEST_AUTH" }),
-      },
-      remoteHeaders: { Authorization: "Bearer fixture-memory-key" },
-      authorization: "Bearer fixture-memory-key",
-      customKey: null,
-    },
-    {
-      name: "memory header override of custom auth",
-      request: {
+      undefined,
+      [null, "fixture-omlx-key"],
+    ],
+    [
+      "memory header override of provider headers",
+      {},
+      { headers: { authorization: "Bearer fixture-memory-key" } },
+      ["Bearer fixture-memory-key", null],
+    ],
+    [
+      "memory header override of bearer auth",
+      { auth: bearerAuth({ source: "env", provider: "default", id: "OMLX_STALE_TEST_AUTH" }) },
+      { headers: { Authorization: "Bearer fixture-memory-key" } },
+      ["Bearer fixture-memory-key", null],
+    ],
+    [
+      "memory header override of custom auth",
+      {
         headers: { Authorization: "${OMLX_STALE_TEST_AUTH}" },
         auth: headerAuth("${OMLX_STALE_TEST_AUTH}"),
       },
-      remoteHeaders: { "x-omlx-key": "fixture-memory-key" },
-      authorization: null,
-      customKey: "fixture-memory-key",
-    },
-    {
-      name: "memory API key override of bearer auth",
-      request: {
+      { headers: { "x-omlx-key": "fixture-memory-key" } },
+      [null, "fixture-memory-key"],
+    ],
+    [
+      "memory API key override of bearer auth",
+      {
         headers: { "X-Deployment": "fixture-route" },
         auth: bearerAuth("fixture-old-key"),
       },
-      remoteApiKey: "fixture-memory-key",
-      authorization: "Bearer fixture-memory-key",
-      customKey: null,
-      deployment: "fixture-route",
-    },
-    {
-      name: "memory API key override of custom auth",
-      request: {
+      { apiKey: "fixture-memory-key" },
+      ["Bearer fixture-memory-key", null, "fixture-route"],
+    ],
+    [
+      "memory API key override of custom auth",
+      {
         headers: { "X-Deployment": "fixture-route", "X-oMLX-Key": "${OMLX_STALE_TEST_AUTH}" },
         auth: headerAuth("fixture-old-key"),
       },
-      remoteApiKey: "fixture-memory-key",
-      authorization: "Bearer fixture-memory-key",
-      customKey: null,
-      deployment: "fixture-route",
-    },
-    {
-      name: "memory API key override of unavailable custom auth",
-      request: {
+      { apiKey: "fixture-memory-key" },
+      ["Bearer fixture-memory-key", null, "fixture-route"],
+    ],
+    [
+      "memory API key override of unavailable custom auth",
+      {
         headers: { "X-Deployment": "fixture-route" },
         auth: headerAuth({ source: "env", provider: "default", id: "OMLX_STALE_TEST_AUTH" }),
       },
-      remoteApiKey: "fixture-memory-key",
-      authorization: "Bearer fixture-memory-key",
-      customKey: null,
-      deployment: "fixture-route",
-    },
-    {
-      name: "memory Authorization override of custom auth",
-      request: {
+      { apiKey: "fixture-memory-key" },
+      ["Bearer fixture-memory-key", null, "fixture-route"],
+    ],
+    [
+      "memory Authorization override of custom auth",
+      {
         headers: { "X-Deployment": "fixture-route" },
         auth: headerAuth("fixture-old-key"),
       },
-      remoteHeaders: { Authorization: "Bearer fixture-memory-key" },
-      authorization: "Bearer fixture-memory-key",
-      customKey: null,
-      deployment: "fixture-route",
-    },
-    {
-      name: "memory Authorization override of unavailable custom auth",
-      request: {
+      { headers: { Authorization: "Bearer fixture-memory-key" } },
+      ["Bearer fixture-memory-key", null, "fixture-route"],
+    ],
+    [
+      "memory Authorization override of unavailable custom auth",
+      {
         headers: { "X-Deployment": "fixture-route" },
         auth: headerAuth({ source: "env", provider: "default", id: "OMLX_STALE_TEST_AUTH" }),
       },
-      remoteHeaders: { authorization: "Bearer fixture-memory-key" },
-      authorization: "Bearer fixture-memory-key",
-      customKey: null,
-      deployment: "fixture-route",
-    },
-  ])(
-    "uses $name for embeddings",
-    async ({ request, remoteHeaders, remoteApiKey, authorization, customKey, deployment }) => {
-      vi.stubEnv("OMLX_API_KEY", undefined);
-      vi.stubEnv("OMLX_EMBED_TEST_KEY", "fixture-omlx-key");
-      vi.stubEnv("OMLX_STALE_TEST_AUTH", undefined);
-      let observedHeaders = new Headers();
-      const fetch = embeddingFetch((outbound) => {
-        observedHeaders = outbound.headers;
-      });
-      const result = await embeddingAdapter().create({
-        config: configWithProvider({
-          api: "openai-completions",
-          apiKey: "OMLX_API_KEY",
-          headers: { Authorization: "${OMLX_STALE_TEST_AUTH}" },
-          request,
-        }),
-        model: "fixture-embedding",
-        remote:
-          remoteHeaders || remoteApiKey
-            ? { headers: remoteHeaders, apiKey: remoteApiKey }
-            : undefined,
-      });
-      await expect(result.provider?.embed("orchard")).resolves.toEqual([1, 0]);
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(observedHeaders.get("authorization")).toBe(authorization);
-      expect(observedHeaders.get("x-omlx-key")).toBe(customKey);
-      expect(observedHeaders.get("x-deployment")).toBe(deployment ?? null);
-    },
-  );
+      { headers: { authorization: "Bearer fixture-memory-key" } },
+      ["Bearer fixture-memory-key", null, "fixture-route"],
+    ],
+  ])("uses %s for embeddings", async (_name, request, remote, expected) => {
+    vi.stubEnv("OMLX_API_KEY", undefined);
+    vi.stubEnv("OMLX_EMBED_TEST_KEY", "fixture-omlx-key");
+    vi.stubEnv("OMLX_STALE_TEST_AUTH", undefined);
+    let observedHeaders = new Headers();
+    const fetch = embeddingFetch((outbound) => {
+      observedHeaders = outbound.headers;
+    });
+    const result = await embeddingAdapter().create({
+      config: configWithProvider({
+        api: "openai-completions",
+        apiKey: "OMLX_API_KEY",
+        headers: { Authorization: "${OMLX_STALE_TEST_AUTH}" },
+        request,
+      }),
+      model: "fixture-embedding",
+      remote,
+    });
+    await expect(result.provider?.embed("orchard")).resolves.toEqual([1, 0]);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect([
+      observedHeaders.get("authorization"),
+      observedHeaders.get("x-omlx-key"),
+      observedHeaders.get("x-deployment"),
+    ]).toEqual([expected[0], expected[1], expected[2] ?? null]);
+  });
 
   it("keeps embedding identity stable when custom authentication rotates", async () => {
     const requests: Array<{ key: string | null; deployment: string | null }> = [];
@@ -393,29 +370,19 @@ describe("oMLX registered embedding provider", () => {
       { key: "fixture-key-after", deployment: "fixture-b" },
       { key: "fixture-route", deployment: "fixture-b" },
     ]);
-    expect(identities).toEqual([
-      ...["fixture-a", "fixture-a", "fixture-b"].map((deployment) => ({
+    expect(identities).toEqual(
+      ["fixture-a", "fixture-a", "fixture-b", "fixture-b"].map((deployment, index) => ({
         provider: "omlx",
-        baseUrl: "http://127.0.0.1:8000/v1",
+        baseUrl: index === 3 ? "http://127.0.0.1:18002/v1" : localUrl,
         model: "fixture-embedding",
         headers: {
           accept: "application/json",
           "content-type": "application/json",
           "x-deployment": deployment,
+          ...(index === 3 ? { "x-omlx-key": "fixture-route" } : {}),
         },
       })),
-      {
-        provider: "omlx",
-        baseUrl: "http://127.0.0.1:18002/v1",
-        model: "fixture-embedding",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          "x-deployment": "fixture-b",
-          "x-omlx-key": "fixture-route",
-        },
-      },
-    ]);
+    );
   });
 
   it.each([undefined, { "X-Visible": "fixture-header" }])(
@@ -508,6 +475,10 @@ function runtimeContext(
   };
 }
 
+function chatProvider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
+  return { baseUrl: remoteUrl, api: "openai-completions", models: [], ...overrides };
+}
+
 it.each<{
   name: string;
   configured: Pick<ModelProviderConfig, "headers" | "request">;
@@ -523,7 +494,7 @@ it.each<{
 ])("resolves header-only credentials through the public auth boundary: $name", async (scenario) => {
   vi.stubEnv("OMLX_API_KEY", "");
   await withOpenClawTestState({ label: "omlx-direct-header-auth" }, async (state) => {
-    const model = chatModel("https://omlx.example.test/v1");
+    const model = chatModel(remoteUrl);
     const auth = await resolveApiKeyForProvider({
       provider: "omlx",
       modelId: model.id,
@@ -535,16 +506,12 @@ it.each<{
       allowAuthProfileFallback: false,
       cfg: {
         plugins: { allow: ["omlx"] },
-        models: {
-          providers: {
-            omlx: {
-              baseUrl: model.baseUrl,
-              api: "openai-completions",
-              models: [model],
-              ...scenario.configured,
-            },
-          },
-        },
+        ...configWithProvider({
+          baseUrl: model.baseUrl,
+          api: "openai-completions",
+          models: [model],
+          ...scenario.configured,
+        }),
       },
     });
     expect(auth.apiKey).toBeTruthy();
@@ -555,60 +522,65 @@ it.each<{
 it.each<{
   name: string;
   baseUrl: string;
-  configured: Pick<ModelProviderConfig, "headers" | "request">;
+  configured: Pick<ModelProviderConfig, "apiKey" | "headers" | "request">;
   sourceApiKey: string;
   runtimeApiKey: string;
 }>([
   {
     name: "loopback Authorization with generic local auth",
-    baseUrl: "http://127.0.0.1:8000/v1",
+    baseUrl: localUrl,
     configured: { headers: { Authorization: "Bearer fixture-request-key" } },
     sourceApiKey: CUSTOM_LOCAL_AUTH_MARKER,
     runtimeApiKey: "omlx-local",
   },
   {
-    name: "remote Authorization with plugin local auth",
-    baseUrl: "https://omlx.example.test/v1",
-    configured: { headers: { Authorization: "Bearer fixture-request-key" } },
-    sourceApiKey: "omlx-local",
-    runtimeApiKey: "omlx-local",
-  },
-  {
     name: "loopback request header with profile auth",
-    baseUrl: "http://127.0.0.1:8000/v1",
+    baseUrl: localUrl,
     configured: { request: { headers: { authorization: "Bearer fixture-request-key" } } },
     sourceApiKey: "fixture-profile-key",
     runtimeApiKey: "omlx-local",
   },
   {
     name: "remote bearer auth with profile auth",
-    baseUrl: "https://omlx.example.test/v1",
+    baseUrl: remoteUrl,
     configured: { request: { auth: bearerAuth("fixture-request-key") } },
     sourceApiKey: "fixture-profile-key",
     runtimeApiKey: "omlx-local",
   },
   {
     name: "loopback custom header with profile auth",
-    baseUrl: "http://127.0.0.1:8000/v1",
+    baseUrl: localUrl,
     configured: { request: { auth: headerAuth("fixture-request-key") } },
     sourceApiKey: "fixture-profile-key",
     runtimeApiKey: CUSTOM_LOCAL_AUTH_MARKER,
   },
   {
     name: "remote custom header with plugin local auth",
-    baseUrl: "https://omlx.example.test/v1",
+    baseUrl: remoteUrl,
     configured: { request: { auth: headerAuth("fixture-request-key") } },
     sourceApiKey: "omlx-local",
     runtimeApiKey: CUSTOM_LOCAL_AUTH_MARKER,
   },
-])("admits header-only chat and prepares $name", async (scenario) => {
+  {
+    name: "keyless remote with a saved credential",
+    baseUrl: remoteUrl,
+    configured: { apiKey: "omlx-local" },
+    sourceApiKey: "old-server-key",
+    runtimeApiKey: CUSTOM_LOCAL_AUTH_MARKER,
+  },
+  {
+    name: "keyless remote with whitespace Authorization",
+    baseUrl: remoteUrl,
+    configured: { apiKey: "omlx-local", headers: { Authorization: "   " } },
+    sourceApiKey: "old-server-key",
+    runtimeApiKey: CUSTOM_LOCAL_AUTH_MARKER,
+  },
+])("prepares chat authentication for $name", async (scenario) => {
   const provider = capturePluginRegistration(plugin).providers[0];
-  const providerConfig: ModelProviderConfig = {
+  const providerConfig = chatProvider({
     baseUrl: scenario.baseUrl,
-    api: "openai-completions",
-    models: [],
     ...scenario.configured,
-  };
+  });
   const config = { models: { providers: { omlx: providerConfig } } };
   expect
     .soft(provider?.resolveSyntheticAuth?.({ provider: "omlx", config, providerConfig }))
@@ -638,16 +610,13 @@ it.each<{
   },
 ])("honors effective model auth over $name", async (scenario) => {
   const provider = capturePluginRegistration(plugin).providers[0];
-  const baseModel = chatModel("https://omlx.example.test/v1");
+  const baseModel = chatModel(remoteUrl);
   const providerHeaders = { Authorization: "Bearer fixture-stale-header" };
-  const providerConfig: ModelProviderConfig = {
-    baseUrl: baseModel.baseUrl,
-    api: "openai-completions",
+  const providerConfig = chatProvider({
     apiKey: "omlx:profile",
     headers: providerHeaders,
     request: scenario.providerRequest,
-    models: [],
-  };
+  });
   const model = attachModelProviderRequestTransport(
     {
       ...baseModel,
@@ -669,30 +638,22 @@ it.each<{
 
 it("lets custom request auth override a configured profile credential", async () => {
   const provider = capturePluginRegistration(plugin).providers[0];
-  const model = chatModel("https://omlx.example.test/v1");
-  const providerConfig: ModelProviderConfig = {
-    baseUrl: model.baseUrl,
-    api: "openai-completions",
+  const providerConfig = chatProvider({
     apiKey: "omlx:profile",
     request: { auth: headerAuth("fixture-request-key") },
-    models: [],
-  };
+  });
 
   await expect(
-    provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key", model)),
+    provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key")),
   ).resolves.toEqual({ apiKey: CUSTOM_LOCAL_AUTH_MARKER });
 });
 
 it("keeps configured keys and unoverridden profile credentials authoritative", async () => {
   const provider = capturePluginRegistration(plugin).providers[0];
-  const baseUrl = "https://omlx.example.test/v1";
-  const configuredKey: ModelProviderConfig = {
-    baseUrl,
-    api: "openai-completions",
+  const configuredKey = chatProvider({
     apiKey: "fixture-config-key",
     headers: { Authorization: "Bearer fixture-request-key" },
-    models: [],
-  };
+  });
   expect(
     provider?.resolveSyntheticAuth?.({
       provider: "omlx",
@@ -702,13 +663,8 @@ it("keeps configured keys and unoverridden profile credentials authoritative", a
   ).toBeUndefined();
   for (const providerConfig of [
     configuredKey,
-    { baseUrl, api: "openai-completions" as const, models: [] },
-    {
-      baseUrl,
-      api: "openai-completions" as const,
-      request: { auth: { mode: "provider-default" as const } },
-      models: [],
-    },
+    chatProvider(),
+    chatProvider({ request: { auth: { mode: "provider-default" } } }),
   ]) {
     expect(
       await provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key")),
