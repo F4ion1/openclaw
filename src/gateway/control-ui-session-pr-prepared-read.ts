@@ -155,7 +155,12 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
       writeSnapshot(branchState, snapshot);
     }
   };
-  const publishSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
+  const publishSnapshot = (
+    state: State,
+    snapshot: ControlUiSessionPullRequestSnapshot,
+    assertReadAuthority?: () => void,
+  ) => {
+    state.assertReadAuthority = assertReadAuthority;
     writeSnapshot(state, snapshot);
     // Branch-only loaders (including injected ones) need no separate projection callback.
     if (!snapshot.taskPullRequests) {
@@ -188,8 +193,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
         state.snapshot === previous &&
         state.target.identity === target.identity
       ) {
-        state.assertReadAuthority = assertReadAuthority;
-        publishSnapshot(state, snapshot);
+        publishSnapshot(state, snapshot, assertReadAuthority);
       }
     };
     assertActive();

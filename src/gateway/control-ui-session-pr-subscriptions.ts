@@ -312,7 +312,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
               }
               throw new Error("Session pull-request watchers changed");
             };
-            state.assertReadAuthority = undefined;
+            let assertReadAuthority: (() => void) | undefined;
             const snapshot = await loadSessionPullRequests(
               { ...state.target.params, ...(refresh ? { refresh: true } : {}) },
               state.cacheLifetime.signal,
@@ -326,7 +326,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
                 },
                 assertCurrent: assertReadCurrent,
                 retainReadAuthority: (guard) => {
-                  state.assertReadAuthority = guard;
+                  assertReadAuthority = guard;
                 },
               },
             )
@@ -334,7 +334,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
               .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
             if ((await currentKeyState(cacheKey)) === state) {
               assertSourceCurrent();
-              prepared.publishSnapshot(state, snapshot);
+              prepared.publishSnapshot(state, snapshot, assertReadAuthority);
               // Shared equality does not acknowledge recipients that missed publication.
               await push(new Set(state.connIds), state, snapshot, assertSourceCurrent, refresh);
             }
@@ -364,9 +364,11 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     refresh = false,
     requestedKey?: string,
   ): Promise<void> => {
-    if (connIds.size === 0) {
+    if (connIds.size === 0 || (state.target.ownGitHubProfileId && state.snapshot !== snapshot)) {
       return Promise.resolve();
     }
+    // Retain the authority for these facts across queued delivery and watcher reads.
+    const assertReadAuthority = state.assertReadAuthority;
     const hash = JSON.stringify(snapshot);
     const isDelivered = (watched: Watched) =>
       !(refresh && watched.refreshPending) && watched.deliveredHash === hash;
@@ -397,10 +399,12 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
           try {
             // The shared cache can carry another viewer's target after preparation yields.
             current.target.assertCurrent?.();
-            state.assertReadAuthority?.();
+            assertReadAuthority?.();
           } catch {
             if (current.target.ownGitHubProfileId) {
-              state.snapshot = undefined;
+              if (state.snapshot === snapshot) {
+                state.snapshot = undefined;
+              }
               invalidatePrReader(connId, deps.broadcastToConnIds);
             }
             // Losing one recipient must not suppress the same snapshot for other viewers.

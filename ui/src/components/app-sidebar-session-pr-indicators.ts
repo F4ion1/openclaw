@@ -1,5 +1,6 @@
 import { createEffect, createMemo, onCleanup } from "solid-js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
@@ -34,6 +35,7 @@ export function createSessionPullRequestIndicators(options: SessionPullRequestIn
   const readable = () => {
     const gateway = options.getGateway();
     return gateway &&
+      operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []) &&
       canCallGatewayMethod(
         gateway.snapshot,
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,

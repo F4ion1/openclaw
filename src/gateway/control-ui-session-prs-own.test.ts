@@ -300,6 +300,56 @@ it("admits only the prepared own binding and clears withdrawn private/profile ac
   });
 });
 
+it("keeps cached private facts guarded while another reader refreshes", async ({ signal }) => {
+  await withOwnFixture(async (f, remote) => {
+    await f.seed(sessionKey, f.profile.id, { worktree });
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: f.readerEmail },
+    });
+    remote.base.private = true;
+    await f.subscribe();
+    await f.subscriptions.pollNow();
+    expect(lastSnapshot(f)?.pullRequests).toHaveLength(1);
+
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    remote.beforeRead(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const polling = f.subscriptions.pollNow();
+    try {
+      await awaitGateBeforeSettlement(entered.promise, polling, "Warm refresh was not admitted");
+      io.currentIdentity.mockReturnValue(false);
+      const second = f.addReader("second-own-pr-reader");
+      const delivered = createDeferredCore();
+      second.socket.send.mockImplementation((data) => {
+        const frame = JSON.parse(data.toString());
+        if (
+          frame.event === "controlUi.sessionPullRequests.changed" ||
+          frame.event === "sessions.changed"
+        ) {
+          delivered.resolve();
+        }
+      });
+      await f.subscribe([sessionKey], second.client);
+      await withinTest(delivered.promise, signal);
+      const received = second.socket.send.mock.calls.map(([data]) => JSON.parse(data.toString()));
+      expect(JSON.stringify(received)).not.toContain("Original contribution");
+      expect(received).toContainEqual(
+        expect.objectContaining({
+          event: "sessions.changed",
+          payload: { reason: "profile-identity" },
+        }),
+      );
+    } finally {
+      release.resolve();
+      await polling;
+    }
+  });
+});
+
 it.each(["grant", "unsubscribe"] as const)(
   "does not disclose a late own-PR read after %s",
   async (change) => {

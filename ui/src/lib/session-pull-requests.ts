@@ -109,6 +109,9 @@ export function sessionPullRequestsForGateway(
 
   const canReadPullRequests = () =>
     canCallGatewayMethod(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "operator.read");
+  const canReadAllPullRequests = () =>
+    operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []);
+  let broadRead = canReadAllPullRequests();
 
   const notify = () => Array.from(listeners).forEach((listener) => listener());
 
@@ -151,6 +154,9 @@ export function sessionPullRequestsForGateway(
     }
     const keys = new Map<string, number>();
     for (const watched of watchedByOwner.values()) {
+      if (watched.passive && !canReadAllPullRequests()) {
+        continue;
+      }
       for (const key of watched.keys) {
         const priority = watched.passive ? 0 : watched.foreground ? 2 : 1;
         keys.set(key, Math.max(keys.get(key) ?? 0, priority));
@@ -225,10 +231,14 @@ export function sessionPullRequestsForGateway(
 
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
     const changed = connection.transition(snapshot);
-    if (changed) {
+    const nextBroadRead = canReadAllPullRequests();
+    const readScopeChanged = broadRead !== nextBroadRead;
+    broadRead = nextBroadRead;
+    if (changed || readScopeChanged) {
+      orderedWatchedKeys = undefined;
       retireConnection();
     }
-    if (changed || snapshot.hello !== lifecycle.requestHello) {
+    if (changed || readScopeChanged || snapshot.hello !== lifecycle.requestHello) {
       retry.reset();
       lifecycle.schedule();
     }
@@ -358,9 +368,7 @@ export function sessionPullRequestsForGateway(
     onSnapshot: handleGatewaySnapshot,
     onEvent: handleGatewayEvent,
     onAttach: () => {
-      if (connection.transition(gateway.snapshot)) {
-        retireConnection();
-      }
+      handleGatewaySnapshot(gateway.snapshot);
       lifecycle.clearRequest();
     },
     onDetach: () => {
