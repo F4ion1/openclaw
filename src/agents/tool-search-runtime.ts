@@ -190,7 +190,7 @@ async function assertCatalogOutputMatchesSchema(
     throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
   }
   // Failed operations carry an error result, not the tool's successful output.
-  if (result.isError === true) {
+  if ("isError" in result && result.isError === true) {
     return;
   }
   const validation = await validateCatalogSchemaValue(
