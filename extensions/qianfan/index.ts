@@ -31,14 +31,19 @@ export default defineSingleProviderPluginEntry({
           throw new Error("The OpenAI-compatible embedding provider is unavailable.");
         }
         const result = await adapter.create(options);
-        // Baidu's per-model batch limits: https://ai.baidu.com/ai-doc/WENXINWORKSHOP/Ultiovtgu
-        if (
-          result.provider &&
-          ["embedding-v1", "bge-large-zh", "bge-large-en"].includes(
-            result.provider.model.toLowerCase(),
-          )
-        ) {
-          result.provider.maxInputsPerRequest = 16;
+        if (result.provider) {
+          result.provider.id = PROVIDER_ID;
+          // Baidu's per-model batch limits: https://ai.baidu.com/ai-doc/WENXINWORKSHOP/Ultiovtgu
+          if (
+            ["embedding-v1", "bge-large-zh", "bge-large-en"].includes(
+              result.provider.model.toLowerCase(),
+            )
+          ) {
+            result.provider.maxInputsPerRequest = 16;
+          }
+        }
+        if (result.runtime) {
+          result.runtime.id = PROVIDER_ID;
         }
         return result;
       },

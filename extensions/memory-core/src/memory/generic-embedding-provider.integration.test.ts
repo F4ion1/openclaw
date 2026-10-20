@@ -361,6 +361,8 @@ describe("memory-core embedding batch recovery over real transport", () => {
             },
           },
         );
+        expect(generation.provider.id).toBe("qianfan");
+        expect(generation.runtime?.id).toBe("qianfan");
         const embeddings = await owner.embedChunksInBatches(
           distinctCandidates(33),
           generation,
