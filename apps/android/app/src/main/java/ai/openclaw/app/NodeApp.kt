@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import ai.openclaw.app.voice.VoiceCommandSink
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -36,6 +37,9 @@ class NodeApp : Application() {
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val runtimeLock = Any()
   private var runtimeInstance: NodeRuntime? = null
+
+  /** Assistant-role dispatch accessor for the voice session service. */
+  fun voiceCommandSinkOrNull(): VoiceCommandSink? = runtimeInstance?.asVoiceCommandSink()
   private val nodeServiceControlLock = Any()
 
   private class NodeServiceIntent

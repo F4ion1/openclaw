@@ -112,6 +112,7 @@ import ai.openclaw.app.voice.VoiceConversationRole
 import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
+import ai.openclaw.app.voice.VoiceCommandSink
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
 import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
@@ -947,6 +948,13 @@ class NodeRuntime internal constructor(
   private var voiceWakeWordsGatewayStableId: String? = null
   private val _voiceWakeWordsSaving = MutableStateFlow(false)
   val voiceWakeWordsSaving: StateFlow<Boolean> = _voiceWakeWordsSaving.asStateFlow()
+  /** Assistant-role dispatch path: same node event as voice wake, without UI side effects. */
+  fun asVoiceCommandSink(): VoiceCommandSink =
+    object : VoiceCommandSink {
+      override suspend fun sendVoiceCommand(text: String): Boolean =
+        sendVoiceWakeCommand(VoiceWakeMatch(trigger = "", command = text))
+    }
+
   private val _voiceWakeWordsNoticeText = MutableStateFlow<NativeText?>(null)
   val voiceWakeWordsNoticeText: StateFlow<String?> = _voiceWakeWordsNoticeText.resolveOptionalNativeText()
 

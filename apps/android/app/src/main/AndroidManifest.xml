@@ -169,5 +169,17 @@
                 <data android:mimeType="text/markdown" />
             </intent-filter>
         </activity>
+    <!-- Assistant role (takeover patch): hotword + session ownership -->
+    <service
+        android:name=".voice.OpenClawVoiceInteractionService"
+        android:exported="true"
+        android:permission="android.permission.BIND_VOICE_INTERACTION">
+        <intent-filter>
+            <action android:name="android.service.voice.VoiceInteractionService" />
+        </intent-filter>
+        <meta-data
+            android:name="voice_interaction_settings_activity"
+            android:value=".MainActivity" />
+    </service>
     </application>
 </manifest>
