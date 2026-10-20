@@ -56,7 +56,7 @@ function parsePullRequestUrl(value: string, host: string) {
   const url = URL.parse(value);
   const match =
     url &&
-    /^\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)(?:\/(?:files|checks|commits(?:\/[a-f0-9]{40})?))?\/?$/u.exec(
+    /^\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)(?:\/(?:changes|files|checks|commits(?:\/[a-f0-9]{40})?))?\/?$/u.exec(
       url.pathname,
     );
   let repository: string | undefined;
