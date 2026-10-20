@@ -143,7 +143,46 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
     }
     return response;
   });
-  const invoke = async (
+  const invoke = createPublicationActionInvoker(f, writerSource);
+  const expected = { requestId: publication.requestId, expectedHeadCommit: publication.headCommit };
+  return {
+    ...f,
+    publication,
+    state,
+    writes,
+    invoke,
+    expected,
+    onRead(callback: () => Promise<void>) {
+      beforeRead = callback;
+    },
+    rejectMerge(
+      result: ReturnType<typeof commandResult> | Error = commandResult(
+        '{"message":"Required checks have not passed"}',
+        1,
+      ),
+    ) {
+      rejectMerge = result;
+    },
+    rejectEdit() {
+      rejectEdit = true;
+    },
+    rejectClose() {
+      rejectClose = true;
+    },
+    reviewResponse(result: ReturnType<typeof commandResult>) {
+      reviewResponse = result;
+    },
+    loseResponse() {
+      loseResponse = true;
+    },
+  };
+}
+
+export function createPublicationActionInvoker(
+  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
+  writerSource = f.maintainerSource,
+) {
+  return async (
     actor: "guest" | "admin" | "writer",
     args: Record<string, unknown>,
     source = SESSION_KEY,
@@ -189,37 +228,5 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
             sandbox: invocation.sandbox,
           }).execute("publication-action", args),
     );
-  };
-  const expected = { requestId: publication.requestId, expectedHeadCommit: publication.headCommit };
-  return {
-    ...f,
-    publication,
-    state,
-    writes,
-    invoke,
-    expected,
-    onRead(callback: () => Promise<void>) {
-      beforeRead = callback;
-    },
-    rejectMerge(
-      result: ReturnType<typeof commandResult> | Error = commandResult(
-        '{"message":"Required checks have not passed"}',
-        1,
-      ),
-    ) {
-      rejectMerge = result;
-    },
-    rejectEdit() {
-      rejectEdit = true;
-    },
-    rejectClose() {
-      rejectClose = true;
-    },
-    reviewResponse(result: ReturnType<typeof commandResult>) {
-      reviewResponse = result;
-    },
-    loseResponse() {
-      loseResponse = true;
-    },
   };
 }

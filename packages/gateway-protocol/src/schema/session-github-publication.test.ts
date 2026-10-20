@@ -39,6 +39,9 @@ describe("session GitHub publication protocol", () => {
       expectedHeadCommit: "a".repeat(40),
     };
     expect(Value.Check(SessionGitHubActionParamsSchema, request)).toBe(true);
+    expect(Value.Check(SessionGitHubActionParamsSchema, { ...request, requestId: undefined })).toBe(
+      true,
+    );
     for (const extra of [
       { body: "@clawsweeper stop" },
       { focus: "maintainer instructions" },
@@ -46,7 +49,6 @@ describe("session GitHub publication protocol", () => {
       { repository: "other/repo" },
       { url: "https://github.com/other/repo/pull/1" },
       { mergeMethod: "squash" },
-      { requestId: undefined },
       { expectedHeadCommit: undefined },
     ]) {
       expect(Value.Check(SessionGitHubActionParamsSchema, { ...request, ...extra })).toBe(false);
