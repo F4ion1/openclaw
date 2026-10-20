@@ -7,7 +7,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
 
@@ -17,10 +17,10 @@ const sessionId = "cron-cli-diagnostic-session";
 
 function makeCliOwnershipParams() {
   return makeIsolatedAgentParamsFixture({
-    job: {
+    job: makeIsolatedAgentJobFixture({
       sessionTarget: "session:existing-cron-session",
       payload: { kind: "agentTurn", message: "summarize", model: "test-cli/test-model" },
-    },
+    }),
     message: "summarize",
     sessionKey: "existing-cron-session",
   });

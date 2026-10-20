@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../../agents/cli-runner.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import * as harness from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
@@ -63,11 +63,11 @@ describe("cron isolated-agent sandbox placement admission", () => {
         agentId: "main",
         sessionKey,
         message: "summarize",
-        job: {
+        job: makeIsolatedAgentJobFixture({
           agentId: "main",
           sessionTarget: `session:${sessionKey}`,
           payload: { kind: "agentTurn", message: "summarize", ...(model ? { model } : {}) },
-        },
+        }),
       }),
     );
   }
@@ -98,26 +98,13 @@ describe("cron isolated-agent sandbox placement admission", () => {
       resolvedSkills: [],
       version: 42,
     });
+    const acquireRuntime = expectDefined(
+      harness.acquirePreparedModelRuntimeMock.getMockImplementation(),
+      "runtime fixture",
+    );
     harness.acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) => {
-      const registry = harness.preparedRunPluginRegistryMock();
-      const metadata =
-        options?.pluginGeneration?.pluginMetadataSnapshot ??
-        options?.pluginMetadataSnapshot ??
-        createPluginMetadataSnapshotFixture();
-      return {
-        snapshot: {
-          ...input,
-          metadataSnapshot: metadata,
-          pluginRegistry: registry,
-          isCurrent: () => true,
-        },
-        pluginGeneration: {
-          ...options?.pluginGeneration,
-          pluginMetadataSnapshot: metadata,
-          pluginRegistry: registry,
-        },
-        [Symbol.asyncDispose]: vi.fn(async () => {}),
-      };
+      const lease = await acquireRuntime(input, options);
+      return { ...lease, snapshot: { ...lease.snapshot, isCurrent: () => true } };
     });
     tempDir = makeTempDir(tempRoots, "cron-sandbox-admission-");
     ({ commandPath, markerPath } = createRealCliStubExecutable(tempDir));

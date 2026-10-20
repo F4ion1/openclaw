@@ -5,7 +5,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
 
@@ -77,7 +77,7 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
     await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
         cfg,
-        job: { delivery },
+        job: makeIsolatedAgentJobFixture({ delivery }),
       }),
     );
     const prompt = harness.runEmbeddedAgentMock.mock.calls[0]?.[0].extraSystemPrompt;

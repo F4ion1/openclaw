@@ -11,10 +11,7 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  cfg,
-  stateDir,
-} from "../../gateway/server-methods/requester-cron-authority.test-support.js";
+import { stateDir } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
@@ -35,7 +32,6 @@ export async function prepareAuthorityConfig(overrides: Partial<OpenClawConfig> 
   const { resolveAgentDir } = await import("./run.runtime.js");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
   const config: OpenClawConfig = {
-    ...cfg,
     models: createEmbeddedAgentRunnerOpenAiConfig(["gpt-4.1"]).models,
     agents: {
       defaults: { skipBootstrap: true, workspace: stateDir, model: "openai/gpt-4.1" },

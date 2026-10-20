@@ -5,7 +5,7 @@ import {
   getAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
@@ -14,8 +14,16 @@ import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
 const { resolveCronDeliveryPlan } =
   await vi.importActual<typeof import("../delivery-plan.js")>("../delivery-plan.js");
 const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
-const runTurn = (overrides: Parameters<typeof makeIsolatedAgentParamsFixture>[0]) =>
-  runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture(overrides));
+const runTurn = ({
+  job,
+  ...overrides
+}: {
+  job?: Record<string, unknown>;
+  [key: string]: unknown;
+}) =>
+  runCronIsolatedAgentTurn(
+    makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) }),
+  );
 
 describe("cron source delivery policy", () => {
   setupRunCronIsolatedAgentTurnSuite();

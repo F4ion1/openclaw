@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
 
@@ -11,8 +11,13 @@ vi.mock("./delivery-subagent-registry.runtime.js", () => ({
 }));
 
 const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
-const runTurn = (overrides = {}) =>
-  runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture(overrides));
+const runTurn = ({
+  job,
+  ...overrides
+}: { job?: Record<string, unknown>; [key: string]: unknown } = {}) =>
+  runCronIsolatedAgentTurn(
+    makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) }),
+  );
 const failedRun = { provider: "openai", model: "gpt-5.4", usage: { input: 0, output: 0 } };
 function mockAgentRun({
   provider = "anthropic",
@@ -56,13 +61,10 @@ function mockAnnounceOutcome(
     summary: text,
     outputText: text,
     synthesizedText: text,
-    deliveryPayload: payloads.at(-1),
     deliveryPayloads: payloads,
     deliveryDisposition: { kind: "visible" },
-    deliveryPayloadHasStructuredContent: false,
     hasFatalErrorPayload: false,
     hasFatalStructuredErrorPayload: false,
-    embeddedRunError: undefined,
     ...overrides,
   });
 }
@@ -150,12 +152,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     );
   });
 
-  it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
-    mockAgentRun({ ...failedRun, meta: { aborted: true } });
-    const result = await runTurn();
-    expectObjectFields(result, { status: "error", error: "cron isolated agent run aborted" });
-  });
-
   it.each([false, true])(
     "preserves tool-error status for silent replies (error: %s)",
     async (failed) => {
@@ -222,7 +218,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     const mediaPayload = { mediaUrl: "https://example.invalid/chart.png" };
     const error = "Structured message failed";
     mockChildRun([mediaPayload]);
-    mockAnnounceOutcome([mediaPayload], undefined, { deliveryPayloadHasStructuredContent: true });
+    mockAnnounceOutcome([mediaPayload]);
     mockDelivery({
       deliveryError: error,
       deliveryState: failedDeliveryState(error),

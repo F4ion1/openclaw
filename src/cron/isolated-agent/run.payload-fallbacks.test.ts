@@ -4,7 +4,7 @@ import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
 
@@ -16,7 +16,9 @@ const runtimeAuthority = {
   payload: { version: 1 },
 };
 const runJob = (job: Record<string, unknown>) =>
-  runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ job }));
+  runCronIsolatedAgentTurn(
+    makeIsolatedAgentParamsFixture({ job: makeIsolatedAgentJobFixture(job) }),
+  );
 describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 

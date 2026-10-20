@@ -15,7 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import * as harness from "./run.test-harness.js";
 
 const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
@@ -44,7 +44,7 @@ function prepareRun(storePath: string, sessionKey = "cron:test-job", job = {}) {
       agentId: "main",
       cfg: { session: { store: storePath } },
       sessionKey,
-      job: { delivery: { mode: "none" }, ...job },
+      job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" }, ...job }),
     }),
     isFastTestEnv: true,
     onLifecycleInterrupt: () => {},
@@ -159,23 +159,20 @@ describe("cron session preparation", () => {
       },
     );
     const result = await prepareRun(database.path);
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Cron preparation failed");
-    }
+    const context = expectDefined(result.ok ? result.context : undefined, "prepared context");
     try {
-      await using _ = result.context.preparedModelRuntimeLease;
+      await using _ = context.preparedModelRuntimeLease;
       expect(harness.patchSessionEntryMock).toHaveBeenCalled();
       expect(queries).toEqual([]);
       expect(actualAccessor.loadSessionEntry(target)).toMatchObject({
         createdVia: "cron",
-        sessionId: result.context.runSessionId,
+        sessionId: context.runSessionId,
         totalTokens: 25,
       });
-      expect(result.context.cronSession.sessionEntry.totalTokens).toBe(25);
+      expect(context.cronSession.sessionEntry.totalTokens).toBe(25);
     } finally {
-      result.context.sessionPreparationEffect.release();
-      await result.context.workspaceLease?.release();
+      context.sessionPreparationEffect.release();
+      await context.workspaceLease?.release();
     }
   });
 
@@ -243,16 +240,18 @@ describe("cron session preparation", () => {
     expect(Object.keys(prepared?.store ?? {}).toSorted()).toEqual(
       [targetKey, sourceKey].toSorted(),
     );
-    expect(prepared?.initialSessionEntry).toMatchObject(target);
-    expect(prepared?.store[sourceKey]).toMatchObject(source);
-    expect(prepared?.sessionEntry).toMatchObject({
-      label: source.label,
-      thinkingLevel: source.thinkingLevel,
-      createdAt: target.createdAt,
-      createdVia: target.createdVia,
-      skillLibrarySelections: target.skillLibrarySelections,
+    expect(prepared).toMatchObject({
+      initialSessionEntry: target,
+      store: { [sourceKey]: source },
+      sessionEntry: {
+        label: source.label,
+        thinkingLevel: source.thinkingLevel,
+        createdAt: target.createdAt,
+        createdVia: target.createdVia,
+        skillLibrarySelections: target.skillLibrarySelections,
+      },
+      isNewSession: true,
     });
-    expect(prepared?.isNewSession).toBe(true);
     expect(prepared?.sessionEntry.sessionId).not.toBe(source.sessionId);
   });
 });
