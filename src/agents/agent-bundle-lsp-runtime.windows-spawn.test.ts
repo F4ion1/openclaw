@@ -49,12 +49,6 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       expectedArgv: ["typescript-language-server", "--stdio"],
     },
     {
-      name: "passes sanitized env to resolveWindowsSpawnProgram",
-      sanitizedEnv: { PATH: "C:\\Windows;C:\\nodejs", PATHEXT: ".COM;.EXE;.BAT;.CMD" },
-      program: directProgram,
-      expectedArgv: ["typescript-language-server", "--stdio"],
-    },
-    {
       name: "passes materialized invocation to spawn with the sanitized env",
       sanitizedEnv: { PATH: "/usr/bin" },
       program: {

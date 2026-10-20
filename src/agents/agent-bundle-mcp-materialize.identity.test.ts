@@ -119,6 +119,13 @@ async function execute(runtimeValue: SessionMcpRuntime, profile?: string) {
     await tools.dispose();
   }
 }
+async function standaloneTicket() {
+  return createMcpAppStandaloneTicket({
+    sessionKey: "agent:main:channel",
+    view: await mocks.fetch.mock.results[0]!.value,
+    toolOperationsAuthorized: true,
+  });
+}
 describe("materialized MCP App identity provenance", () => {
   it("prepares model-run form previews through current tool approval and preserves its execution guard", async () => {
     const source = runtime(false);
@@ -154,14 +161,7 @@ describe("materialized MCP App identity provenance", () => {
     expect(mocks.fetch).toHaveBeenCalledOnce();
     const params = mocks.fetch.mock.calls[0]![0];
     expect(params.requesterId).toBeUndefined();
-    const view = await mocks.fetch.mock.results[0]!.value;
-    expect(
-      createMcpAppStandaloneTicket({
-        sessionKey: "agent:main:channel",
-        view,
-        toolOperationsAuthorized: true,
-      }),
-    ).toBeDefined();
+    expect(await standaloneTicket()).toBeDefined();
   });
   it("uses the admitted question creator profile rather than the transport sender for private Apps", async () => {
     const authority = createAgentQuestionAnswerAuthority({
@@ -186,13 +186,6 @@ describe("materialized MCP App identity provenance", () => {
     expect(mocks.fetch).toHaveBeenCalledWith(
       expect.objectContaining({ requesterId: "verified-profile" }),
     );
-    const view = await mocks.fetch.mock.results[0]!.value;
-    expect(
-      createMcpAppStandaloneTicket({
-        sessionKey: "agent:main:channel",
-        view,
-        toolOperationsAuthorized: true,
-      }),
-    ).toBeUndefined();
+    expect(await standaloneTicket()).toBeUndefined();
   });
 });

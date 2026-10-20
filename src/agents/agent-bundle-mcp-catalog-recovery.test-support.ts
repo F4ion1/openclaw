@@ -2,6 +2,33 @@ import http from "node:http";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 
+function reply(
+  response: http.ServerResponse,
+  id: string | number,
+  sessionId: string,
+  result: unknown,
+) {
+  response.setHeader("content-type", "application/json");
+  response.setHeader("mcp-session-id", sessionId);
+  response.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id, result }));
+}
+
+function tools(sessionId: string) {
+  return {
+    tools: [
+      {
+        name: "probe",
+        inputSchema: { type: "object" },
+        outputSchema: {
+          type: "object",
+          properties: { revision: { const: sessionId } },
+          required: ["revision"],
+        },
+      },
+    ],
+  };
+}
+
 export async function startCatalogRecoveryMcpServer(
   label: string,
   options: { holdTermination?: Promise<void> } = {},
@@ -55,19 +82,11 @@ export async function startCatalogRecoveryMcpServer(
       if (message.method === "initialize") {
         sessionGeneration += 1;
         const sessionId = `${label}-${sessionGeneration}`;
-        response.setHeader("content-type", "application/json");
-        response.setHeader("mcp-session-id", sessionId);
-        response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-              capabilities: { tools: {} },
-              serverInfo: { name: label, version: "1.0.0" },
-            },
-          }),
-        );
+        reply(response, message.id, sessionId, {
+          protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: label, version: "1.0.0" },
+        });
         return;
       }
       if (message.method === "notifications/initialized") {
@@ -82,44 +101,16 @@ export async function startCatalogRecoveryMcpServer(
         if (hangCalls) {
           return;
         }
-        response.setHeader("content-type", "application/json");
-        response.setHeader("mcp-session-id", sessionId);
-        response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              content: [],
-              structuredContent: { revision: sessionId },
-            },
-          }),
-        );
+        reply(response, message.id, sessionId, {
+          content: [],
+          structuredContent: { revision: sessionId },
+        });
         return;
       }
       if (message.method === "tools/list") {
         listCount += 1;
         if (listCount === 1) {
-          response.setHeader("content-type", "application/json");
-          response.setHeader("mcp-session-id", sessionId);
-          response.writeHead(200).end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              id: message.id,
-              result: {
-                tools: [
-                  {
-                    name: "probe",
-                    inputSchema: { type: "object" },
-                    outputSchema: {
-                      type: "object",
-                      properties: { revision: { const: sessionId } },
-                      required: ["revision"],
-                    },
-                  },
-                ],
-              },
-            }),
-          );
+          reply(response, message.id, sessionId, tools(sessionId));
           return;
         }
         pendingLists.push({ id: message.id, response, sessionId });
@@ -153,27 +144,7 @@ export async function startCatalogRecoveryMcpServer(
     },
     releaseLists: () => {
       for (const pending of pendingLists.splice(0)) {
-        pending.response.setHeader("content-type", "application/json");
-        pending.response.setHeader("mcp-session-id", pending.sessionId);
-        pending.response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: pending.id,
-            result: {
-              tools: [
-                {
-                  name: "probe",
-                  inputSchema: { type: "object" },
-                  outputSchema: {
-                    type: "object",
-                    properties: { revision: { const: pending.sessionId } },
-                    required: ["revision"],
-                  },
-                },
-              ],
-            },
-          }),
-        );
+        reply(pending.response, pending.id, pending.sessionId, tools(pending.sessionId));
       }
     },
     close: async () => {
