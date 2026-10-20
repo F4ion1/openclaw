@@ -2042,6 +2042,8 @@
     "release:openclaw:npm:check": "node --import ./scripts/tsx.mjs scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import ./scripts/tsx.mjs scripts/openclaw-npm-postpublish-verify.ts",
     "release:prepare": "node --import ./scripts/tsx.mjs scripts/release-prepare.ts",
+    "release:prepush": "node --import ./scripts/tsx.mjs scripts/release-prepush.mts",
+    "release:push": "node --import ./scripts/tsx.mjs scripts/release-prepush.mts --push",
     "release:plugins:clawhub:check": "node --import ./scripts/tsx.mjs scripts/plugin-clawhub-release-check.ts",
     "release:plugins:clawhub:plan": "node --import ./scripts/tsx.mjs scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import ./scripts/tsx.mjs scripts/plugin-npm-release-check.ts",
