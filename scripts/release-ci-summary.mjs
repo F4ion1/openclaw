@@ -2442,6 +2442,26 @@ function qualificationReuseIdentity(admission) {
   };
 }
 
+function qualificationReusePolicyIdentity(admission) {
+  const identity = qualificationReuseIdentity(admission);
+  const inputs = { ...identity.inputs };
+  const envelope = JSON.parse(inputs.trusted_workflow_json);
+  inputs.ref = "<candidate>";
+  inputs.expected_sha = "<candidate>";
+  inputs.trusted_workflow_json = JSON.stringify(
+    sortReleaseJsonValueKeys({
+      ...envelope,
+      trustedWorkflow: { sha: "<candidate>" },
+    }),
+  );
+  return {
+    ...identity,
+    candidateSha: "<candidate>",
+    qualificationSha: "<candidate>",
+    inputs,
+  };
+}
+
 /**
  * @param {{
  *   manifestPath?: string,
@@ -2514,6 +2534,7 @@ export async function validateReleaseRunEvidence(
     expectedSelectedRunId,
     expectedTargetSha,
   };
+  let requestedReuseDelta;
   if (reuseRequest !== undefined) {
     // Reject mismatched searches before fetching root/child evidence. Matching
     // metadata only admits a candidate to the full verifier below; it never passes it.
@@ -2542,6 +2563,7 @@ export async function validateReleaseRunEvidence(
           version:
             manifest.candidateBinding?.package?.version ?? manifest.validationInputs?.targetVersion,
         });
+    requestedReuseDelta = delta;
     validateRequestedEvidenceReuse(
       manifest,
       manifest,
@@ -2647,6 +2669,22 @@ export async function validateReleaseRunEvidence(
       ...qualificationReuse,
       repository: normalizedRepository,
     });
+    const exactQualification =
+      currentEvidence.manifest.targetSha === requestedAdmission.request.candidateSha &&
+      isDeepStrictEqual(
+        qualificationReuseIdentity(selectedAdmission),
+        qualificationReuseIdentity(requestedAdmission),
+      );
+    const admittedChangelogDescendant =
+      reuseRequest !== undefined &&
+      requestedReuseDelta !== undefined &&
+      requestedReuseDelta.policy !== EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
+      currentEvidence.manifest.targetSha === selectedAdmission.request.candidateSha &&
+      reuseRequest.targetSha === requestedAdmission.request.candidateSha &&
+      isDeepStrictEqual(
+        qualificationReusePolicyIdentity(selectedAdmission),
+        qualificationReusePolicyIdentity(requestedAdmission),
+      );
     if (
       (reuseRequest !== undefined &&
         reuseRequest.targetSha !== requestedAdmission.request.candidateSha) ||
@@ -2655,10 +2693,7 @@ export async function validateReleaseRunEvidence(
       requestedAdmission.producer.workflowSha !== verifier.sourceSha ||
       requestedAdmission.producer.workflowHeadBranch !== normalizedTrustedWorkflowRef ||
       requestedAdmission.producer.workflowFullRef !== trustedIdentity.fullRef ||
-      !isDeepStrictEqual(
-        qualificationReuseIdentity(selectedAdmission),
-        qualificationReuseIdentity(requestedAdmission),
-      )
+      (!exactQualification && !admittedChangelogDescendant)
     ) {
       throw new Error("Qualification reuse requires exact admitted C/Q/P, coverage and inputs");
     }
