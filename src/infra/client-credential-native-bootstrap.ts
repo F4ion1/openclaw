@@ -13,16 +13,6 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 
-// The native app can create this companion before credential engine selection.
-// Reuse the generated canonical table and index contract without admitting shared state.
-const portGuardianTables = readGeneratedSqliteCatalog(OPENCLAW_STATE_SCHEMA_SQL)?.tables.filter(
-  ({ name }) => name === "macos_port_guardian_records",
-);
-if (!portGuardianTables?.length) {
-  throw new Error("Native PortGuardian companion has no canonical schema catalog.");
-}
-const NATIVE_PORT_GUARDIAN_SCHEMA = { tables: portGuardianTables, views: [] };
-
 /** Read-only classification for the native credential bootstrap that predates engine selection. */
 export function isNativeClientCredentialBootstrap(database: DatabaseSync): boolean {
   admitSqliteSchema(database);
@@ -51,11 +41,17 @@ export function isNativeClientCredentialBootstrap(database: DatabaseSync): boole
     facts.tables.has("macos_port_guardian_records") ||
     facts.indexes.has("idx_macos_port_guardian_records_port")
   ) {
-    assertSqliteSchemaContains(
-      database,
-      "Native PortGuardian companion",
-      NATIVE_PORT_GUARDIAN_SCHEMA,
+    // Load the canonical companion contract only when validating a present companion.
+    const portGuardianTables = readGeneratedSqliteCatalog(OPENCLAW_STATE_SCHEMA_SQL)?.tables.filter(
+      ({ name }) => name === "macos_port_guardian_records",
     );
+    if (!portGuardianTables?.length) {
+      throw new Error("Native PortGuardian companion has no canonical schema catalog.");
+    }
+    assertSqliteSchemaContains(database, "Native PortGuardian companion", {
+      tables: portGuardianTables,
+      views: [],
+    });
   }
   assertSqliteSchemaContains(
     database,
