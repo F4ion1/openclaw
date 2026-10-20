@@ -1,4 +1,3 @@
-import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronJobEffectiveAgentId,
@@ -46,8 +45,7 @@ export function assertCronModelJobAllowed(
 ): void {
   if (
     client?.internal?.agentRuntimeIdentity &&
-    (config.tools?.gatewayPolicy?.automations?.allowCommandJobs === false ||
-      getRuntimeConfigSnapshot()?.tools?.gatewayPolicy?.automations?.allowCommandJobs === false) &&
+    config.tools?.gatewayPolicy?.automations?.allowCommandJobs === false &&
     (job.payload.kind === "command" ||
       job.schedule.kind === "on-exit" ||
       patch?.payload?.kind === "command" ||

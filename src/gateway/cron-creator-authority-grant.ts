@@ -17,20 +17,11 @@ import type {
   CronCreatorAuthorityGrant,
 } from "./cron-creator-authority-grant.types.js";
 
-/** Captured model policy and the current Gateway policy can only narrow each other. */
-export function isCronModelManagementAllowed(config?: OpenClawConfig): boolean {
-  return (
-    config?.tools?.gatewayPolicy?.automations?.scope !== "caller" &&
-    getRuntimeConfigSnapshot()?.tools?.gatewayPolicy?.automations?.scope !== "caller"
-  );
-}
-
-function assertCronModelManagementAllowed(): void {
-  if (!isCronModelManagementAllowed()) {
-    throw new TypeError(
-      "Gateway tool policy restricts model automation calls to caller scope. Use direct Gateway administration to manage other automations.",
-    );
-  }
+/** Resolve the deployment's automation scope when binding model tools or admitting RPCs. */
+export function isCronModelManagementAllowed(
+  config: OpenClawConfig | undefined = getRuntimeConfigSnapshot() ?? undefined,
+): boolean {
+  return config?.tools?.gatewayPolicy?.automations?.scope !== "caller";
 }
 
 export const CRON_MANAGEMENT_METHODS = [
@@ -157,9 +148,6 @@ export function mintCronCreatorAuthorityGrant(
   capture: "runtime" | "requester" = "runtime",
   isCurrent?: () => boolean,
 ): CronCreatorAuthorityGrant {
-  if (management) {
-    assertCronModelManagementAllowed();
-  }
   if (
     !scope.active ||
     scope.signal.aborted ||
@@ -396,9 +384,7 @@ export function holdsCronManagementGrant(
   identity: CronManagementCaller,
   method: string,
 ): boolean {
-  return (
-    isCronModelManagementAllowed() && findCronManagementGrant(grant, identity, method) !== undefined
-  );
+  return findCronManagementGrant(grant, identity, method) !== undefined;
 }
 
 /** Redeem once, retaining the exact operational owner through every await and commit. */
@@ -415,7 +401,6 @@ export async function withCronManagementGrant<T>(
   const { entry, management } = found;
   revokeCronCreatorAuthorityGrant(grant.token);
   const assertActive = () => {
-    assertCronModelManagementAllowed();
     if (
       !entry.scope.active ||
       entry.scope.signal.aborted ||

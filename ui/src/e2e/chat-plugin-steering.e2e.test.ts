@@ -112,6 +112,7 @@ suite.define(() => {
             .toBe(colorScheme);
           expect(await gateway.getRequests("chat.startup")).not.toHaveLength(0);
 
+          expect(await pane.locator("details.chat-system-events").count()).toBe(0);
           const notice = pane
             .locator("details.chat-notice-inline")
             .filter({ hasText: "Advisor guidance" });
@@ -151,7 +152,6 @@ suite.define(() => {
               }),
             )
             .toBe(true);
-          // The guidance aligns with the agent's own column rather than centering as a divider.
           expect(
             await notice.evaluate((element) => {
               const label = element.querySelector(".chat-notice-inline__label");

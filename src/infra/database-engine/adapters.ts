@@ -79,6 +79,7 @@ export const databaseEngineAdapters: {
           store.anchor,
           store.storeId,
           {
+            reuse: store.reusePostgresConnection,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },
@@ -143,6 +144,7 @@ export const databaseEngineAdapters: {
             },
             snapshot,
           );
+          store.beforeMigrate?.(db, version - 1);
           db.exec(migration.sql);
           db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
             version,

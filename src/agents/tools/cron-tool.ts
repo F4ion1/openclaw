@@ -62,11 +62,7 @@ import {
   assertNoCronShellExecution,
   updateCronJobFromAgentTool,
 } from "./cron-tool-write.js";
-import type {
-  CronCreatorToolAuthoritySnapshot,
-  CronToolDeps,
-  CronToolOptions,
-} from "./cron-tool.types.js";
+import type { CronCreatorToolAuthoritySnapshot, CronToolOptions } from "./cron-tool.types.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -189,13 +185,11 @@ function isOlderGatewayRejectingParam(error: unknown, method: string, param: str
   );
 }
 
-export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
-  const gatewayCall = deps?.callGatewayTool ?? callGatewayTool;
-  const managementAuthority = bindCronManagementGrant(opts?.runId, opts?.config);
+export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
+  const config = opts?.config ?? getRuntimeConfigSnapshot() ?? undefined;
+  const managementAuthority = bindCronManagementGrant(opts?.runId, config);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
-  const allowCommandJobs =
-    opts?.config?.tools?.gatewayPolicy?.automations?.allowCommandJobs !== false &&
-    getRuntimeConfigSnapshot()?.tools?.gatewayPolicy?.automations?.allowCommandJobs !== false;
+  const allowCommandJobs = config?.tools?.gatewayPolicy?.automations?.allowCommandJobs !== false;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
   const selfRemoveOnly = Boolean(readCronSelfRemoveOnlyJobId(opts));
@@ -206,12 +200,12 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     description: selfRemoveOnly
       ? managementAuthority?.managementOnly
         ? "Inspect or remove only the current automation. Actions: list [includeDisabled], get jobId, remove jobId. Use the current job ID; other jobs and management actions are unavailable."
-        : 'Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId; next_check in:"15m" for this paced run. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.'
+        : 'Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId; next_check in:"15m" for this paced run or at + agentTurn + explicit session:<key> continuation. A successful one-shot proposal rearms the same job from run end (minimum 2s); without one it completes normally. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.'
       : managementAuthority?.managementOnly
         ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s, and returns the finished run, or its runId if still running); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true). Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
         : buildCronToolDescription({
             triggersEnabled,
-            callerScoped: !isCronModelManagementAllowed(opts?.config),
+            callerScoped: !isCronModelManagementAllowed(config),
           }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
@@ -250,9 +244,9 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 ...(grant ? { cronManagementGrant: grant } : {}),
                 ...(requesterGrant ? { cronCreatorAuthorityGrant: requesterGrant } : {}),
               },
-              () => gatewayCall<T>(...request),
+              () => callGatewayTool<T>(...request),
             )
-          : await gatewayCall<T>(...request);
+          : await callGatewayTool<T>(...request);
       };
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
