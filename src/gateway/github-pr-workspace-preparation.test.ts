@@ -8,6 +8,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isNodeError } from "@openclaw/fs-safe/path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import * as sandboxEngine from "../agents/sandbox/docker.js";
+import { createSandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
+import {
+  bindLocalSandboxWorkspace,
+  prepareLocalSandboxWorkspace,
+} from "../agents/sandbox/local-workspace.js";
+import { updateRegistry } from "../agents/sandbox/registry.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -687,72 +695,129 @@ describe("existing PR preparation through the registered agent action", () => {
     },
   );
 
-  it("recovers an interrupted initial exact install with the old source and guest refs retained", async () => {
-    const f = await fixture();
-    const originalHead = await f.git("rev-parse", "HEAD");
-    const guestHead = await f.guestGit("rev-parse", "HEAD");
-    const guestBranch = await f.guestGit("symbolic-ref", "HEAD");
-    const withStore = workspaceStore.withLocalWorkspaceStore;
-    let interrupted = false;
-    const interruption = vi
-      .spyOn(workspaceStore, "withLocalWorkspaceStore")
-      .mockImplementation((params, operation) =>
-        withStore(params, (store) =>
-          operation({
-            ...store,
-            update: async (row, patch, authority) => {
-              const result = await store.update(row, patch, authority);
-              if (
-                !interrupted &&
-                patch.pending_target === "projection" &&
-                isLocalWorkspaceBaseRefreshRef(result.pending_ref)
-              ) {
-                interrupted = true;
-                throw new Error("interrupted after initial canonical acceptance");
-              }
-              return result;
-            },
-          }),
-        ),
+  it.each([false, true])(
+    "recovers an interrupted initial exact install (bound runtime=%s)",
+    async (boundRuntime) => {
+      const f = await fixture();
+      using projection = boundRuntime
+        ? await prepareLocalSandboxWorkspace({
+            cfg: f.config,
+            agentId: "main",
+            sessionKey: f.session.sessionKey,
+            workspaceDir: f.cwd,
+            sandbox: resolveSandboxConfigForAgent(f.config, "main"),
+          })
+        : undefined;
+      if (boundRuntime && !projection) {
+        throw new Error("Expected the production managed sandbox projection");
+      }
+      let runtimePaused = false;
+      if (projection) {
+        await updateRegistry({
+          containerName: "existing-pr-recovery",
+          backendId: "docker",
+          sessionKey: f.session.sessionKey,
+          workspaceDir: f.projection,
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "fixture",
+        });
+        vi.spyOn(sandboxEngine, "execContainer").mockImplementation(async (_engine, args) => {
+          if (args[0] === "inspect") {
+            return {
+              code: 0,
+              stderr: "",
+              stdout: args.includes("{{.State.Paused}}")
+                ? String(runtimePaused)
+                : `${"a".repeat(64)} true ${runtimePaused}`,
+            };
+          }
+          if (args[0] === "pause" || args[0] === "unpause") {
+            runtimePaused = args[0] === "pause";
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          throw new Error(`Unexpected container command: ${args[0]}`);
+        });
+        const shell = f.sandbox.backend!.runShellCommand.bind(f.sandbox.backend);
+        f.sandbox.backend!.runShellCommand = async (params) =>
+          runtimePaused
+            ? { code: 125, stdout: Buffer.alloc(0), stderr: Buffer.from("Container is paused") }
+            : shell(params);
+        f.sandbox.fsBridge = createSandboxFsBridge({
+          sandbox: { ...f.sandbox, backend: f.sandbox.backend! },
+        });
+        // Reconciliation and backend admission stay real; only container I/O is simulated.
+        bindLocalSandboxWorkspace(f.sandbox, projection);
+      }
+      const originalHead = await f.git("rev-parse", "HEAD");
+      const guestHead = await f.guestGit("rev-parse", "HEAD");
+      const guestBranch = await f.guestGit("symbolic-ref", "HEAD");
+      const withStore = workspaceStore.withLocalWorkspaceStore;
+      let interrupted = false;
+      const interruption = vi
+        .spyOn(workspaceStore, "withLocalWorkspaceStore")
+        .mockImplementation((params, operation) =>
+          withStore(params, (store) =>
+            operation({
+              ...store,
+              update: async (row, patch, authority) => {
+                const result = await store.update(row, patch, authority);
+                if (
+                  !interrupted &&
+                  patch.pending_target === "projection" &&
+                  isLocalWorkspaceBaseRefreshRef(result.pending_ref)
+                ) {
+                  interrupted = true;
+                  throw new Error("interrupted after initial canonical acceptance");
+                }
+                return result;
+              },
+            }),
+          ),
+        );
+      try {
+        await expect(f.invoke()).rejects.toThrow(
+          "Accepted workspace publication is indeterminate and requires recovery",
+        );
+      } finally {
+        interruption.mockRestore();
+      }
+      expect(interrupted).toBe(true);
+      expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
+        head: { commit: f.headCommit },
+      });
+      expect(f.readSession().worktree?.githubPullRequest?.preparedHeadCommit).toBeUndefined();
+      expect(await f.git("rev-parse", "HEAD")).toBe(originalHead);
+      expect(await f.git("rev-parse", "ORIG_HEAD")).toBe(originalHead);
+      expect(await f.git("show", "ORIG_HEAD:newer-base.txt")).toBe("base advanced after PR");
+      if (boundRuntime) {
+        expect(runtimePaused).toBe(true);
+      }
+      await f.advanceHead({ "newer-pr.txt": "remote advanced during first import\n" });
+      if (!boundRuntime) {
+        await closeOpenClawAgentDatabasesAsync();
+      }
+      expect(await f.invoke()).toMatchObject({
+        status: "prepared",
+        headCommit: f.headCommit,
+        headChanged: true,
+      });
+      expect(runtimePaused).toBe(false);
+      expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+      expect(await f.git("diff", "--name-only", f.headCommit)).toBe("");
+      expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
+      expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
+      expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+        "original PR contents\n",
       );
-    try {
-      await expect(f.invoke()).rejects.toThrow(
-        "Accepted workspace publication is indeterminate and requires recovery",
-      );
-    } finally {
-      interruption.mockRestore();
-    }
-    expect(interrupted).toBe(true);
-    expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
-      head: { commit: f.headCommit },
-    });
-    expect(f.readSession().worktree?.githubPullRequest?.preparedHeadCommit).toBeUndefined();
-    expect(await f.git("rev-parse", "HEAD")).toBe(originalHead);
-    expect(await f.git("rev-parse", "ORIG_HEAD")).toBe(originalHead);
-    expect(await f.git("show", "ORIG_HEAD:newer-base.txt")).toBe("base advanced after PR");
-    expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
-    expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
-    await f.advanceHead({ "newer-pr.txt": "remote advanced during first import\n" });
-    await closeOpenClawAgentDatabasesAsync();
-    expect(await f.invoke()).toMatchObject({
-      status: "prepared",
-      headCommit: f.headCommit,
-      headChanged: true,
-    });
-    expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
-    expect(await f.git("diff", "--name-only", f.headCommit)).toBe("");
-    expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
-    expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
-    expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
-      "original PR contents\n",
-    );
-    await expect(fs.stat(path.join(f.projection, "newer-base.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(path.join(f.projection, "newer-pr.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(f.readSession().worktree?.githubPullRequest?.preparedHeadCommit).toBe(f.headCommit);
-    expect(f.writes).toEqual([]);
-  });
+      await expect(fs.stat(path.join(f.projection, "newer-base.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.stat(path.join(f.projection, "newer-pr.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(f.readSession().worktree?.githubPullRequest?.preparedHeadCommit).toBe(f.headCommit);
+      expect(f.writes).toEqual([]);
+    },
+  );
 });

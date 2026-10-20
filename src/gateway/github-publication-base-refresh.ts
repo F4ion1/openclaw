@@ -113,6 +113,11 @@ export async function integrateManagedWorkspaceSource(
   let guestHead: string | undefined;
   let guestDirty = false;
   if (initialImport) {
+    if (params.source?.resuming) {
+      // An accepted transfer may retain a paused runtime. Recover it through its
+      // owner before asking that runtime to execute the initial-workspace check.
+      await withLocalWorkspaceProjection({ ...owner, assertCurrent }, (state) => state.settle());
+    }
     const observed = await readManagedSandboxGitState({
       sandbox,
       signal: params.signal,
