@@ -16,6 +16,7 @@ vi.mock("../plugins/runtime/runtime-registry-loader.js", async (importOriginal) 
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 
+// mock-isolation: CLI startup controls sandbox entries without reading persisted SQLite state.
 vi.mock("../agents/sandbox/registry.js", () => ({ readRegistry: readRegistryMock }));
 
 let originalForceStderr: boolean;

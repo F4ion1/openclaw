@@ -5,6 +5,7 @@ const { warnMock, resolvePlanMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
   resolvePlanMock: vi.fn(),
 }));
+// mock-isolation: Host-timing cases supply a memory plan directly, excluding plugin discovery.
 vi.mock("../../plugins/memory-state.js", () => ({ resolveMemoryFlushPlan: resolvePlanMock }));
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();

@@ -15,6 +15,7 @@ vi.mock("./computer-use-artifacts.js", async (importOriginal) => ({
   reconcileCodexComputerUseStartArtifacts: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Model listing uses a fixed empty auth store without loading operator credentials.
 vi.mock("./auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(
     (params?: { authProfileId?: string }) => params?.authProfileId,

@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   loadCodexBundleMcpThreadConfig: mocks.bundle,
 }));
+// mock-isolation: Thread preparation supplies a fixed user-MCP patch without live runtime setup.
 vi.mock("openclaw/plugin-sdk/codex-mcp-projection", () => ({
   buildCodexUserMcpServersThreadConfigPatchForRuntime: async () => undefined,
 }));
