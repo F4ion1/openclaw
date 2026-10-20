@@ -1,8 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
-import type {
-  SessionGitHubActionParams,
-  SessionGitHubPullRequestInspectResult,
+import {
+  GITHUB_PULL_REQUEST_LOGIN_PATTERN,
+  type SessionGitHubActionParams,
+  type SessionGitHubPullRequestInspectResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -31,11 +32,10 @@ const unavailable = () =>
     "The PR could not be verified as yours with current repository access. Check its URL and your linked GitHub account.",
   );
 const commitPattern = /^[a-f0-9]{40}$/u;
+const loginPattern = new RegExp(GITHUB_PULL_REQUEST_LOGIN_PATTERN, "u");
 
-// This API observation also accepts managed-user shortcodes; the canonical profile
-// login normalizer handles non-managed usernames only. Numeric account IDs establish ownership.
 function isGitHubLogin(value: string): boolean {
-  return /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,37}[A-Za-z0-9])?$/u.test(value);
+  return loginPattern.test(value);
 }
 
 function isRepositoryName(value: string): boolean {

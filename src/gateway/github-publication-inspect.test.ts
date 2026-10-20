@@ -320,7 +320,9 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
         login: "mona-cat_octo",
       });
       f.baseRepo.private = true;
-      expect(await f.invoke()).toMatchObject({
+      const result = await f.invoke();
+      expect(Value.Check(SessionGitHubPullRequestInspectResultSchema, result)).toBe(true);
+      expect(result).toMatchObject({
         url: `https://${host}/mona-cat_octo/.repo.._/pull/7`,
         author: { accountId: 101, login: "mona-cat_octo" },
         base: { repository: "mona-cat_octo/.repo.._", repositoryId: 10 },

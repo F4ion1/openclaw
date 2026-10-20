@@ -44,6 +44,8 @@ export const GitHubPullRequestInspectSchema = closedObject({
   action: Type.Literal("inspect_pr"),
   pullRequestUrl: Type.String({ minLength: 1, maxLength: 2048 }),
 });
+// API-observed owners include Enterprise Managed Users; linked-profile schemas stay separate.
+export const GITHUB_PULL_REQUEST_LOGIN_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,37}[A-Za-z0-9])?$";
 const GitHubPullRequestRefSchema = closedObject({
   repository: NonEmptyString,
   repositoryId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
@@ -54,7 +56,10 @@ export const SessionGitHubPullRequestInspectResultSchema = closedObject({
   url: NonEmptyString,
   host: NonEmptyString,
   number: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
-  author: PersonalGitHubAccountSchema,
+  author: closedObject({
+    accountId: PersonalGitHubAccountSchema.properties.accountId,
+    login: Type.String({ minLength: 1, maxLength: 39, pattern: GITHUB_PULL_REQUEST_LOGIN_PATTERN }),
+  }),
   state: stringLiteralUnion(["open", "draft", "closed", "merged"]),
   base: GitHubPullRequestRefSchema,
   head: Type.Union([GitHubPullRequestRefSchema, Type.Null()]),
