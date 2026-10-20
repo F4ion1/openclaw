@@ -89,7 +89,7 @@ export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWid
 export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | "policy"> & {
   server?: Partial<HelloOk["server"]>;
   features?: Partial<HelloOk["features"]>;
-  snapshot?: unknown;
+  snapshot?: Partial<HelloOk["snapshot"]>;
   policy?: Partial<HelloOk["policy"]>;
 };
 
@@ -105,6 +105,7 @@ export type GatewayBrowserClientOptions = GatewayBrowserConnectOptions & {
     willRetry: boolean;
     busy?: boolean;
   }) => void;
+  onConnecting?: () => void;
   onReconnectScheduled?: (delayMs: number) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
@@ -171,6 +172,7 @@ export class GatewayBrowserClient {
     }
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.opts.onConnecting?.();
         this.catalogRetryAbort.abort();
         this.catalogRetryAbort = new AbortController();
         this.connectionHello = null;

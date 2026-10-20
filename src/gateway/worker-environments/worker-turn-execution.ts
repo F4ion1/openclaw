@@ -128,7 +128,8 @@ export async function executeWorkerTurn(
   await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
   params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
-  const { available: githubPublicationAvailable } = readGitHubPublicationFact(placement);
+  // Keep credential discovery independent of the brokered publication request tool.
+  readGitHubPublicationFact(placement);
 
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
@@ -158,6 +159,7 @@ export async function executeWorkerTurn(
     modelRef,
     startedAt,
     assertCurrent: assertContextCurrent,
+    assertSourceCurrent,
     onBlocked: () => {
       blocked = true;
     },
@@ -368,7 +370,7 @@ export async function executeWorkerTurn(
                   conversationCapabilityProfile: capabilityProfile,
                   preparedModelRuntime: preparedRuntime.snapshot,
                   installedSkills,
-                  githubPublicationAvailable,
+                  githubPublicationAvailable: true,
                   additionalInheritedToolNamesRef,
                   cronCreatorAuthorityUnavailableReason: undefined,
                   runSessionKey: placement.sessionKey,

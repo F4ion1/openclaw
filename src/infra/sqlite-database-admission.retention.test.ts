@@ -4,11 +4,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { PostgresSyncConnection } from "./postgres-sync/connection.js";
@@ -16,6 +15,7 @@ import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
+import { readSqliteDatabaseAdmissionFact } from "./sqlite-database-admission-record.js";
 import {
   beginSqliteDatabaseAdmissionOperation,
   discardSqliteDatabaseTransactionAdmissions,
@@ -31,12 +31,17 @@ import {
   readSqliteDatabaseAdmissions,
   readSqliteDatabasePendingWriteToken,
   readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseScopedWriteTokensForPath,
+  readSqliteDatabasePendingScopedWriteToken,
+  retainSqliteDatabaseWriteScopesForPath,
+  retireSqliteDatabaseWriteScopes,
   prepareSqliteDatabaseCleanClose,
   recordSqliteDatabaseIntegrity,
   readSqliteDatabaseWriteTokenForPath,
   retireSqliteDatabaseAdmissionForPath,
   retainSqliteDatabaseAdmissionLocation,
   revokeSqliteDatabaseAdmissions,
+  revokeSqliteDatabaseAdmissionsForPath,
   trackSqliteDatabaseAdmissionWorker,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
@@ -64,6 +69,113 @@ function createDatabase(location: string) {
 function recordsFor(location: string) {
   return captureSqliteDatabaseAdmissions().filter((record) => record.location === location);
 }
+
+it("keeps cold pinned receipts current across physical-fact reads until release", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-cold-pins-"), "proof.sqlite");
+  const database = createDatabase(location);
+  database.close();
+  const release = retainSqliteDatabaseWriteScopesForPath(location, ["held"])!;
+  try {
+    const before = readSqliteDatabaseScopedWriteTokensForPath(location, ["held"]);
+    expect(before?.[0]).toBeTypeOf("string");
+    expect(
+      getOrLoadSqliteDatabaseAdmissionForPath(
+        location,
+        { ...key, name: "test.cold-pinned-fact", lifetime: "process" },
+        () => "loaded",
+      ),
+    ).toBe("loaded");
+    expect(readSqliteDatabaseScopedWriteTokensForPath(location, ["held"])).toEqual(before);
+    release();
+    expect(recordsFor(location)).toEqual([]);
+  } finally {
+    release();
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
+
+it("retains active source receipts until their last release without suppressing invalidation", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-pinned-scopes-"), "proof.sqlite");
+  const database = createDatabase(location);
+  const key = "x".repeat(600_000);
+  const release = retainSqliteDatabaseWriteScopesForPath(location, [key])!;
+  const releaseSibling = retainSqliteDatabaseWriteScopesForPath(location, [key])!;
+  try {
+    const before = readSqliteDatabaseScopedWriteToken(database, key);
+    for (let index = 0; index < 160; index++) {
+      readSqliteDatabaseScopedWriteToken(database, `${index}:${"y".repeat(4096)}`);
+    }
+    expect(readSqliteDatabaseScopedWriteToken(database, key)).toBe(before);
+    release();
+    release();
+    expect(readSqliteDatabaseScopedWriteToken(database, key)).toBe(before);
+    database.prepare("UPDATE proof SET value = 43").run();
+    const committed = readSqliteDatabaseScopedWriteToken(database, key);
+    expect(committed).not.toBe(before);
+    releaseSibling();
+    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    const releaseDeleted = retainSqliteDatabaseWriteScopesForPath(location, ["deleted"])!;
+    try {
+      retireSqliteDatabaseWriteScopes(database, ["deleted"]);
+      expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    } finally {
+      releaseDeleted();
+    }
+  } finally {
+    release();
+    releaseSibling();
+    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    database.close();
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
+
+it("bounds cold session receipts by bytes without evicting hot receipts or reviving stale ones", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-scope-budget-"), "proof.sqlite");
+  const database = createDatabase(location);
+  try {
+    const cold = readSqliteDatabaseScopedWriteToken(database, "cold");
+    const hot = readSqliteDatabaseScopedWriteToken(database, "hot");
+    const stale = structuredClone(recordsFor(location));
+    const scopes = Array.from({ length: 160 }, (_, index) => `${index}:${"x".repeat(4096)}`);
+    for (const key of scopes) {
+      expect(readSqliteDatabaseScopedWriteToken(database, key)).toBeTypeOf("string");
+      expect(readSqliteDatabaseScopedWriteToken(database, "hot")).toBe(hot);
+    }
+    const retained = () => recordsFor(location)[0]!.writeScopes;
+    expect([...retained().keys()].reduce((bytes, key) => bytes + key.length * 2, 0)).toBeLessThan(
+      1024 * 1024,
+    );
+    expect(retained().has('["key","cold"]')).toBe(false);
+    installSqliteDatabaseAdmissions(stale);
+    expect(retained().has('["key","cold"]')).toBe(false);
+    expect(readSqliteDatabaseScopedWriteToken(database, "cold")).not.toBe(cold);
+    expect(readSqliteDatabaseScopedWriteTokensForPath(location, scopes)).toHaveLength(
+      scopes.length,
+    );
+    const oversized = "x".repeat(600_000);
+    const before = readSqliteDatabaseScopedWriteToken(database, oversized);
+    expect(before).toBeTypeOf("string");
+    let pending: string | undefined;
+    withSqlitePostCommitPublications(database, () =>
+      runSqliteImmediateTransactionSync(database, () => {
+        database.prepare("UPDATE proof SET value = 43").run();
+        pending = readSqliteDatabasePendingScopedWriteToken(database, oversized);
+      }),
+    );
+    expect(pending).toBeTypeOf("string");
+    expect(pending).not.toBe(before);
+    expect(readSqliteDatabaseScopedWriteToken(database, oversized)).toBe(pending);
+    expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
+    database.close();
+    expect(recordsFor(location)).toEqual([]);
+  } finally {
+    if (database.isOpen) {
+      database.close();
+    }
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
 
 it("retires the final closed handle's facts while preserving open siblings and descriptor custody", () => {
   const location = path.join(tempDirs.make("sqlite-admission-retention-"), "proof.sqlite");
@@ -592,30 +704,76 @@ it.each([false, true])(
   },
 );
 
-it("quarantine invalidates scoped receipts and admission facts with a live handle", () => {
-  const root = tempDirs.make("sqlite-admission-quarantine-");
+it("path revocation invalidates scoped receipts and admission facts with a live handle", () => {
+  const root = tempDirs.make("sqlite-admission-path-revocation-");
   const location = path.join(root, "proof.sqlite");
   using database = createDatabase(location);
-  const beforeQuarantine = readSqliteDatabaseScopedWriteToken(database, "proof");
+  const beforeRevocation = readSqliteDatabaseScopedWriteToken(database, "proof");
   publishSqliteDatabaseAdmission(database, key, "healthy");
   publishSqliteDatabaseAdmission(database, schemaKey, "admitted");
 
-  expect(
-    recordOpenClawDatabaseQuarantine({
-      env: { OPENCLAW_STATE_DIR: root },
-      path: location,
-      kind: "agent",
-      reason: "synthetic verified damage",
-    }),
-  ).toBe(true);
+  revokeSqliteDatabaseAdmissionsForPath(location);
 
-  expect(readSqliteDatabaseScopedWriteToken(database, "proof")).not.toBe(beforeQuarantine);
+  expect(readSqliteDatabaseScopedWriteToken(database, "proof")).not.toBe(beforeRevocation);
   expect(getSqliteDatabaseAdmission(database, key)).toBeUndefined();
   expect(getSqliteDatabaseAdmission(database, schemaKey)).toBeUndefined();
 });
 
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
+
+it.each(["committed", "native", "sqlite-transaction", "postgres-transaction"] as const)(
+  "decodes admission values once at publication (%s)",
+  (scope) => {
+    const location = path.join(tempDirs.make("sqlite-admission-decode-"), "proof.sqlite");
+    const database = createDatabase(location);
+    const connection = scope === "postgres-transaction" ? postgresConnection(database) : database;
+    const read = vi.fn((value: unknown) =>
+      typeof value === "string" ? value.toUpperCase() : undefined,
+    );
+    const decodedKey = { name: "test.decoded-fact", read };
+    const publishAndRead = () => {
+      publishSqliteDatabaseAdmission(connection, decodedKey, "first");
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBe("FIRST");
+      expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBe("FIRST");
+      expect(read).toHaveBeenCalledTimes(1);
+      publishSqliteDatabaseAdmission(connection, decodedKey, "replacement");
+      expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBe("REPLACEMENT");
+      expect(read).toHaveBeenCalledTimes(2);
+    };
+    try {
+      if (scope === "native") {
+        const finish = beginSqliteDatabaseAdmissionOperation(database);
+        try {
+          publishAndRead();
+        } finally {
+          finish();
+        }
+        expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBeUndefined();
+      } else {
+        if (scope.endsWith("transaction")) {
+          runSqliteImmediateTransactionSync(connection, publishAndRead);
+        } else {
+          publishAndRead();
+        }
+        expect(getSqliteDatabaseAdmission(connection, decodedKey)).toBe("REPLACEMENT");
+        expect(getOrLoadSqliteDatabaseAdmissionForPath(location, decodedKey, () => "stale")).toBe(
+          "REPLACEMENT",
+        );
+        expect(read).toHaveBeenCalledTimes(2);
+
+        const transferred = structuredClone(recordsFor(location)[0]!.facts.get(decodedKey.name)!);
+        expect(readSqliteDatabaseAdmissionFact(transferred, decodedKey)).toBe("REPLACEMENT");
+        expect(readSqliteDatabaseAdmissionFact(transferred, decodedKey)).toBe("REPLACEMENT");
+        expect(read).toHaveBeenCalledTimes(3);
+      }
+    } finally {
+      database.close();
+      retireSqliteDatabaseAdmissionForPath(location);
+    }
+  },
+);
 
 const postgresConnections: PostgresSqlConnection[] = [];
 afterEach(() => {

@@ -1,5 +1,6 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   subscribeSnapshotInvalidation,
@@ -28,7 +29,7 @@ type SidebarSnapshotHost = {
 };
 
 export function createSidebarSnapshot(host: SidebarSnapshotHost) {
-  const listeners = new Set<() => void>();
+  let publish: (() => void) | undefined;
   let pending = false;
   let saved = false;
   const store = new SessionSnapshotStore();
@@ -41,21 +42,28 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   let cleanup: Array<() => void> = [];
   let stopGateway: (() => void) | undefined;
   let retiredHello: ApplicationGateway["snapshot"]["hello"] | undefined;
+  let cancelCapture: (() => void) | undefined;
 
   function subscribe(listener: () => void): () => void {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
+    publish = listener;
+    return () => {
+      publish = undefined;
+    };
   }
 
   function notify(): void {
-    for (const listener of listeners) {
-      listener();
-    }
+    publish?.();
   }
 
   function connect(): void {
     store.connect();
     cleanup = [
+      listen(window, "pagehide", flushCapture),
+      listen(document, "visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+          flushCapture();
+        }
+      }),
       subscribeSnapshotInvalidation((event) => {
         if (scope && sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
           clearDisplay();
@@ -103,6 +111,7 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
             notify();
           });
         }
+        // Connection receipts retire stale snapshot capture and restore the new scope.
         stopGateway = gateway.subscribe(() => {
           synchronize();
           notify();
@@ -152,6 +161,27 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   }
 
   function capture(): void {
+    if (!cleanup.length || cancelCapture) {
+      return;
+    }
+    // Coalesce live events before building the projection, not just before the IDB write.
+    const timer = globalThis.setTimeout(() => {
+      if (typeof globalThis.requestIdleCallback === "function") {
+        const idle = globalThis.requestIdleCallback(flushCapture, { timeout: 1000 });
+        cancelCapture = () => globalThis.cancelIdleCallback(idle);
+      } else {
+        flushCapture();
+      }
+    }, 500);
+    cancelCapture = () => globalThis.clearTimeout(timer);
+  }
+
+  function flushCapture(): void {
+    if (!cancelCapture) {
+      return;
+    }
+    cancelCapture();
+    cancelCapture = undefined;
     if (
       !cleanup.length ||
       pending ||
@@ -225,6 +255,8 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
   }
 
   function clearDisplay(): void {
+    cancelCapture?.();
+    cancelCapture = undefined;
     generation += 1;
     pending = saved = false;
     serialized = null;

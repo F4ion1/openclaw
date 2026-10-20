@@ -14,6 +14,7 @@ import { VERSION } from "../version.js";
 import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
+import { buildStatusDatabaseStoreRows } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   buildStatusAllAgentsValue,
@@ -42,6 +43,7 @@ type StatusDegradationSummary = Pick<
   | "installationReplacementWarning"
   | "childRuntime"
   | "secretEgressProxy"
+  | "pluginReload"
 >;
 
 function buildStatusDegradationRows(
@@ -83,6 +85,13 @@ function buildStatusDegradationRows(
     addWarning(
       "Degraded plugins",
       `${plugins.length} configured-unavailable · ${plugins.map((plugin) => plugin.pluginId).join(", ")}`,
+    );
+  }
+  const reload = summary.pluginReload;
+  if (reload) {
+    addWarning(
+      "Plugin reload",
+      [`${reload.phase} ${reload.pluginIds.join(", ")}`, reload.reason].filter(Boolean).join(" · "),
     );
   }
   return rows;
@@ -159,14 +168,19 @@ export function buildStatusCommandOverviewRows(params: {
     agentsValue,
     suffixRows: [
       ...(params.updateRows ?? []),
-      ...(params.surface.cfg.database
+      ...((params.surface.cfg.database || params.surface.databaseEngines?.stores.length) &&
+      params.surface.databaseEngines?.source !== "unavailable"
         ? [
             {
               Item: "Database engines (configured)",
-              Value: formatDatabaseEngineSelection(params.surface.cfg),
+              Value: formatDatabaseEngineSelection(
+                params.surface.cfg,
+                params.surface.databaseEngines?.stores,
+              ),
             },
           ]
         : []),
+      ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
       { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       {
@@ -246,14 +260,20 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       ...buildStatusDegradationRows(params.summary),
     ],
-    agentsValue: buildStatusAllAgentsValue({
-      agentStatus: params.agentStatus,
-    }),
+    agentsValue: buildStatusAllAgentsValue(params.agentStatus),
     suffixRows: [
-      {
-        Item: "Database engines (configured)",
-        Value: formatDatabaseEngineSelection(params.surface.cfg),
-      },
+      ...(params.surface.databaseEngines?.source !== "unavailable"
+        ? [
+            {
+              Item: "Database engines (configured)",
+              Value: formatDatabaseEngineSelection(
+                params.surface.cfg,
+                params.surface.databaseEngines?.stores,
+              ),
+            },
+          ]
+        : []),
+      ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
       {
         Item: "Secrets",
         Value: buildStatusSecretsValue(params.secretDiagnosticsCount),

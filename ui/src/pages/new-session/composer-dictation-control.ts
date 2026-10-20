@@ -5,7 +5,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { listen } from "../../lib/reactive/listener.ts";
 import { ComposerDictationOwner } from "../chat/composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../chat/composer-microphone-picker.ts";
-import type { NewSessionComposerTextarea } from "./composer-controller.ts";
+import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -30,6 +30,7 @@ export class NewSessionDictationControl extends EventTarget {
 
   constructor(private readonly options: NewSessionDictationOptions) {
     super();
+    // Forward the owned device picker's receipts through the dictation owner's projection.
     this.devicePicker.subscribe(this.changed);
   }
 
@@ -98,6 +99,7 @@ export class NewSessionDictationControl extends EventTarget {
     };
     if (!this.session) {
       this.session = new ComposerDictationOwner(dictationOptions);
+      // Forward the owned recording session's receipts without copying its mutable state.
       this.session.subscribe(this.changed);
     }
     this.session.update(dictationOptions);
