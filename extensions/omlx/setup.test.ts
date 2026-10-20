@@ -15,6 +15,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
@@ -35,6 +36,14 @@ import {
 } from "./setup.js";
 
 const modelId = "mlx-community/Qwen3-4B-Instruct-4bit";
+function configWithProvider(overrides: Partial<ModelProviderConfig>): OpenClawConfig {
+  return {
+    models: {
+      providers: { omlx: { baseUrl: "http://127.0.0.1:8000/v1", models: [], ...overrides } },
+    },
+  };
+}
+
 const rows = [
   { id: "text-embedding-mini", max_model_len: 512 },
   { id: modelId, max_model_len: 32_768 },
@@ -47,6 +56,10 @@ function fixture(data: unknown = rows, status = 200) {
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function authorization(fetchMock: ReturnType<typeof fixture>) {
+  return new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization");
 }
 
 function guidedContext(): ProviderAppGuidedSetupContext {
@@ -111,19 +124,9 @@ describe("oMLX setup through the inference catalog", () => {
       apiKey: "OMLX_API_KEY",
       discoveryApiKey: "old-endpoint-key",
     });
-    ctx.config = {
-      models: {
-        providers: {
-          omlx: {
-            baseUrl: "http://127.0.0.1:8000/v1",
-            apiKey: "omlx-local",
-            models: [],
-          },
-        },
-      },
-    };
+    ctx.config = configWithProvider({ apiKey: "omlx-local" });
     await expect(discoverOmlxProvider(ctx)).resolves.toBeTruthy();
-    expect(new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization")).toBeNull();
+    expect(authorization(fetchMock)).toBeNull();
   });
 
   it.each([
@@ -150,20 +153,7 @@ describe("oMLX setup through the inference catalog", () => {
           "omlx:selected": { type: "api_key", provider: "omlx", key: "selected-key" },
         },
       });
-      const ctx = {
-        env: { OMLX_API_KEY: envKey },
-        config: {
-          models: {
-            providers: {
-              omlx: {
-                baseUrl: "http://127.0.0.1:8000/v1",
-                apiKey,
-                models: [],
-              },
-            },
-          },
-        },
-      };
+      const ctx = { env: { OMLX_API_KEY: envKey }, config: configWithProvider({ apiKey }) };
       await expect(detectOmlxAvailability(ctx)).resolves.toBe(true);
       await expect(
         discoverOmlxProvider({
@@ -177,9 +167,7 @@ describe("oMLX setup through the inference catalog", () => {
           },
         }),
       ).resolves.toMatchObject({ provider: { apiKey } });
-      expect(new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
-        `Bearer ${key}`,
-      );
+      expect(authorization(fetchMock)).toBe(`Bearer ${key}`);
     });
   });
 
@@ -212,7 +200,7 @@ describe("oMLX setup through the inference catalog", () => {
       },
     });
     expect(fetchMock.mock.lastCall?.[0]).toBe("http://127.0.0.1:8000/v1/models");
-    expect(new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization")).toBeNull();
+    expect(authorization(fetchMock)).toBeNull();
     await expect(prepareOmlx({ ...ctx, modelRef: "omlx/custom-chat" })).resolves.toBeNull();
     await expect(prepareOmlx({ ...ctx, modelRef: "omlx/missing" })).resolves.toBeNull();
   });
@@ -249,22 +237,14 @@ describe("oMLX setup through the inference catalog", () => {
   it("honors configured headers and private-network policy", async () => {
     const fetchMock = fixture();
     const ctx = guidedContext();
-    ctx.config = {
-      models: {
-        providers: {
-          omlx: {
-            baseUrl: "http://127.0.0.1:8000/v1",
-            models: [],
-            apiKey: "omlx-local",
-            headers: { Authorization: "Bearer fixture-header" },
-            request: {
-              allowPrivateNetwork: true,
-              headers: { "X-Fixture": "catalog", authorization: "Bearer overridden-header" },
-            },
-          },
-        },
+    ctx.config = configWithProvider({
+      apiKey: "omlx-local",
+      headers: { Authorization: "Bearer fixture-header" },
+      request: {
+        allowPrivateNetwork: true,
+        headers: { "X-Fixture": "catalog", authorization: "Bearer overridden-header" },
       },
-    };
+    });
     await expect(detectOmlxAvailability(ctx)).resolves.toBe(true);
     expect(fetchMock).toHaveBeenLastCalledWith(
       expect.any(String),
@@ -297,19 +277,11 @@ describe("oMLX setup through the inference catalog", () => {
       const fetchMock = fixture();
       const ctx = guidedContext();
       ctx.env = { OMLX_TEST_TOKEN: "fixture-auth-override" };
-      ctx.config = {
-        models: {
-          providers: {
-            omlx: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              apiKey: "stale-provider-key",
-              headers: { authorization: "Bearer stale-header" },
-              request: { auth },
-              models: [],
-            },
-          },
-        },
-      };
+      ctx.config = configWithProvider({
+        apiKey: "stale-provider-key",
+        headers: { authorization: "Bearer stale-header" },
+        request: { auth },
+      });
       await expect(detectOmlxAvailability(ctx)).resolves.toBe(true);
       expect(fetchMock).toHaveBeenCalledWith(
         expect.any(String),
@@ -324,9 +296,7 @@ describe("oMLX setup through the inference catalog", () => {
     await expect(discoverOmlxProvider({ ...ctx, providerIds: undefined })).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     await expect(discoverOmlxProvider(ctx)).resolves.toMatchObject({
-      provider: {
-        models: [{ id: "custom-chat" }, { id: modelId }],
-      },
+      provider: { models: [{ id: "custom-chat" }, { id: modelId }] },
     });
   });
 
@@ -347,17 +317,10 @@ describe("oMLX setup through the inference catalog", () => {
     );
     expect(result.profiles).toEqual(
       key
-        ? [
-            {
-              profileId: "omlx:default",
-              credential: { type: "api_key", provider: "omlx", key },
-            },
-          ]
+        ? [{ profileId: "omlx:default", credential: { type: "api_key", provider: "omlx", key } }]
         : [],
     );
-    expect(new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
-      key ? `Bearer ${key}` : null,
-    );
+    expect(authorization(fetchMock)).toBe(key ? `Bearer ${key}` : null);
   });
 
   it.each([
@@ -441,9 +404,7 @@ describe("oMLX setup through the inference catalog", () => {
           config = configured;
           expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
         }
-        expect(new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
-          `Bearer ${selectedKey}`,
-        );
+        expect(authorization(fetchMock)).toBe(`Bearer ${selectedKey}`);
         const store = await ensureAuthProfileStoreAsync(agentDir);
         fetchMock.mockClear();
         await expect(
@@ -455,9 +416,7 @@ describe("oMLX setup through the inference catalog", () => {
           }),
         ).resolves.toBeTruthy();
         expect(fetchMock).toHaveBeenCalled();
-        const discoveryAuthorization = new Headers(fetchMock.mock.lastCall?.[1]?.headers).get(
-          "authorization",
-        );
+        const discoveryAuthorization = authorization(fetchMock);
         expect(discoveryAuthorization).toBe(`Bearer ${selectedKey}`);
         let runtimeConfig = config;
         if (credentialMode === "ref") {
@@ -472,9 +431,10 @@ describe("oMLX setup through the inference catalog", () => {
             value: provider.apiKey,
             path: "models.providers.omlx.apiKey",
           });
-          runtimeConfig = applyProviderAuthConfigPatch(config, {
-            models: { providers: { omlx: { ...provider, apiKey: resolved.value } } },
-          });
+          runtimeConfig = applyProviderAuthConfigPatch(
+            config,
+            configWithProvider({ ...provider, apiKey: resolved.value }),
+          );
         }
         const adapter = capturePluginRegistration(plugin).embeddingProviders[0];
         if (!adapter) {
@@ -495,9 +455,7 @@ describe("oMLX setup through the inference catalog", () => {
           credential: store.profiles["omlx:default"],
           binding: config.models?.providers?.omlx?.apiKey,
           discoveryAuthorization,
-          embeddingAuthorization: new Headers(fetchMock.mock.lastCall?.[1]?.headers).get(
-            "authorization",
-          ),
+          embeddingAuthorization: authorization(fetchMock),
           chatKey: chatAuth.apiKey,
           chatProfile: chatAuth.profileId,
         }).toEqual({
@@ -518,13 +476,11 @@ describe("oMLX setup through the inference catalog", () => {
           repeated.baseConfig = config;
           repeated.agentDir = agentDir;
           await expect(validateOmlxNonInteractive(repeated)).resolves.toBe(true);
-          const validationAuthorization = new Headers(fetchMock.mock.lastCall?.[1]?.headers).get(
-            "authorization",
-          );
+          const validationAuthorization = authorization(fetchMock);
           const next = await configureOmlxNonInteractive(repeated);
           expect({
             validationAuthorization,
-            authorization: new Headers(fetchMock.mock.lastCall?.[1]?.headers).get("authorization"),
+            authorization: authorization(fetchMock),
             binding: next?.models?.providers?.omlx?.apiKey,
           }).toEqual({
             validationAuthorization: `Bearer ${selectedKey}`,
@@ -549,28 +505,20 @@ describe("oMLX setup through the inference catalog", () => {
       ? { source: "env" as const, provider: "default", id: "OMLX_STALE_SETUP_KEY" }
       : "old-key";
     vi.stubEnv("OMLX_STALE_SETUP_KEY", undefined);
-    const config = {
-      models: {
-        providers: {
-          omlx: {
-            baseUrl: "http://127.0.0.1:8000/v1",
-            apiKey: "old-key",
-            headers: { Authorization: "Bearer old-key", "X-Deployment": "fixture" },
-            request: {
-              allowPrivateNetwork: true,
-              headers: {
-                ...(scenario.custom ? { "X-oMLX-Key": "old-key" } : {}),
-                "X-Request": "fixture",
-              },
-              auth: scenario.custom
-                ? { mode: "header" as const, headerName: "X-oMLX-Key", value: stale }
-                : { mode: "authorization-bearer" as const, token: stale },
-            },
-            models: [],
-          },
+    const config = configWithProvider({
+      apiKey: "old-key",
+      headers: { Authorization: "Bearer old-key", "X-Deployment": "fixture" },
+      request: {
+        allowPrivateNetwork: true,
+        headers: {
+          ...(scenario.custom ? { "X-oMLX-Key": "old-key" } : {}),
+          "X-Request": "fixture",
         },
+        auth: scenario.custom
+          ? { mode: "header" as const, headerName: "X-oMLX-Key", value: stale }
+          : { mode: "authorization-bearer" as const, token: stale },
       },
-    };
+    });
     const ctx = nonInteractiveContext();
     ctx.config = config;
     ctx.baseConfig = config;
@@ -610,31 +558,24 @@ describe("oMLX setup through the inference catalog", () => {
     async (allowPrivateNetwork) => {
       const fetchMock = fixture();
       const ctx = interactiveContext();
-      ctx.config = {
-        models: {
-          providers: {
-            omlx: {
-              baseUrl: "http://127.0.0.1:9000/v1",
-              apiKey: "old-endpoint-key",
-              auth: "api-key",
-              authHeader: false,
-              headers: { Authorization: "Bearer old-header-key" },
-              request: {
-                allowPrivateNetwork,
-                auth: { mode: "header", headerName: "X-Old-Auth", value: "old-auth-key" },
-                headers: { "X-Api-Key": "old-custom-key" },
-                tls: { cert: "old-client-cert", key: "old-client-key" },
-                proxy: {
-                  mode: "explicit-proxy",
-                  url: "http://proxy.example.test",
-                  tls: { passphrase: "old-proxy-passphrase" },
-                },
-              },
-              models: [],
-            },
+      ctx.config = configWithProvider({
+        baseUrl: "http://127.0.0.1:9000/v1",
+        apiKey: "old-endpoint-key",
+        auth: "api-key",
+        authHeader: false,
+        headers: { Authorization: "Bearer old-header-key" },
+        request: {
+          allowPrivateNetwork,
+          auth: { mode: "header", headerName: "X-Old-Auth", value: "old-auth-key" },
+          headers: { "X-Api-Key": "old-custom-key" },
+          tls: { cert: "old-client-cert", key: "old-client-key" },
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://proxy.example.test",
+            tls: { passphrase: "old-proxy-passphrase" },
           },
         },
-      };
+      });
       const result = await configureOmlxInteractive(ctx);
       expect(fetchMock.mock.lastCall?.[0]).toBe("http://127.0.0.1:8000/v1/models");
       const headers = new Headers(fetchMock.mock.lastCall?.[1]?.headers);
@@ -674,15 +615,7 @@ describe("oMLX setup through the inference catalog", () => {
     const ctx = interactiveContext("", "https://omlx.example.test/v1");
     ctx.config = {
       auth: { profiles: { "omlx:default": { provider: "omlx", mode: "api_key" } } },
-      models: {
-        providers: {
-          omlx: {
-            baseUrl: "http://127.0.0.1:9000/v1",
-            apiKey: "old-server-key",
-            models: [],
-          },
-        },
-      },
+      ...configWithProvider({ baseUrl: "http://127.0.0.1:9000/v1", apiKey: "old-server-key" }),
     };
     const result = await configureOmlxInteractive(ctx);
     const providerPatch = result.configPatch?.models?.providers?.omlx;
@@ -726,79 +659,13 @@ describe("oMLX setup through the inference catalog", () => {
         config: { models: config.models },
         providerConfig,
       }),
-    ).toEqual({
-      apiKey: "omlx-local",
-      source: "oMLX local server",
-      mode: "api-key",
-    });
+    ).toEqual({ apiKey: "omlx-local", source: "oMLX local server", mode: "api-key" });
     expect(
       await provider?.prepareRuntimeAuth?.({
         ...runtimeContext,
-        config: {
-          models: { providers: { omlx: { ...providerConfig, headers: { Authorization: "   " } } } },
-        },
+        config: configWithProvider({ ...providerConfig, headers: { Authorization: "   " } }),
       }),
     ).toEqual({ apiKey: CUSTOM_LOCAL_AUTH_MARKER });
-    expect(
-      await provider?.prepareRuntimeAuth?.({
-        ...runtimeContext,
-        model: { ...model, headers: { "X-Api-Key": "new-header-key" } },
-        config: {
-          models: {
-            providers: {
-              omlx: {
-                ...providerConfig,
-                headers: { Authorization: "Bearer old-server-key" },
-                request: {
-                  auth: { mode: "header", headerName: "X-Api-Key", value: "new-header-key" },
-                },
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({ apiKey: CUSTOM_LOCAL_AUTH_MARKER });
-    expect(
-      await provider?.prepareRuntimeAuth?.({
-        ...runtimeContext,
-        config: {
-          models: { providers: { omlx: { ...providerConfig, apiKey: "new-server-key" } } },
-        },
-      }),
-    ).toBeUndefined();
-    for (const authenticated of [
-      { ...providerConfig, headers: { Authorization: "Bearer new-header-key" } },
-      {
-        ...providerConfig,
-        request: { auth: { mode: "authorization-bearer" as const, token: "new-header-key" } },
-      },
-    ]) {
-      expect(
-        await provider?.prepareRuntimeAuth?.({
-          ...runtimeContext,
-          config: { models: { providers: { omlx: authenticated } } },
-        }),
-      ).toEqual({ apiKey: "omlx-local" });
-    }
-    const localHeaders = { Authorization: "Bearer local-header-key" };
-    expect(
-      await provider?.prepareRuntimeAuth?.({
-        ...runtimeContext,
-        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-        model: { ...model, baseUrl: "http://127.0.0.1:8000/v1", headers: localHeaders },
-        config: {
-          models: {
-            providers: {
-              omlx: {
-                ...providerConfig,
-                baseUrl: "http://127.0.0.1:8000/v1",
-                headers: localHeaders,
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({ apiKey: "omlx-local" });
   });
 
   it("reports a non-string model option before discovery or credential persistence", async () => {
@@ -816,17 +683,10 @@ describe("oMLX setup through the inference catalog", () => {
   it("retains a private-network denial when setup changes the endpoint", async () => {
     const fetchMock = fixture();
     const ctx = interactiveContext();
-    ctx.config = {
-      models: {
-        providers: {
-          omlx: {
-            baseUrl: "https://models.example.test/v1",
-            models: [],
-            request: { allowPrivateNetwork: false },
-          },
-        },
-      },
-    };
+    ctx.config = configWithProvider({
+      baseUrl: "https://models.example.test/v1",
+      request: { allowPrivateNetwork: false },
+    });
     await expect(configureOmlxInteractive(ctx)).rejects.toThrow("Start oMLX");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -854,20 +714,12 @@ describe("oMLX setup through the inference catalog", () => {
     vi.stubEnv("OMLX_API_KEY", "ambient-key");
     const ctx = nonInteractiveContext();
     ctx.resolveApiKey = vi.fn(async () => ({ key: "ambient-key", source: "env" as const }));
-    ctx.config = {
-      models: {
-        providers: {
-          omlx: {
-            baseUrl: "http://127.0.0.1:8000/v1",
-            apiKey: scenario.apiKey,
-            request: scenario.custom
-              ? { auth: { mode: "header", headerName: "X-oMLX-Key", value: "saved-header-key" } }
-              : undefined,
-            models: [],
-          },
-        },
-      },
-    };
+    ctx.config = configWithProvider({
+      apiKey: scenario.apiKey,
+      request: scenario.custom
+        ? { auth: { mode: "header", headerName: "X-oMLX-Key", value: "saved-header-key" } }
+        : undefined,
+    });
     await expect(validateOmlxNonInteractive(ctx)).resolves.toBe(true);
     const headers = new Headers(fetchMock.mock.lastCall?.[1]?.headers);
     expect(headers.get("authorization")).toBe(scenario.authorization);
