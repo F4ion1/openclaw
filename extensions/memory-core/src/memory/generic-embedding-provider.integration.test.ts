@@ -264,8 +264,13 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
   };
 }
 
-async function createMemoryEmbeddingOwnerForServer(baseUrl: string, database: DatabaseSync) {
-  const created = await createEmbeddingProvider(createMemoryEmbeddingOptions({ baseUrl }));
+async function createMemoryEmbeddingOwnerForServer(
+  baseUrl: string,
+  database: DatabaseSync,
+  overrides?: { provider: string; model: string; config: OpenClawConfig },
+) {
+  const options = createMemoryEmbeddingOptions({ baseUrl, ...overrides });
+  const created = await createEmbeddingProvider({ ...options, ...overrides });
   const provider = created.provider;
   if (!provider) {
     throw new Error("expected the OpenAI-compatible embedding provider to be created");
@@ -313,6 +318,67 @@ function distinctCandidates(
 }
 
 describe("memory-core embedding batch recovery over real transport", () => {
+  it.each([
+    { model: "bge-large-zh", limit: 16, requests: [16, 16, 1] },
+    { model: "qianfan/bge-large-en", limit: 16, requests: [16, 16, 1] },
+    { model: "Embedding-V1", limit: 16, requests: [16, 16, 1] },
+    { model: "custom-embedding-model", limit: 33, requests: [33] },
+  ])(
+    "indexes 33 inputs using Qianfan's documented cap for $model",
+    async ({ model, limit, requests }) => {
+      const server = await startEmbeddingServer({
+        reject: (count) =>
+          count > limit
+            ? {
+                status: 400,
+                body: JSON.stringify({
+                  error: {
+                    code: "InvalidParameter",
+                    message:
+                      "The parameter inputspecified in the request are not valid: ... Request id: ...",
+                    param: "input",
+                    type: "BadRequest",
+                  },
+                }),
+              }
+            : undefined,
+      });
+      const database = new DatabaseSync(":memory:");
+      try {
+        const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+          server.baseUrl,
+          database,
+          {
+            provider: "qianfan",
+            model,
+            config: {
+              plugins: { allow: ["qianfan"], entries: { qianfan: { enabled: true } } },
+              models: {
+                providers: {
+                  qianfan: { api: "openai-completions", baseUrl: server.baseUrl, models: [] },
+                },
+              },
+            },
+          },
+        );
+        const embeddings = await owner.embedChunksInBatches(
+          distinctCandidates(33),
+          generation,
+          8000,
+        );
+
+        expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
+          requests,
+        );
+        expect(embeddings).toEqual(
+          Array.from({ length: 33 }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
+        );
+      } finally {
+        database.close();
+      }
+    },
+  );
+
   it.each([
     {
       message: "input array max 10",
