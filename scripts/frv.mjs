@@ -479,7 +479,8 @@ async function recheckArtifactProducers(
   }
 }
 
-const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "candidate"]);
+const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate"]);
+const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker"]);
 
 async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
   if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
@@ -552,8 +553,14 @@ function artifactRecoveryJobs(workflow) {
       continue;
     }
     const stage = childKind.slice("artifact-".length);
-    if (!ARTIFACT_RECOVERY_STAGES.has(stage) || typeof job.name !== "string" || !job.name.trim()) {
+    if (!ARTIFACT_PRODUCER_STAGES.has(stage) || typeof job.name !== "string" || !job.name.trim()) {
       throw new Error("Source workflow artifact producer contract is unsupported");
+    }
+    // Candidate acquisition gates later candidate consumers. A failed acquisition
+    // leaves those selected consumers undispatched, so same-parent continuation
+    // cannot recover the complete graph by rerunning the producer alone.
+    if (!ARTIFACT_RECOVERY_STAGES.has(stage)) {
+      continue;
     }
     const reuseStep = Array.isArray(job.steps)
       ? job.steps.find((step) => step?.id === "reused")
@@ -605,7 +612,7 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
     const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
     const dispatches = [
       ...log.matchAll(
-        /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker|candidate) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+        /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
       ),
     ];
     if (
