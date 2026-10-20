@@ -1,14 +1,13 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
-function succeeds(result: ReturnType<typeof spawnSync>) {
+function succeeds(result: ReturnType<typeof runProcess>) {
   expect(result.status, result.stderr?.toString()).toBe(0);
 }
 const sessionId = "legacy-pending-delivery";
@@ -36,9 +35,6 @@ function fixture() {
       sessionId,
       pendingFinalDelivery: true,
       pendingFinalDeliveryText: pending.text,
-      pendingFinalDeliveryCreatedAt: pending.createdAt,
-      pendingFinalDeliveryContext: pending.context,
-      pendingFinalDeliveryIntentId: pending.intentId,
     },
   });
   const storePath = path.join(state, "agents/ops/sessions/sessions.json");
@@ -64,17 +60,14 @@ function fixture() {
   writeFileSync(updateJson, "{}");
   writeFileSync(updateErr, "");
   const invoke = (command: string, args: string[], mode = "auto-auth") =>
-    spawnSync(
+    runProcess(
       process.execPath,
       ["scripts/e2e/lib/upgrade-survivor/assertions.mjs", command, ...args],
       {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: state,
-          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
-          OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
-        },
+        ...process.env,
+        OPENCLAW_STATE_DIR: state,
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
       },
     );
   return {

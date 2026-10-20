@@ -1,8 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import * as io from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
@@ -34,7 +34,7 @@ function runUpdate({
   const registries = join(root, "registries.jsonl");
   writeFileSync(calls, "");
   writeFileSync(registries, "");
-  writeFileSync(
+  io.writeExecutable(
     join(root, "openclaw"),
     `#!${process.execPath}
 const fs = require("node:fs");
@@ -45,9 +45,8 @@ fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({
 }) + "\\n");
 process.exit(process.argv[2] === "update" ? 2 : 0);
 `,
-    { mode: 0o755 },
   );
-  const result = spawnSync(
+  const result = io.runProcess(
     "bash",
     [
       "-c",
@@ -83,22 +82,13 @@ ${configureRegistry ? "configure_plugin_registry || exit 90" : ""}
 update_candidate
 `,
     ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}`, REGISTRY_LOG: registries },
-      timeout: 30_000,
-    },
+    { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}`, REGISTRY_LOG: registries },
+    30_000,
   );
-  const read = (file: string) =>
-    readFileSync(file, "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
   return {
     result,
-    update: (read(calls) as Call[]).find((call) => call.argv[0] === "update"),
-    registries: read(registries) as { tags: string | null; args: string[] }[],
+    update: io.readJsonLines<Call>(calls).find((call) => call.argv[0] === "update"),
+    registries: io.readJsonLines<{ tags: string | null; args: string[] }>(registries),
     tarball: join(root, "candidate.tgz"),
   };
 }

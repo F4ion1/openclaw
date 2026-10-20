@@ -1,13 +1,13 @@
-import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import * as io from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scenarios = ["legacy-operator-state", "base"];
 const read = (file: string) => readFileSync(file, "utf8");
-const lines = (file: string) => read(file).trim().split("\n");
+type Install = { args: string[]; prefix: string };
 const baseline = (version: number, status: string) => ({
   baseline: `openclaw@2026.8.${version}`,
   status,
@@ -21,7 +21,7 @@ function runFixture(
   const root = tempDirs.make("survivor-precheck-");
   const evidence = path.join(root, "evidence");
   const installs = path.join(root, "installs.jsonl");
-  writeFileSync(
+  io.writeExecutable(
     path.join(root, "npm"),
     `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -42,31 +42,27 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
   'console.log(process.argv.includes("--version") ? ' + JSON.stringify(spec) + ' : "local");\\n',
   { mode: 0o755 });
 `,
-    { mode: 0o755 },
   );
-  const result = spawnSync(
+  const result = io.runProcess(
     process.execPath,
     ["scripts/plan-targeted-docker-lane-groups.mjs", "--check-baselines", evidence],
     {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${root}${path.delimiter}${process.env.PATH}`,
-        LANES: "published-upgrade-survivor onboard",
-        GROUP_SIZE: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.8.33 2026.8.34",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.8.33",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state base",
-        ...overrides,
-      },
+      ...process.env,
+      PATH: `${root}${path.delimiter}${process.env.PATH}`,
+      LANES: "published-upgrade-survivor onboard",
+      GROUP_SIZE: "1",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "2026.8.33 2026.8.34",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.8.33",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state base",
+      ...overrides,
     },
   );
   return {
     result,
     evidence,
     installs,
-    report: JSON.parse(read(path.join(evidence, "summary.json"))),
+    report: io.readJson(path.join(evidence, "summary.json")),
   };
 }
 
@@ -78,17 +74,10 @@ it("checks each pinned recovery driver once before scheduling exact rows", () =>
   });
   expect(fixture.result.status, fixture.result.stderr).toBe(0);
   expect(JSON.parse(fixture.result.stdout)).toHaveLength(5);
-  expect(
-    fixture.report.baselines.map((entry: { baseline: string; status: string }) => [
-      entry.baseline,
-      entry.status,
-    ]),
-  ).toEqual([
-    ["openclaw@2026.9.8", "usable"],
-    ["openclaw@2026.9.9", "usable"],
-    ["openclaw@2026.9.7", "usable"],
-  ]);
-  expect(lines(fixture.installs)).toHaveLength(3);
+  expect(fixture.report.baselines).toMatchObject(
+    ["8", "9", "7"].map((patch) => ({ baseline: `openclaw@2026.9.${patch}`, status: "usable" })),
+  );
+  expect(io.readJsonLines(fixture.installs)).toHaveLength(3);
 });
 
 it.each(["version", "runtime"] as const)("skips unusable %s baselines with evidence", (failure) => {
@@ -116,7 +105,7 @@ it.each(["version", "runtime"] as const)("skips unusable %s baselines with evide
       expect.objectContaining(baseline(34, "usable")),
     ]),
   );
-  const installs = lines(fixture.installs).map((line) => JSON.parse(line));
+  const installs = io.readJsonLines<Install>(fixture.installs);
   expect(installs).toHaveLength(2);
   for (const install of installs) {
     expect(install.args).toEqual([

@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import * as io from "./upgrade-survivor-shard.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const repo = resolve(".");
@@ -19,11 +20,7 @@ ${policy}
 printf "%s\\n" "\${UPGRADE_COMPAT_ENV_ARGS[@]}"`;
 
 function run(root: string, command: string, args: string[], env: NodeJS.ProcessEnv) {
-  return spawnSync(command, args, {
-    env: { PATH: process.env.PATH, HOME: root, ...env },
-    encoding: "utf8",
-    timeout: 10000,
-  });
+  return io.runProcess(command, args, { PATH: process.env.PATH, HOME: root, ...env }, 10000);
 }
 
 function addSpecimen(target: string) {
@@ -37,10 +34,7 @@ function fixture(present: boolean) {
   mkdirSync(target);
   // An older main version can contain the migration while a newer frozen
   // release version predates it: version ordering cannot select this coverage.
-  writeFileSync(
-    join(target, "package.json"),
-    JSON.stringify({ version: present ? "2026.9.6" : "2026.9.7" }),
-  );
+  io.writeJson(join(target, "package.json"), { version: present ? "2026.9.6" : "2026.9.7" });
   if (present) {
     addSpecimen(target);
   }
@@ -72,7 +66,7 @@ function fixture(present: boolean) {
 }
 
 function apply(root: string, mode: string) {
-  writeFileSync(join(root, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  io.writeExecutable(join(root, "openclaw"), "#!/bin/sh\nexit 0\n");
   const summary = join(root, "recipe.json");
   const result = run(
     root,
@@ -81,7 +75,7 @@ function apply(root: string, mode: string) {
     { PATH: root + ":" + process.env.PATH, [flag]: mode },
   );
   expect(result.status, result.stderr).toBe(0);
-  return JSON.parse(readFileSync(summary, "utf8")) as {
+  return io.readJson(summary) as {
     acceptedIntents: string[];
     steps: Array<{ id: string; command: string }>;
   };
@@ -90,9 +84,9 @@ function apply(root: string, mode: string) {
 function checkSearch(root: string, accepted: boolean, toolSearch: unknown, stage = "survival") {
   const config = join(root, "config.json");
   const coverage = join(root, "coverage.json");
-  writeFileSync(config, JSON.stringify({ tools: { toolSearch } }));
+  io.writeJson(config, { tools: { toolSearch } });
   // Isolate this assertion's input; recipe coverage retention is checked separately.
-  writeFileSync(coverage, JSON.stringify({ acceptedIntents: accepted ? ["tool-search"] : [] }));
+  io.writeJson(coverage, { acceptedIntents: accepted ? ["tool-search"] : [] });
   return run(
     root,
     process.execPath,
