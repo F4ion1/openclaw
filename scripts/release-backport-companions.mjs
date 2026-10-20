@@ -20,7 +20,7 @@ function git(args, { allowEmpty = false } = {}) {
     if (allowEmpty && result.status === 1) {
       return "";
     }
-    const detail = String(result.stderr || result.stdout || result.error?.message || "").trim();
+    const detail = (result.stderr || result.stdout || result.error?.message || "").trim();
     throw new Error(`git ${args[0]} failed${detail ? `: ${detail}` : ""}`);
   }
   return result.stdout;
