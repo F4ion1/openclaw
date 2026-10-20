@@ -47,6 +47,43 @@ const contractRunOptions = {
   skipAuthProfileRuntime: true,
 };
 
+type RunMeta = ReturnType<typeof createContractRunResult>["meta"];
+
+function incompleteResult(
+  text: string,
+  message: string,
+  meta: Partial<RunMeta> = {},
+  error: Partial<NonNullable<RunMeta["error"]>> = {},
+) {
+  return createContractRunResult({
+    payloads: [{ text, isError: true }],
+    meta: {
+      durationMs: 1,
+      ...meta,
+      error: { kind: "incomplete_turn", message, fallbackSafe: true, ...error },
+    },
+  });
+}
+
+function agentMeta(stage: "primary" | "fallback") {
+  return {
+    sessionId: `${stage}-session`,
+    sessionFile: `/tmp/${stage}.jsonl`,
+    provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT[`${stage}Provider`],
+    model: OUTCOME_FALLBACK_RUNTIME_CONTRACT[`${stage}Model`],
+  };
+}
+
+function emptyResult(
+  meta: Partial<RunMeta> = {},
+  fields: Partial<Omit<ReturnType<typeof createContractRunResult>, "meta">> = {},
+) {
+  return createContractRunResult({
+    ...fields,
+    meta: { durationMs: 1, agentHarnessResultClassification: "empty", ...meta },
+  });
+}
+
 describe("Outcome/fallback runtime contract - embedded runtime fallback classifier", () => {
   beforeAll(async () => {
     await runWithModelFallback({
@@ -223,19 +260,11 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
-      cfg: undefined,
+      ...contractRunOptions,
       provider: primaryProvider,
       model: primaryModel,
-      fallbacksOverride: contractFallbackOverride,
       run,
-      classifyResult: ({ provider, model, result: resultValue }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: resultValue,
-        }),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("completed");
@@ -255,30 +284,27 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         },
       },
     ]);
-    expect(result.attempts[0]?.provider).toBe(primaryProvider);
-    expect(result.attempts[0]?.model).toBe(primaryModel);
-    expect(result.attempts[0]?.reason).toBe("format");
-    expect(result.attempts[0]?.code).toBe("empty_result");
+    expect(result.attempts[0]).toMatchObject({
+      provider: primaryProvider,
+      model: primaryModel,
+      reason: "format",
+      code: "empty_result",
+    });
   });
 
   it("preserves an incomplete tool-authored summary over stale silence when fallbacks exhaust", async () => {
     const terminalSummary =
       "Web fetch completed.\nOrigin: https://example.com\nStatus: 200\n\n" +
       "Agent couldn't generate a response.";
-    const incomplete = createContractRunResult({
-      payloads: [{ text: terminalSummary, isError: true }],
-      meta: {
-        durationMs: 1,
+    const incomplete = incompleteResult(
+      terminalSummary,
+      "Agent couldn't generate a response.",
+      {
         terminalReply: { disposition: "silent" },
         toolSummary: { calls: 1, tools: ["web_fetch"] },
-        error: {
-          kind: "incomplete_turn",
-          message: "Agent couldn't generate a response.",
-          fallbackSafe: true,
-          terminalPresentation: true,
-        },
       },
-    });
+      { terminalPresentation: true },
+    );
 
     const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
       ...contractRunOptions,
@@ -347,28 +373,8 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   });
 
   it("preserves the latest structured summary after all fallback candidates are exhausted", async () => {
-    const primary = createContractRunResult({
-      payloads: [{ text: "Primary terminal summary", isError: true }],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "incomplete_turn",
-          message: "Primary incomplete",
-          fallbackSafe: true,
-        },
-      },
-    });
-    const fallback = createContractRunResult({
-      payloads: [{ text: "Fallback terminal summary", isError: true }],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "incomplete_turn",
-          message: "Fallback incomplete",
-          fallbackSafe: true,
-        },
-      },
-    });
+    const primary = incompleteResult("Primary terminal summary", "Primary incomplete");
+    const fallback = incompleteResult("Fallback terminal summary", "Fallback incomplete");
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback({
@@ -387,54 +393,30 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   it.each([undefined, false])(
     "keeps a richer terminal presentation and its notice policy (%s) over a later generic incomplete result",
     async (suppressErrorNotice) => {
-      const primary = createContractRunResult({
-        payloads: [{ text: "Primary terminal summary", isError: true }],
-        meta: {
-          durationMs: 1,
+      const primary = incompleteResult(
+        "Primary terminal summary",
+        "Primary incomplete",
+        {
           ...(suppressErrorNotice === undefined ? {} : { suppressErrorNotice }),
-          agentMeta: {
-            sessionId: "primary-session",
-            sessionFile: "/tmp/primary.jsonl",
-            provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-            model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-          },
-          error: {
-            kind: "incomplete_turn",
-            message: "Primary incomplete",
-            fallbackSafe: true,
-            terminalPresentation: true,
-          },
+          agentMeta: agentMeta("primary"),
         },
-      });
-      const fallback = createContractRunResult({
-        payloads: [{ text: "Generic fallback incomplete", isError: true }],
-        meta: {
-          durationMs: 1,
-          suppressErrorNotice: true,
-          agentMeta: {
-            sessionId: "fallback-session",
-            sessionFile: "/tmp/fallback.jsonl",
-            provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
-            model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
-          },
-          executionTrace: {
-            winnerProvider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
-            winnerModel: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
-            fallbackUsed: true,
-            runner: "embedded",
-            attempts: [
-              {
-                provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
-                model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
-                result: "success",
-              },
-            ],
-          },
-          error: {
-            kind: "incomplete_turn",
-            message: "Fallback incomplete",
-            fallbackSafe: true,
-          },
+        { terminalPresentation: true },
+      );
+      const fallback = incompleteResult("Generic fallback incomplete", "Fallback incomplete", {
+        suppressErrorNotice: true,
+        agentMeta: agentMeta("fallback"),
+        executionTrace: {
+          winnerProvider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
+          winnerModel: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
+          fallbackUsed: true,
+          runner: "embedded",
+          attempts: [
+            {
+              provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
+              model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
+              result: "success",
+            },
+          ],
         },
       });
       const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
@@ -464,17 +446,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   );
 
   it("rethrows an unrecognized final failure instead of hiding it behind an earlier summary", async () => {
-    const primary = createContractRunResult({
-      payloads: [{ text: "Primary terminal summary", isError: true }],
-      meta: {
-        durationMs: 1,
-        error: {
-          kind: "incomplete_turn",
-          message: "Primary incomplete",
-          fallbackSafe: true,
-        },
-      },
-    });
+    const primary = incompleteResult("Primary terminal summary", "Primary incomplete");
     const finalError = new Error("fallback runtime crashed");
     const run = vi.fn().mockResolvedValueOnce(primary).mockRejectedValueOnce(finalError);
 
@@ -487,118 +459,79 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     expect(run).toHaveBeenCalledTimes(2);
   });
 
-  const nonFallbackCases = [
-    {
-      name: "intentional NO_REPLY",
-      result: createContractRunResult({
-        meta: {
-          durationMs: 1,
-          agentHarnessResultClassification: "empty",
-          finalAssistantRawText: "NO_REPLY",
-          terminalReply: { disposition: "silent" },
+  const nonFallbackCases: Array<
+    [
+      name: string,
+      result: ReturnType<typeof createContractRunResult>,
+      delivery?: { hasDirectlySentBlockReply?: boolean; hasBlockReplyPipelineOutput?: boolean },
+    ]
+  > = [
+    [
+      "intentional NO_REPLY",
+      emptyResult({
+        finalAssistantRawText: "NO_REPLY",
+        terminalReply: { disposition: "silent" },
+      }),
+    ],
+    ["visible reply", createContractRunResult({ payloads: [{ text: "visible answer" }] })],
+    ["abort", emptyResult({ aborted: true })],
+    [
+      "structured replay side effect",
+      createContractRunResult({
+        meta: { durationMs: 1, replayInvalid: true, toolSummary: { calls: 1, tools: ["message"] } },
+      }),
+    ],
+    [
+      "messaging text side effect",
+      emptyResult({}, { messagingToolSentTexts: ["sent out of band"] }),
+    ],
+    [
+      "messaging media side effect",
+      emptyResult(
+        {},
+        {
+          messagingToolSentMediaUrls: ["https://example.test/image.png"],
         },
-      }),
-    },
-    {
-      name: "visible reply",
-      result: createContractRunResult({
-        payloads: [{ text: "visible answer" }],
-        meta: { durationMs: 1 },
-      }),
-    },
-    {
-      name: "abort",
-      result: createContractRunResult({
-        meta: { durationMs: 1, aborted: true, agentHarnessResultClassification: "empty" },
-      }),
-    },
-    {
-      name: "structured replay side effect",
-      result: createContractRunResult({
-        meta: {
-          durationMs: 1,
-          replayInvalid: true,
-          toolSummary: { calls: 1, tools: ["message"] },
+      ),
+    ],
+    [
+      "messaging target side effect",
+      emptyResult(
+        {},
+        {
+          messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
         },
-      }),
-    },
-    {
-      name: "messaging text side effect",
-      result: createContractRunResult({
-        messagingToolSentTexts: ["sent out of band"],
-        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
-      }),
-    },
-    {
-      name: "messaging media side effect",
-      result: createContractRunResult({
-        messagingToolSentMediaUrls: ["https://example.test/image.png"],
-        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
-      }),
-    },
-    {
-      name: "messaging target side effect",
-      result: createContractRunResult({
-        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
-        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
-      }),
-    },
-    {
-      name: "cron side effect",
-      result: createContractRunResult({
-        successfulCronAdds: 1,
-        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
-      }),
-    },
-    {
-      name: "direct block reply",
-      result: createContractRunResult({
-        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
-      }),
-      hasDirectlySentBlockReply: true,
-    },
-    {
-      name: "block reply pipeline output",
-      result: createContractRunResult({
-        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
-      }),
-      hasBlockReplyPipelineOutput: true,
-    },
+      ),
+    ],
+    ["cron side effect", emptyResult({}, { successfulCronAdds: 1 })],
+    ["direct block reply", emptyResult(), { hasDirectlySentBlockReply: true }],
+    ["block reply pipeline output", emptyResult(), { hasBlockReplyPipelineOutput: true }],
   ];
 
   it("does not classify terminal results with visible output or side effects as fallbacks", () => {
     // Any visible reply or out-of-band side effect is a successful terminal outcome.
-    for (const contractCase of nonFallbackCases) {
+    for (const [name, result, delivery] of nonFallbackCases) {
       expect(
         classifyEmbeddedAgentRunResultForModelFallback({
-          provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-          model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-          result: contractCase.result,
-          hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
-          hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
+          ...contractRunOptions,
+          result,
+          ...delivery,
         }),
+        name,
       ).toBeNull();
     }
   });
 
   it("keeps running on the primary when terminal output is not classified as fallback", async () => {
-    const contractCase = expectDefined(nonFallbackCases[0], "nonFallbackCases[0] test invariant");
-    const run = vi.fn().mockResolvedValue(contractCase.result);
+    const [, primary] = expectDefined(nonFallbackCases[0], "nonFallbackCases[0] test invariant");
+    const run = vi.fn().mockResolvedValue(primary);
     const result = await runWithModelFallback({
       ...contractRunOptions,
       run,
-      classifyResult: ({ provider, model, result: resultLocal }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: resultLocal,
-          hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
-          hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
-        }),
     });
 
     expect(result.outcome).toBe("completed");
-    expect(result.result).toBe(contractCase.result);
+    expect(result.result).toBe(primary);
     expect(result.attempts).toStrictEqual([]);
     expect(run).toHaveBeenCalledTimes(1);
   });

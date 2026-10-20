@@ -86,24 +86,19 @@ describe("operator model policy", () => {
       policy: { deny: ["vendor/primary", "vendor/restricted-*"] },
       manifestPlugins: [],
     });
+    const defaults = { cfg, policy, allows: () => false, manifestPlugins: [] };
     expect(
       resolveOperatorModelDefault({
-        cfg,
+        ...defaults,
         agentId: "shared",
-        policy,
         model: { provider: "vendor", model: "primary" },
-        allows: () => false,
-        manifestPlugins: [],
       }),
     ).toEqual({ provider: "vendor", model: "fallback" });
     expect(
       resolveOperatorModelDefault({
-        cfg,
+        ...defaults,
         agentId: "other",
-        policy,
         model: { provider: "vendor", model: "other" },
-        allows: () => false,
-        manifestPlugins: [],
       }),
     ).toBeUndefined();
   });

@@ -151,13 +151,11 @@ describe("plugin model catalog auth capture", () => {
         },
       });
       await closeOpenClawAgentDatabasesAsync();
-      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
-      try {
+      {
+        using database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
         database
           .prepare("UPDATE cache_entries SET value_json = NULL WHERE scope = ? AND key = ?")
           .run("plugin-model-catalog-v1", "null-row");
-      } finally {
-        database.close();
       }
 
       const publication = await replacePersistedPluginModelCatalogs({
@@ -185,18 +183,14 @@ describe("plugin model catalog auth capture", () => {
       ];
       expect(publication).toEqual({ changed: true, catalogs: expected });
       expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(expected);
-      const snapshot = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir), {
+      using snapshot = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir), {
         readOnly: true,
       });
-      try {
-        expect(
-          snapshot
-            .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
-            .get("plugin-model-catalog-v1", "null-row"),
-        ).toEqual({ value_json: null });
-      } finally {
-        snapshot.close();
-      }
+      expect(
+        snapshot
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("plugin-model-catalog-v1", "null-row"),
+      ).toEqual({ value_json: null });
     });
   });
 });
