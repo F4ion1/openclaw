@@ -5,7 +5,9 @@ import { claimCompletedAgentDeletion } from "../agents/agent-lifecycle-registry.
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { pruneAgentConfig } from "../commands/agents.config.js";
 import { readConfigFileSnapshotForWrite, transformConfigFileWithRetry } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
+import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -48,7 +50,6 @@ import { createClawWorkspaceFiles, type PersistedClawWorkspaceFile } from "./wor
 
 type ConfigCommit = (
   transform: (config: OpenClawConfig, runtimeConfig?: OpenClawConfig) => OpenClawConfig,
-  assertCurrent?: () => void,
 ) => Promise<void>;
 
 export type StatelessClawAddOptions = {
@@ -66,6 +67,7 @@ export type StatelessClawAddOptions = {
   cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable"> &
     Partial<Pick<ClawCronGateway, "get" | "remove">>;
   commitConfig?: ConfigCommit;
+  configWriteOptions?: ConfigWriteOptions;
   rollbackNewAgent?: (plan: ClawAddPlan, cronJobs: PersistedClawCronRef[]) => Promise<void>;
 };
 
@@ -96,7 +98,7 @@ export type StatelessClawAddStage =
       failBeforeContinue: (error: unknown, code: string) => Promise<StatelessClawAddResult>;
     };
 
-export type StatelessClawAddAgentStage =
+type StatelessClawAddAgentStage =
   | { kind: "partial"; result: StatelessClawAddResult }
   | {
       kind: "ready";
@@ -146,12 +148,14 @@ async function commitConfig(
   options: StatelessClawAddOptions,
 ): Promise<void> {
   if (options.commitConfig) {
-    await options.commitConfig(transform, options.assertCurrent);
+    await options.commitConfig(transform);
     return;
   }
   await transformConfigFileWithRetry({
     afterWrite: { mode: "auto" },
-    writeOptions: { assertCurrent: options.assertCurrent },
+    writeOptions: copyRuntimeConfigWriteApplication(options.configWriteOptions, {
+      assertCurrent: options.assertCurrent,
+    }),
     transform: (config, context) => ({
       nextConfig: transform(config, context.snapshot.runtimeConfig),
     }),
@@ -328,12 +332,12 @@ export async function stageClawAddHostRequirementsStateless(
     }
     return { kind: "partial", result: await fail(error, "package_install_failed") };
   }
-  const stageAgent = async (nextOptions = options): Promise<StatelessClawAddAgentStage> => {
+  const stageAgent = async (agentOptions = options): Promise<StatelessClawAddAgentStage> => {
     if (continued) {
       throw new Error("Claw Add was already continued");
     }
     continued = true;
-    options = nextOptions;
+    options = agentOptions;
     try {
       assertForwardCurrent();
       assertWorkspacePathUnchanged(workspace);

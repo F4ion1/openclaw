@@ -80,7 +80,7 @@ export async function applyClawAddForGateway(
     signal?: AbortSignal;
     stateDir?: string;
     reloadPlugins?: PluginInstallBatchReload;
-    commitConfig?: StatelessClawAddOptions["commitConfig"];
+    configWriteOptions?: StatelessClawAddOptions["configWriteOptions"];
     waitForAgentRuntime?: () => Promise<void>;
     cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable"> &
       Partial<Pick<ClawCronGateway, "get" | "remove">>;
@@ -400,7 +400,9 @@ export async function applyClawAddForGateway(
                           getCurrentConfig: getCurrentClawsConfig,
                           assertReviewedConfig,
                           config: persistedContext.config,
-                          ...(input.commitConfig ? { commitConfig: input.commitConfig } : {}),
+                          ...(input.configWriteOptions
+                            ? { configWriteOptions: input.configWriteOptions }
+                            : {}),
                           consentPlanIntegrity: persistedPlan.planIntegrity,
                           ...(pluginConsent ? { pluginConsent } : {}),
                           ...(skillConsent ? { skillConsent } : {}),

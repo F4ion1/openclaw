@@ -297,8 +297,8 @@ describe("Gateway Claw Add plugin handoff", () => {
             }
             return {
               kind: "ready",
-              stageAgent: async (options: Parameters<typeof continueAdd>[0]) => {
-                const result = await continueAdd(options);
+              stageAgent: async (agentOptions: Parameters<typeof continueAdd>[0]) => {
+                const result = await continueAdd(agentOptions);
                 return { kind: "ready", finish: async () => result };
               },
               failBeforeContinue,

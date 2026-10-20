@@ -19,7 +19,6 @@ import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../../claws/labs-gate.js";
 import type { ClawAddPlan } from "../../claws/types.js";
-import { transformConfigFileWithRetry } from "../../config/config.js";
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { resolveConfigPath } from "../../config/paths.js";
@@ -167,18 +166,7 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
         assertCurrent,
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),
-        commitConfig: async (transform, assertCommitCurrent) => {
-          await transformConfigFileWithRetry({
-            afterWrite: { mode: "auto" },
-            writeOptions: attachRuntimeConfigWriteApplication(
-              { assertCurrent: assertCommitCurrent },
-              application,
-            ),
-            transform: (config, context) => ({
-              nextConfig: transform(config, context.snapshot.runtimeConfig),
-            }),
-          });
-        },
+        configWriteOptions: attachRuntimeConfigWriteApplication({}, application),
         waitForAgentRuntime: async () => {
           const outcome = application.claimed ? await application.result : "unclaimed";
           assertCurrent();
