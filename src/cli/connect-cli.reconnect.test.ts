@@ -20,7 +20,10 @@ const fixture = vi.hoisted(() => ({
   runtime: { error: vi.fn(), exit: vi.fn() },
 }));
 
-vi.mock("../runtime.js", () => ({ defaultRuntime: fixture.runtime }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: fixture.runtime,
+}));
 // mock-isolation: No host plugins, subprocesses, or worker sessions are needed for authentication.
 vi.mock("../node-host/runtime.js", () => ({
   prepareNodeHostRuntime: async () => ({
@@ -57,7 +60,9 @@ describe("connect setup-code replay", () => {
       const on = vi.spyOn(process, "on");
       const previousExitCode = process.exitCode;
       let running: Promise<void> | undefined;
-      const stop = () => on.mock.calls.find(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
+      // Ignore earlier import-time listeners: the foreground runner registers its
+      // shutdown handler last, before opening the connection.
+      const stop = () => on.mock.calls.findLast(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
       const frames: RequestFrame[] = [];
       try {
         await once(server, "listening");
