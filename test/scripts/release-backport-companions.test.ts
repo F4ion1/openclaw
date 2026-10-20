@@ -70,12 +70,13 @@ function fixture() {
 }
 
 describe("release-backport-companions", () => {
-  it("finds later same-path, PR, neighbor-test, registry, and candidate file-set gaps", () => {
+  it("accepts the package-manager separator and finds companion gaps", () => {
     const repo = fixture();
     const output = execFileSync(
       process.execPath,
       [
         script,
+        "--",
         "--baseline",
         repo.baseline,
         "--candidate",
