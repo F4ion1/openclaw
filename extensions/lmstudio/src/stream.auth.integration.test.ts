@@ -128,6 +128,9 @@ it.each(["store", "runtime", "header"] as const)(
             modelId: model.id,
             config,
           });
+          if (!wrapped) {
+            throw new Error("LM Studio stream wrapper was not created");
+          }
           const events = [];
           for await (const event of await wrapped(
             model,

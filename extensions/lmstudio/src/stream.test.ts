@@ -17,7 +17,7 @@ const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
 const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => undefined),
+  vi.fn(async (_params?: unknown): Promise<string | undefined> => undefined),
 );
 
 vi.mock("./models.fetch.js", async (importOriginal) => ({
