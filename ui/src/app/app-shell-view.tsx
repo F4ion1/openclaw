@@ -1,6 +1,7 @@
 import "../lib/toast-host.ts";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { registerModalSurface } from "../components/overlay-registry.ts";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
@@ -9,7 +10,6 @@ import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -53,12 +53,16 @@ declare module "@solidjs/web" {
 
 export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   let content!: HTMLElement;
+  let releaseNavDrawer: (() => void) | undefined;
   onSettled(() => {
     const stops = [
       props.host.shellElement && registerToastContainer(props.host.shellElement, "shell"),
       props.host.navDrawerElement && registerToastContainer(props.host.navDrawerElement, "drawer"),
     ];
-    return () => stops.forEach((stop) => stop?.());
+    return () => {
+      stops.forEach((stop) => stop?.());
+      releaseNavDrawer?.();
+    };
   });
   const [navResizing, setNavResizing] = createSignal(false);
   const view = createMemo(() => {
@@ -72,7 +76,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
   const connectionAnnouncement = createMemo(() => {
     const kind = shellConnectionStatus();
     return kind
-      ? gatewayStatusLabel(kind, view().sidebarProperties.storedOutboxes?.total)
+      ? gatewayStatusLabel(kind, view().gatewayStatus.queuedCount)
       : view().gatewayConnected
         ? t("nav.gateway.connected")
         : "";
@@ -118,9 +122,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           "--shell-nav-expanded-width": `${view().expandedNavWidth}px`,
           "--shell-nav-rail-width": `${view().railWidth}px`,
         }}
-        onTheme-change={(event: CustomEvent<ThemeModeChangeDetail>) =>
-          props.host.handleThemeChange(event)
-        }
       >
         <a class="shell-skip-link" href="#control-ui-main" inert={view().navDrawerOpen}>
           {t("common.skipToMainContent")}
@@ -225,7 +226,11 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             onClick={() => props.host.closeNavDrawer({ restoreFocus: true })}
           />
           <div
-            ref={(element) => (props.host.navDrawerElement = element)}
+            ref={(element) => {
+              releaseNavDrawer?.();
+              releaseNavDrawer = registerModalSurface(element);
+              props.host.navDrawerElement = element;
+            }}
             class={["shell-nav", { "nav-drawer": view().mobileNavLayout }]}
             role={view().mobileNavLayout ? "dialog" : undefined}
             aria-modal={view().mobileNavLayout && view().navDrawerOpen ? "true" : undefined}
@@ -376,6 +381,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
           prop:custodianSuppressed={view().activeRoute === "custodian"}
           prop:pageSessionKey={(props.host.shellRevision(), props.host.activeSessionKey)}
+          prop:getPrimaryChatPane={view().callbacks.getPrimaryChatPane}
           prop:pageAgentId={view().selectedAgentId}
           prop:pageRouteId={view().activeRoute}
           prop:pageRouteFailed={
