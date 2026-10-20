@@ -723,10 +723,11 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       }
       await runTurn(
         async (options) => {
+          await options?.onReasoningProgress?.({ progressTokens: 200 });
           await emitPreamble(options, commentary);
           await tool(options, "exec", "inspect-tool");
           if (!denied) {
-            await waitForContaining(commentary, "sendMessage");
+            await waitForContaining(commentary);
             expect(texts().join("\n")).toContain(commentary);
           }
         },
@@ -734,7 +735,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           mode: "progress",
           context,
           telegramCfg: {
-            streaming: { mode: "progress", progress: { commentary: true, toolProgress: false } },
+            streaming: { mode: "progress", progress: { commentary: true, toolProgress: true } },
           },
           cfg: {
             messages: { visibleReplies: ownership, groupChat: { visibleReplies: ownership } },
