@@ -229,9 +229,9 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   it.each(fallbackClassificationCases)(
     "maps harness classification %s to a format fallback code",
     (classification, code) => {
-      const fallback = classifyEmbeddedAgentRunResultForModelFallback({
-        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      const fallback = classifyResult({
+        provider: contract.primaryProvider,
+        model: contract.primaryModel,
         result: createContractRunResult({
           meta: {
             durationMs: 1,
