@@ -300,6 +300,8 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
         "#issuecomment-123",
         "#pullrequestreview-456",
         "/files?diff=split#diff-123",
+        "/changes",
+        "/changes#diff-123",
         "/commits",
         `/commits/${HEAD}`,
         "/checks?check_run_id=789",
