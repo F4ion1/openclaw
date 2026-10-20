@@ -1,34 +1,23 @@
 /* @vitest-environment jsdom */
 
-import {
-  createRouter,
-  definePage,
-  type RouteRedirect,
-  type RouterHistory,
-} from "@openclaw/uirouter";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { createRouter, definePage, type RouteRedirect } from "@openclaw/uirouter";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { isRouteId, locationForRoute, routePageSpec, type RouteId } from "../app-route-paths.ts";
 import { filterCommandPaletteItems } from "../components/command-palette-catalog-search.ts";
 import { pages as configPages } from "../pages/config/route.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellNavigationOwner } from "./app-shell-navigation.ts";
+import { createBrowserHistory } from "./browser.ts";
 import type { ApplicationContext } from "./context.ts";
 
 it.each(["palette", "/settings/general", "/config"])(
-  "returns to the complete workspace URL after entering Settings through %s",
+  "round-trips %s to workspace",
   async (entry) => {
     const workspace = { pathname: "/chat/main", search: "?panel=files", hash: "#message-42" };
-    let location = { pathname: "/chat", search: "", hash: "" };
-    const history: RouterHistory = {
-      location: () => location,
-      push: (next) => {
-        location = next;
-      },
-      replace: (next) => {
-        location = next;
-      },
-      listen: () => () => undefined,
-    };
+    const original: [state: unknown, url: string] = [window.history.state, window.location.href];
+    onTestFinished(() => window.history.replaceState(original[0], "", original[1]));
+    window.history.replaceState({}, "", "/chat");
+    const history = createBrowserHistory();
     const router = createRouter<RouteId, ApplicationContext, unknown, RouteRedirect>({
       routes: [
         ...configPages.filter((page) => page.id === "config"),
@@ -46,12 +35,8 @@ it.each(["palette", "/settings/general", "/config"])(
       gateway: { snapshot: { phase: "connected" } },
       chatSubmissions: {},
       navigate: (routeId, options) => {
-        navigation = router.navigate(
-          routeId,
-          context,
-          { history: "push" },
-          { ...locationForRoute(routeId, ""), ...options },
-        );
+        const target = { ...locationForRoute(routeId, ""), ...options };
+        navigation = router.navigate(routeId, context, { history: "push" }, target);
       },
     } as ApplicationContext;
     const shell = new ShellNavigationOwner({
@@ -66,9 +51,9 @@ it.each(["palette", "/settings/general", "/config"])(
       closeNavDrawer: vi.fn(),
       ensureAgentsList: vi.fn(),
     });
-    const unsubscribe = router.subscribe(() => {
-      shell.updateRouteState(selectShellRouteState(router.getState()));
-    });
+    const unsubscribe = router.subscribe((state) =>
+      shell.updateRouteState(selectShellRouteState(state)),
+    );
     onTestFinished(() => {
       unsubscribe();
       router.stop();
@@ -85,9 +70,7 @@ it.each(["palette", "/settings/general", "/config"])(
         custodianAvailable: false,
       })[0];
       const routeId = item?.action.slice(4);
-      if (!routeId || !isRouteId(routeId)) {
-        throw new Error("Settings palette action is missing");
-      }
+      assert(routeId && isRouteId(routeId), "Settings palette action is missing");
       shell.navigate(routeId);
       await navigation;
     } else {
@@ -96,11 +79,9 @@ it.each(["palette", "/settings/general", "/config"])(
     expect(router.getState().matches[0]?.routeId).toBe("appearance");
     shell.navigate("model-providers");
     await navigation;
-
     shell.exitSettings();
     await navigation;
-
-    expect(location).toEqual(workspace);
+    expect(history.location()).toEqual(workspace);
     expect(router.getState().matches[0]?.routeId).toBe("chat");
   },
 );

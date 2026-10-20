@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import * as prewarm from "../pages/chat/session-snapshot-prewarm.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import type { BootRecord } from "./boot-record.ts";
+import { makeBootRecord as bootRecord, makeBootRoster } from "./bootstrap.test-support.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
 
@@ -16,19 +16,11 @@ beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
 });
 
-function bootRecord(scope: string, overrides: Partial<BootRecord>): BootRecord {
-  return {
-    version: 2,
-    authMethod: "token",
-    credential: "9d17676d",
-    savedAt: Date.now(),
-    scope,
-    profileId: "profile-a",
-    agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
-    groups: [],
-    sectionOrder: [],
-    ...overrides,
-  };
+function configure(patch: Partial<ReturnType<typeof loadSettings>>, token = "test-token") {
+  const settings = { ...loadSettings(), ...patch };
+  saveSettings(settings);
+  persistSessionToken(settings.gatewayUrl, token);
+  return settings;
 }
 
 function spyPrewarm() {
@@ -52,22 +44,14 @@ it.each([
     expected: null,
   },
 ])("prewarms $key at $url only when warm boot permits it", async ({ key, url, expected }) => {
-  const settings = {
-    ...loadSettings(),
-    sessionKey: key,
-    lastActiveSessionKey: key,
-  };
-  saveSettings(settings);
-  persistSessionToken(settings.gatewayUrl, "test-token");
+  const settings = configure({ sessionKey: key, lastActiveSessionKey: key });
   const record = bootRecord(gatewayCredentialScope(settings.gatewayUrl), {
     recoveryScope: "account-a",
     profileId: null,
-    agents: {
-      defaultId: "main",
+    agents: makeBootRoster({
       mainKey: "custom-main",
-      scope: "per-sender",
       agents: [{ id: "main" }, { id: "other" }],
-    },
+    }),
   });
   localStorage.setItem(BOOT_RECORD_PREFIX + record.scope, JSON.stringify(record));
   window.history.replaceState({}, "", url);
@@ -97,9 +81,7 @@ it.each([
   "$authMethod boot with operator '$token' and device 'test-token' is warm: $warm",
   ({ authMethod, token, warm, retained }) => {
     window.history.replaceState({}, "", "/chat");
-    const settings = { ...loadSettings(), sessionKey: "agent:main:main" };
-    saveSettings(settings);
-    persistSessionToken(settings.gatewayUrl, token);
+    const settings = configure({ sessionKey: "agent:main:main" }, token);
     localStorage.setItem(
       "openclaw-device-identity-v1",
       JSON.stringify({

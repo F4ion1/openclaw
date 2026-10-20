@@ -1,10 +1,11 @@
-import type { RouteLocation } from "@openclaw/uirouter";
 import { vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
 import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext } from "./context.ts";
+import type { OptionalCustomElement } from "./lazy-custom-element.ts";
+export type { OptionalCustomElement as TestOptionalCustomElement } from "./lazy-custom-element.ts";
 
 export type ShellRouteCommitState = {
   runtime: { context: ApplicationContext };
@@ -18,10 +19,7 @@ export type ShellCustodianRouteState = {
   shellNavigation: ShellNavigationOwner;
 };
 
-export type ShellKeyboardState = {
-  element: HTMLElement;
-  runtime: { context: ApplicationContext };
-};
+export type ShellKeyboardState = { element: HTMLElement } & Pick<ShellRouteCommitState, "runtime">;
 
 export function resetAppHostTestGlobals(): void {
   vi.useRealTimers();
@@ -34,20 +32,13 @@ export function resetAppHostTestGlobals(): void {
   vi.unstubAllGlobals();
 }
 
-export type TestOptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
-};
-
 let lazyElementSequence = 0;
 
 export function createLazyElementSpec(
   label: string,
   options: { firstError?: Error } = {},
-): TestOptionalCustomElement {
-  lazyElementSequence += 1;
-  const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
+): OptionalCustomElement {
+  const tagName = `openclaw-app-host-lazy-${++lazyElementSequence}`;
   let attempt = 0;
   return {
     tagName,
@@ -70,12 +61,8 @@ export function stubRenderedWhenDefined(shell: object): void {
   });
 }
 
-export function committedRouterState(
-  routeId: RouteId,
-  pathname: string,
-  data?: unknown,
-): ReturnType<ApplicationRouter["getState"]> {
-  const location = { pathname, search: "", hash: "" } satisfies RouteLocation;
+export function committedRouterState(routeId: RouteId, pathname: string, data?: unknown) {
+  const location = { pathname, search: "", hash: "" };
   return {
     location,
     resolvedLocation: location,
@@ -99,10 +86,9 @@ export function createRosterRefreshContext(params: {
 }) {
   const agentsState = { agentsList: params.previous };
   const selectionState = { selectedId: params.selectedId, scopeId: params.selectedId };
-  const refreshList = vi.fn(async () => {
-    agentsState.agentsList = params.next;
-    return params.next;
-  });
+  const refreshList = vi.fn(
+    async () => Object.assign(agentsState, { agentsList: params.next }).agentsList,
+  );
   const actions = {
     refreshList,
     invalidateFiles: vi.fn(),
@@ -118,10 +104,7 @@ export function createRosterRefreshContext(params: {
     agents: { state: agentsState, refreshList, invalidateFiles: actions.invalidateFiles },
     agentIdentity: { invalidate: actions.invalidateIdentity, ensure: actions.ensureIdentity },
     agentSelection: { state: selectionState, set: actions.setSelection },
-    runtimeConfig: {
-      state: { configFormDirty: false },
-      refresh: actions.refreshConfig,
-    },
+    runtimeConfig: { state: { configFormDirty: false }, refresh: actions.refreshConfig },
   } as unknown as ApplicationContext;
   return { context, ...actions };
 }

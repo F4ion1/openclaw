@@ -302,11 +302,7 @@ it.each(
 )("opens a draft from the composer on $platform (native=$native)", ({ platform, native }) => {
   vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", native);
   const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
-  navigationShell(
-    nativeSessionContext("research", {
-      scopes: ["operator.sessions.write"],
-    }),
-  );
+  navigationShell(nativeSessionContext("research", { scopes: ["operator.sessions.write"] }));
   const textarea = document.body.appendChild(document.createElement("textarea"));
   onTestFinished(() => textarea.remove());
   textarea.value = "Keep this foreground draft";
@@ -379,7 +375,7 @@ it("leaves a rendered modal navigation drawer in control of the New Session chor
 });
 
 it("retains a native new-session request until a context exists", () => {
-  const shell = createShellOwner() as unknown as ShellNavigationState;
+  const shell = createShellOwner();
 
   shell.handleNativeNewSession();
 
