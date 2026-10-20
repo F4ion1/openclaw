@@ -88,17 +88,17 @@ describe("candidate-owned publish consumer chain", () => {
   it.each([
     "same qualification",
     "changelog descendant",
+    "execution-plan descendant",
     "changed candidate",
     "changed input",
     "changed P",
     "revoked P",
   ])("selects a direct admitted root across transport refs only for %s", async (scenario) => {
     const root = candidatePublicationFixture();
-    const candidateSha =
-      scenario === "changed candidate" || scenario === "changelog descendant"
-        ? "d".repeat(40)
-        : root.q;
-    const targetSha = scenario === "changelog descendant" ? "d".repeat(40) : root.q;
+    const descendant =
+      scenario === "changelog descendant" || scenario === "execution-plan descendant";
+    const candidateSha = scenario === "changed candidate" || descendant ? "d".repeat(40) : root.q;
+    const targetSha = descendant ? "d".repeat(40) : root.q;
     const workflowRef = "release-ci/" + candidateSha.slice(0, 12) + "-456";
     const inputs = structuredClone(root.plan.qualificationInputs);
     inputs.ref = candidateSha;
@@ -129,17 +129,16 @@ describe("candidate-owned publish consumer chain", () => {
     }
     const client = {
       ...root.client,
-      compareCommits:
-        scenario === "changelog descendant"
-          ? () => ({
-              status: "ahead",
-              merge_base_commit: { sha: root.q },
-              files: [
-                { filename: "CHANGELOG/2026.8.28.md", status: "modified" },
-                { filename: "CHANGELOG/records/2026.8.28.md", status: "modified" },
-              ],
-            })
-          : root.client.compareCommits,
+      compareCommits: descendant
+        ? () => ({
+            status: "ahead",
+            merge_base_commit: { sha: root.q },
+            files: [
+              { filename: "CHANGELOG/2026.8.28.md", status: "modified" },
+              { filename: "CHANGELOG/records/2026.8.28.md", status: "modified" },
+            ],
+          })
+        : root.client.compareCommits,
       verifyQualificationAdmission: (
         request: Parameters<typeof root.client.verifyQualificationAdmission>[0],
       ) =>
@@ -155,12 +154,23 @@ describe("candidate-owned publish consumer chain", () => {
       {
         ...verifier(root),
         verifierSourceSha: scenario === "changed P" ? "e".repeat(40) : root.p,
-        reuseRequest: {
-          targetSha,
-          releaseProfile: root.manifest.releaseProfile,
-          runReleaseSoak: root.manifest.runReleaseSoak,
-          validationInputs: root.manifest.validationInputs,
-        },
+        ...(scenario === "execution-plan descendant"
+          ? {
+              expectedChangedPaths: ["CHANGELOG/2026.8.28.md", "CHANGELOG/records/2026.8.28.md"],
+              expectedEvidencePolicy: "split-changelog-release-v1",
+              expectedEvidenceSha: root.q,
+              expectedRootRunId: root.runId,
+              expectedSelectedRunId: root.runId,
+              expectedTargetSha: targetSha,
+            }
+          : {
+              reuseRequest: {
+                targetSha,
+                releaseProfile: root.manifest.releaseProfile,
+                runReleaseSoak: root.manifest.runReleaseSoak,
+                validationInputs: root.manifest.validationInputs,
+              },
+            }),
         qualificationReuse: {
           candidateSha,
           qualificationSha: candidateSha,
@@ -171,7 +181,7 @@ describe("candidate-owned publish consumer chain", () => {
       },
       client,
     );
-    if (scenario === "same qualification" || scenario === "changelog descendant") {
+    if (scenario === "same qualification" || descendant) {
       const evidence = await result;
       expect(evidence).toMatchObject({
         valid: true,
