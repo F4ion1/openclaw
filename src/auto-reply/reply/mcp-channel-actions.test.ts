@@ -19,10 +19,7 @@ import {
 const view = { viewId: "view-latest" };
 const appUrl = "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket";
 const authUrl = "https://auth.example/authorize?state=opaque";
-const connectAction = {
-  serverName: "calendar",
-  authorizationUrl: authUrl,
-};
+const action = { serverName: "calendar", authorizationUrl: authUrl };
 const presentation = {
   blocks: [
     {
@@ -33,8 +30,7 @@ const presentation = {
 };
 
 beforeEach(() => {
-  materialize.mockReset();
-  materialize.mockReturnValue(presentation);
+  materialize.mockReset().mockReturnValue(presentation);
 });
 
 function attachApp(payloads: ReplyPayload[], channel: string | undefined) {
@@ -63,26 +59,17 @@ it.each([
       finalReply,
     ];
     const payloads =
-      kind === "app"
-        ? attachApp(input, "telegram")
-        : attachConnect({ payloads: input, action: connectAction });
+      kind === "app" ? attachApp(input, "telegram") : attachConnect({ payloads: input, action });
     expect(payloads[1]).toEqual({ text: "First answer" });
     if (kind === "app") {
       expect(payloads[2]).toEqual({ text, presentation });
     }
     expect(renderFallback(payloads[2]!)).toBe(`${text}\n\n- ${fallback}`);
     expect(
-      isAuthorized(payloads[2]!, {
-        sessionId: "session-original",
-        activeWriterRunId: "writer-original",
-      }),
-    ).toBe(true);
-    expect(
-      isAuthorized(payloads[2]!, {
-        sessionId: "session-original",
-        activeWriterRunId: "writer-replacement",
-      }),
-    ).toBe(false);
+      ["writer-original", "writer-replacement"].map((activeWriterRunId) =>
+        isAuthorized(payloads[2]!, { sessionId: "session-original", activeWriterRunId }),
+      ),
+    ).toEqual([true, false]);
   },
 );
 
@@ -101,19 +88,13 @@ it("preserves payloads when no channel action can be attached", () => {
     ["unresolved channel", visible, (payloads) => attachApp(payloads, undefined)],
     ["no terminal text", ineligible, (payloads) => attachApp(payloads, "telegram")],
     ["no connect action", error, (payloads) => attachConnect({ payloads })],
-    ["connect error", error, (payloads) => attachConnect({ payloads, action: connectAction })],
-    [
-      "late materialization unavailable",
-      visible,
-      (payloads) => attachApp(payloads, "telegram"),
-      true,
-    ],
+    ["connect error", error, (payloads) => attachConnect({ payloads, action })],
+    ["unavailable", visible, (payloads) => attachApp(payloads, "telegram"), true],
   ];
-  for (const [name, payloads, attach, materializationUnavailable] of cases) {
-    materialize.mockReset();
-    materialize.mockReturnValue(materializationUnavailable ? undefined : presentation);
+  for (const [name, payloads, attach, unavailable] of cases) {
+    materialize.mockReset().mockReturnValue(unavailable ? undefined : presentation);
     expect(attach(payloads), name).toBe(payloads);
-    if (!materializationUnavailable) {
+    if (!unavailable) {
       expect(materialize, name).not.toHaveBeenCalled();
     }
   }
