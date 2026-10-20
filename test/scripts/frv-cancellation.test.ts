@@ -122,6 +122,16 @@ function cancellationFixture(
 
 // Protect the operator boundary: complete owned tree, fresh attempts, no borrowed-run mutation.
 describe("FRV cancellation tree", () => {
+  it("authenticates a plan sealed by a pre-seal recovery attempt", async () => {
+    const fixture = cancellationFixture();
+    fixture.retained.plan.sealParentRunAttempt = 2;
+    fixture.retained.plan.sha256 = releaseExecutionPlanSha256(fixture.retained.plan);
+    fixture.sealer.run_attempt = 2;
+    const result = await cancelReleaseTree("77", fixture.client);
+    expect(result.complete).toBe(true);
+    expect(fixture.sent.map(([id]) => id)).toEqual(["303", "77"]);
+  });
+
   it.each([true])(
     "includes earlier Telegram descendants beside runnerless rerun copies (copies=%s)",
     async (copies) => {
