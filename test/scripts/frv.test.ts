@@ -606,6 +606,44 @@ describe("FRV continuation preflight", () => {
     expect(fixture.client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
   });
 
+  it.each(["child", "parent"])(
+    "rechecks artifact producers before retrying a %s rerun",
+    async (target) => {
+      const fixture = artifactFixture("npm");
+      const read = fixture.client.getRun.getMockImplementation()!;
+      fixture.client.getRun.mockImplementation(async (id: string) =>
+        id === "77"
+          ? rootRun(1, target === "parent" ? "failure" : "success")
+          : id === "101"
+            ? runFor(fixture.selected, 1, target === "child" ? "failure" : "success")
+            : structuredClone(await read(id)),
+      );
+      const ambiguousMutation = vi.fn(async () => {
+        fixture.producer.run_attempt = 2;
+        throw Object.assign(new Error("gh api failed"), {
+          stderr: "gh: request failed (HTTP 502)",
+        });
+      });
+      if (target === "child") {
+        fixture.client.rerunFailed = ambiguousMutation;
+      } else {
+        fixture.client.rerunParent = ambiguousMutation;
+      }
+
+      await withFastPolling(
+        () =>
+          expect(
+            continueFailed(fixture.plan, "77", {
+              ...fixture.client,
+              verify: async () => "{}",
+            }),
+          ).rejects.toThrow("Artifact producer changed during recovery: 81"),
+        "5",
+      );
+      expect(ambiguousMutation).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("does not invent rerunnable producers for retained publication artifacts", async () => {
     const fixture = artifactFixture("npm");
     Reflect.set(fixture.plan, "evidenceReuse", { requested: true });
