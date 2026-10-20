@@ -34,7 +34,7 @@ openclaw-panel-loading-skeleton {
     border: 2px solid var(--border);
     border-top-color: var(--muted);
     border-radius: 50%;
-    animation: panel-skeleton-spin 1s linear infinite;
+    animation: btn-spinner-spin 1s linear infinite;
   }
 
   &[overlay] {
@@ -54,29 +54,6 @@ openclaw-panel-loading-skeleton {
 
   * {
     box-sizing: border-box;
-  }
-
-  /* Unported shadow-root parents cannot inherit the shared shimmer styles. */
-  .skeleton {
-    position: relative;
-    overflow: hidden;
-    background: var(--skeleton-base, var(--bg-muted));
-    border-radius: var(--radius-md);
-  }
-
-  .skeleton::after {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent 25%,
-      var(--skeleton-highlight, var(--bg-hover)) 50%,
-      transparent 75%
-    );
-    content: "";
-    transform: translateX(-100%);
-    animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
-    will-change: transform;
   }
 
   .line {
@@ -261,24 +238,8 @@ openclaw-panel-loading-skeleton {
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .desktop-spinner,
-    .skeleton::after {
+    .desktop-spinner {
       animation: none;
     }
-  }
-}
-
-@keyframes shimmer {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(100%);
-  }
-}
-
-@keyframes panel-skeleton-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
