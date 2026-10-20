@@ -239,6 +239,29 @@ describe("actions on the imported original PR", () => {
     expect(loadSessionEntryReadOnly(f.scope)?.worktree?.githubPullRequest).toEqual(f.binding);
   });
 
+  it.each(["title", "body"] as const)(
+    "preserves a human %s edit observed during eligibility preparation",
+    async (field) => {
+      const f = await fixture();
+      let reads = 0;
+      f.onRead(async (endpoint) => {
+        // Eligibility rereads the PR after inspection and the action's first metadata read.
+        if (endpoint.endsWith("/pulls/7") && ++reads === 3) {
+          f.state[field] = "New human edit";
+        }
+      });
+      const changes =
+        field === "title"
+          ? { expectedTitle: "Original title", title: "Requested title" }
+          : { expectedBody: "Original contributor description", body: "Requested body" };
+      await expect(
+        f.invoke("guest", { action: "edit", expectedHeadCommit: headCommit, ...changes }),
+      ).rejects.toThrow("metadata changed");
+      expect(f.state[field]).toBe("New human edit");
+      expect(f.writes).toEqual([]);
+    },
+  );
+
   it("keeps full-write inspect/merge separate from later guest turns", async () => {
     const f = await fixture();
     expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({

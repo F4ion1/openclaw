@@ -233,7 +233,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     assertCurrent();
     options.respond(true, result);
   };
-  const before = await read();
+  let before = await read();
   if (params.action === "inspect" || (edit && !editsMetadata)) {
     return present(before);
   }
@@ -247,13 +247,16 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   assertHead(before);
   const prepareImportedEffect = async () => {
     if (inspection) {
-      await assertExistingPullRequestWriteAccess({
+      const current = await assertExistingPullRequestWriteAccess({
         pullRequest: inspection.result,
         identity,
         assertCurrent,
       });
+      assertCurrent();
+      return pullRequestState(current, pullRequest, binding, inspection.result.author.accountId);
     }
     assertCurrent();
+    return null;
   };
   if (evidenceUpload) {
     const assertOpen = (state: ReturnType<typeof pullRequestState>) => {
@@ -302,6 +305,14 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   if (edit) {
     if (metadataMatches(before)) {
       return present(before);
+    }
+    const current = await prepareImportedEffect();
+    if (current) {
+      before = current;
+      assertHead(before);
+      if (metadataMatches(before)) {
+        return present(before);
+      }
     }
     if (
       (edit.title !== undefined &&
@@ -369,7 +380,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       );
     }
   }
-  await prepareImportedEffect();
+  if (!edit) {
+    await prepareImportedEffect();
+  }
   const assertEffect = () => {
     assertCurrent();
     if (attribution && !attribution.isCurrent()) {
