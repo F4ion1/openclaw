@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
+import { parse as parseYaml } from "yaml";
 import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
 import {
   publicationAdmissionContract,
@@ -478,52 +479,106 @@ async function recheckArtifactProducers(
   }
 }
 
-async function npmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
-  // Older workflow revisions did not dispatch npm qualification independently.
-  if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
+const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "candidate"]);
+
+function artifactRecoveryJobs(workflow) {
+  let source;
+  try {
+    source = parseYaml(workflow);
+  } catch {
+    throw new Error("Source workflow artifact producer contract is unavailable");
+  }
+  const jobs = source?.jobs;
+  if (!jobs || typeof jobs !== "object" || Array.isArray(jobs)) {
     return [];
   }
-  const matches = parentJobs.filter(
-    (job) =>
-      job.name === "Prepare release npm artifacts" &&
-      Number(job.run_attempt) === plan.parentRunAttempt,
-  );
-  if (matches.length !== 1) {
-    throw new Error("Original npm dispatch job is missing or ambiguous");
+  const producers = [];
+  for (const job of Object.values(jobs)) {
+    if (!job || typeof job !== "object" || Array.isArray(job)) {
+      continue;
+    }
+    const childKind = job.env?.CHILD_WORKFLOW_KIND;
+    if (typeof childKind !== "string" || !childKind.startsWith("artifact-")) {
+      continue;
+    }
+    const stage = childKind.slice("artifact-".length);
+    if (!ARTIFACT_RECOVERY_STAGES.has(stage) || typeof job.name !== "string" || !job.name.trim()) {
+      throw new Error("Source workflow artifact producer contract is unsupported");
+    }
+    const reuseStep = Array.isArray(job.steps)
+      ? job.steps.find((step) => step?.id === "reused")
+      : undefined;
+    const allowsReuse =
+      reuseStep?.if === "env.PUBLICATION_ARTIFACTS_REUSED == 'true'" &&
+      typeof job.env?.PUBLICATION_ARTIFACTS_REUSED === "string";
+    producers.push({ jobName: job.name, stage, allowsReuse });
   }
-  const [job] = matches;
-  if (job.conclusion === "skipped") {
-    return [];
-  }
-  if (job.status !== "completed") {
-    return undefined;
-  }
-  const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
-  const dispatches = [
-    ...log.matchAll(
-      /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched full-release-artifacts\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
-    ),
-  ];
   if (
-    dispatches.length !== 1 ||
-    dispatches[0][1] !== repository ||
-    !log.includes(`TARGET_SHA: ${plan.targetSha}`)
+    new Set(producers.map(({ stage }) => stage)).size !== producers.length ||
+    new Set(producers.map(({ jobName }) => jobName)).size !== producers.length
   ) {
-    throw new Error("Original npm dispatch identity is unavailable or ambiguous");
+    throw new Error("Source workflow artifact producer contract is ambiguous");
   }
-  return [
-    {
+  if (producers.length > 0 && source.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT !== "1") {
+    throw new Error("Source workflow artifact producer recovery contract is unsupported");
+  }
+  return producers;
+}
+
+async function artifactRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
+  const producers = [];
+  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(workflow)) {
+    const matches = parentJobs.filter(
+      (job) => job.name === jobName && Number(job.run_attempt) === plan.parentRunAttempt,
+    );
+    if (matches.length !== 1) {
+      throw new Error(`Original ${stage} dispatch job is missing or ambiguous`);
+    }
+    const [job] = matches;
+    if (!job || job.conclusion === "skipped") {
+      continue;
+    }
+    if (job.status !== "completed") {
+      return undefined;
+    }
+    const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
+    const dispatches = [
+      ...log.matchAll(
+        /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker|candidate) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+      ),
+    ];
+    if (
+      dispatches.length === 0 &&
+      plan.evidenceReuse?.requested === true &&
+      allowsReuse &&
+      job.conclusion === "success"
+    ) {
+      continue;
+    }
+    if (
+      dispatches.length !== 1 ||
+      dispatches[0][1] !== stage ||
+      dispatches[0][2] !== plan.targetSha ||
+      dispatches[0][3] !== repository
+    ) {
+      throw new Error(`Original ${stage} dispatch identity is unavailable or ambiguous`);
+    }
+    producers.push({
       request: {
-        stage: "npm",
+        stage,
         repository,
-        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-npm`,
+        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
         toolingSha: plan.workflowSha,
         workflowRef: plan.workflowRef,
       },
-      runId: dispatches[0][2],
-      runAttempt: dispatches[0][3],
-    },
-  ];
+      runId: dispatches[0][4],
+      runAttempt: dispatches[0][5],
+    });
+  }
+  if (new Set(producers.map((producer) => producer.runId)).size !== producers.length) {
+    throw new Error("Original artifact producer dispatch identities overlap");
+  }
+  return producers;
 }
 
 function assertRootRunIdentity(run, source, allowNewerAttempt = false) {
@@ -656,7 +711,7 @@ export async function preflightContinuation(
       throw new Error("continuation differs from the authenticated original publication plan");
     }
   }
-  const artifactProducers = await npmRecoveryProducers(
+  const artifactProducers = await artifactRecoveryProducers(
     plan,
     parentJobs,
     client,
