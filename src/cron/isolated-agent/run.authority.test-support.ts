@@ -19,21 +19,16 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { CronService } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
-import {
-  ensureAgentWorkspaceMock,
-  loadRunCronIsolatedAgentTurn,
-  mockRunCronFallbackPassthrough,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveConfiguredModelRefMock,
-  resolveCronDeliveryPlanMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
 export function resetAuthorityRunHarness() {
-  resetRunCronIsolatedAgentTurnHarness();
+  harness.resetRunCronIsolatedAgentTurnHarness();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-  ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
-  resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
-  mockRunCronFallbackPassthrough();
+  harness.ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({
+    dir,
+  }));
+  harness.resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+  harness.mockRunCronFallbackPassthrough();
 }
 
 export async function prepareAuthorityConfig(overrides: Partial<OpenClawConfig> = {}) {
@@ -55,7 +50,7 @@ export async function prepareAuthorityConfig(overrides: Partial<OpenClawConfig> 
   setRuntimeConfigSnapshot(config);
   // Capture and execution must address the same canonical credential owner.
   vi.mocked(resolveAgentDir).mockReturnValue(agentDir);
-  resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
+  harness.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
   await persistAuthProfileBatch({
     stateDir,
     profiles: [
@@ -112,7 +107,7 @@ export async function withAuthorityTools<T>(
 
 export function createAuthorityCronService(
   config: OpenClawConfig,
-  runCron: Awaited<ReturnType<typeof loadRunCronIsolatedAgentTurn>>,
+  runCron: Awaited<ReturnType<typeof harness.loadRunCronIsolatedAgentTurn>>,
   overrides: Partial<ConstructorParameters<typeof CronService>[0]> = {},
 ) {
   return new CronService({

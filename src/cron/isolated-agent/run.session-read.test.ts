@@ -14,13 +14,9 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
-import {
-  loadSessionEntryMock,
-  patchSessionEntryMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveCronSessionMock,
-} from "./run.test-harness.js";
+import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import * as harness from "./run.test-harness.js";
 
 const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
 const actualAccessor = await vi.importActual<
@@ -48,7 +44,7 @@ function prepareRun(storePath: string, sessionKey = "cron:test-job", job = {}) {
       agentId: "main",
       cfg: { session: { store: storePath } },
       sessionKey,
-      job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" }, ...job }),
+      job: { delivery: { mode: "none" }, ...job },
     }),
     isFastTestEnv: true,
     onLifecycleInterrupt: () => {},
@@ -56,7 +52,7 @@ function prepareRun(storePath: string, sessionKey = "cron:test-job", job = {}) {
 }
 
 describe("cron session preparation", () => {
-  beforeEach(resetRunCronIsolatedAgentTurnHarness);
+  beforeEach(harness.resetRunCronIsolatedAgentTurnHarness);
   it.each(["unchanged", "workspace"] as const)(
     "revalidates %s authority across absent-field snapshot representations",
     async (change) => {
@@ -80,11 +76,8 @@ describe("cron session preparation", () => {
         nowMs: now,
       });
       const initial = expectDefined(cronSession.initialSessionEntry, "initial session");
-      expect([initial.owner, initial.participants, initial.participantCount]).toEqual([
-        undefined,
-        undefined,
-        undefined,
-      ]);
+      const absent = { owner: undefined, participants: undefined, participantCount: undefined };
+      expectObjectFields(initial, absent);
       delete initial.owner;
       delete initial.participants;
       delete initial.participantCount;
@@ -94,7 +87,7 @@ describe("cron session preparation", () => {
           spawnedCwd: "/tmp/another-workspace",
         });
       }
-      loadSessionEntryMock.mockImplementation(
+      harness.loadSessionEntryMock.mockImplementation(
         async (...args: Parameters<typeof actualSession.loadCronSessionEntryLatest>) => {
           const current = await actualSession.loadCronSessionEntryLatest(...args);
           // Published snapshots can include absent fields that SQL-backed rows omit.
@@ -115,21 +108,17 @@ describe("cron session preparation", () => {
         runSessionKey: sessionKey,
         usesDetachedRunSession: false,
         onInterrupt: () => {},
-      });
-      if (change === "unchanged") {
-        const lease = await admission;
+      }).then((lease) => {
         try {
-          expect(lease.isActive()).toBe(true);
+          return lease.isActive();
         } finally {
           lease.release();
         }
+      });
+      if (change === "unchanged") {
+        await expect(admission).resolves.toBe(true);
       } else {
-        await expect(
-          admission.then((lease) => {
-            lease.release();
-            return lease;
-          }),
-        ).rejects.toMatchObject({
+        await expect(admission).rejects.toMatchObject({
           name: "CronSessionLifecycleClaimError",
           admissionDisposition: "session-conflict",
         });
@@ -151,14 +140,14 @@ describe("cron session preparation", () => {
       createdVia: "cron",
       totalTokens: 10,
     });
-    resolveCronSessionMock.mockImplementation(async (params) => {
+    harness.resolveCronSessionMock.mockImplementation(async (params) => {
       const prepared = await actualSession.prepareCronSession(params);
       await actualAccessor.patchSessionEntryCore(target, () => ({ totalTokens: 25 }));
       return prepared;
     });
-    loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
+    harness.loadSessionEntryMock.mockImplementation(actualSession.loadCronSessionEntryLatest);
     const queries: string[] = [];
-    patchSessionEntryMock.mockImplementation(
+    harness.patchSessionEntryMock.mockImplementation(
       async (...args: Parameters<typeof actualAccessor.patchSessionEntryCore>) => {
         const sql = observeHostDataSql();
         try {
@@ -176,14 +165,9 @@ describe("cron session preparation", () => {
     }
     try {
       await using _ = result.context.preparedModelRuntimeLease;
-      expect(patchSessionEntryMock).toHaveBeenCalled();
+      expect(harness.patchSessionEntryMock).toHaveBeenCalled();
       expect(queries).toEqual([]);
-      expect(
-        actualAccessor.loadSessionEntry({
-          storePath: database.path,
-          sessionKey: "agent:main:cron:test-job",
-        }),
-      ).toMatchObject({
+      expect(actualAccessor.loadSessionEntry(target)).toMatchObject({
         createdVia: "cron",
         sessionId: result.context.runSessionId,
         totalTokens: 25,
@@ -239,7 +223,7 @@ describe("cron session preparation", () => {
 
     let prepared: Awaited<ReturnType<typeof actualSession.prepareCronSession>> | undefined;
     const preparedBoundary = new Error("cron session preparation complete");
-    resolveCronSessionMock.mockImplementation(async (params) => {
+    harness.resolveCronSessionMock.mockImplementation(async (params) => {
       prepared = await actualSession.prepareCronSession(params);
       // Later lifecycle admission and writes have their own boundary coverage.
       throw preparedBoundary;

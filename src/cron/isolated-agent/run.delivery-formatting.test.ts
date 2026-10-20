@@ -5,17 +5,11 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
-import {
-  loadRunCronIsolatedAgentTurn,
-  mockRunCronFallbackPassthrough,
-  resolveCronDeliveryPlanMock,
-  resolveDeliveryTargetMock,
-  runEmbeddedAgentMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
 
 const cfg: OpenClawConfig = {
   channels: {
@@ -71,10 +65,10 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
   afterEach(resetPluginRuntimeStateForTest);
 
   it("gives an announce run the rich account's formatting contract", async () => {
-    mockRunCronFallbackPassthrough();
+    harness.mockRunCronFallbackPassthrough();
     const delivery = { mode: "announce", channel: "telegram", to: "-100123", accountId: "rich" };
-    resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, ...delivery });
-    resolveDeliveryTargetMock.mockResolvedValue({
+    harness.resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, ...delivery });
+    harness.resolveDeliveryTargetMock.mockResolvedValue({
       ...delivery,
       ok: true,
       threadId: 7,
@@ -83,18 +77,10 @@ describe("runCronIsolatedAgentTurn delivery formatting hints", () => {
     await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
         cfg,
-        job: makeIsolatedAgentJobFixture({
-          id: "daily-digest",
-          name: "Daily digest",
-          schedule: { kind: "every", everyMs: 60_000 },
-          payload: { kind: "agentTurn", message: "post the digest" },
-          delivery,
-        }),
-        message: "post the digest",
-        sessionKey: "cron:daily-digest",
+        job: { delivery },
       }),
     );
-    const prompt = runEmbeddedAgentMock.mock.calls[0]?.[0].extraSystemPrompt;
+    const prompt = harness.runEmbeddedAgentMock.mock.calls[0]?.[0].extraSystemPrompt;
     expect(prompt?.split("### Delivery Format")).toHaveLength(2);
     expect(prompt).toContain('"schema": "openclaw.delivery_format.v1"');
     expect(prompt).toContain('"text_markup": "markdown_telegram_rich"');
