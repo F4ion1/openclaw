@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
@@ -21,23 +21,12 @@ vi.hoisted(() => {
   vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
     version: "1.0.0",
     buildId: "serving-build",
-    commit: null,
-    commitAt: null,
-    builtAt: null,
-    branch: null,
-    dirty: null,
-    release: false,
   });
 });
 
-type RefreshShell = {
-  runtime: ApplicationRuntime;
-  refreshControlUi: () => Promise<boolean>;
-};
-
 function createRefreshShell(gateway: ApplicationRuntime["context"]["gateway"]) {
   const snapshot = { controlUiRefreshRequired: true };
-  const shell = createShellOwner() as RefreshShell;
+  const shell = createShellOwner();
   shell.runtime = {
     context: { overlays: { snapshot }, gateway },
   } as unknown as ApplicationRuntime;
@@ -87,43 +76,51 @@ describe("OpenClaw shell Control UI refresh", () => {
     });
     const scope = gatewayCredentialScope(store.gateway.connection.gatewayUrl);
     const retiredOwners: string[] = [];
-    const unsubscribeRetirement = subscribeBootRecordChanges((change) => {
-      if (change.scope === scope && change.retiredOwner?.recoveryScope) {
-        retiredOwners.push(change.retiredOwner.recoveryScope);
-      }
-    });
+    onTestFinished(
+      subscribeBootRecordChanges((change) => {
+        if (change.scope === scope && change.retiredOwner?.recoveryScope) {
+          retiredOwners.push(change.retiredOwner.recoveryScope);
+        }
+      }),
+    );
     const observed: string[][] = [];
-    const unsubscribe = store.gateway.subscribe((snapshot) => {
-      if (snapshot.phase === "reconnecting") {
-        observed.push([...retiredOwners]);
-      }
-    });
-    try {
-      store.gateway.connect({ bootstrapToken: "synthetic-replacement-bootstrap" });
-      expect(observed.length).toBeGreaterThan(0);
-      for (const current of observed) {
-        expect(current).toContain("admitted-account");
-      }
-    } finally {
-      unsubscribe();
-      unsubscribeRetirement();
+    onTestFinished(
+      store.gateway.subscribe((snapshot) => {
+        if (snapshot.phase === "reconnecting") {
+          observed.push([...retiredOwners]);
+        }
+      }),
+    );
+    store.gateway.connect({ bootstrapToken: "synthetic-replacement-bootstrap" });
+    expect(observed.length).toBeGreaterThan(0);
+    for (const current of observed) {
+      expect(current).toContain("admitted-account");
     }
   });
 
-  it.each(["clear", "replace"])(
-    "does not reload after the shell recovery state changes: %s",
+  it.each(["clear", "replace", "remote"])(
+    "does not reload for invalid recovery state or a remote target: %s",
     async (action) => {
+      if (action === "remote") {
+        store.gateway.connect({
+          gatewayUrl: "wss://remote-gateway.example",
+          bootstrapToken: "synthetic-remote-bootstrap",
+        });
+      }
       const { shell, snapshot } = createRefreshShell(store.gateway);
       const refresh = shell.refreshControlUi();
       if (action === "clear") {
         snapshot.controlUiRefreshRequired = false;
-      } else {
+      } else if (action === "replace") {
         shell.runtime = createRefreshShell(store.gateway).shell.runtime;
       }
       probe.resolve(new Response(null, { status: 200 }));
 
       await expect(refresh).resolves.toBe(false);
       expect(replace).not.toHaveBeenCalled();
+      if (action === "remote") {
+        expect(fetchMock).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -166,19 +163,5 @@ describe("OpenClaw shell Control UI refresh", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(replace).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a pending remote handoff out of the serving document on manual Refresh", async () => {
-    store.gateway.connect({
-      gatewayUrl: "wss://remote-gateway.example",
-      bootstrapToken: "synthetic-remote-bootstrap",
-    });
-    const { shell } = createRefreshShell(store.gateway);
-    const refresh = shell.refreshControlUi();
-    probe.resolve(new Response(null, { status: 200 }));
-
-    await expect(refresh).resolves.toBe(false);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(replace).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,25 @@ const mainRecord = (): BootRecord => ({
   sectionOrder: ["Main private group"],
 });
 
+function createTestClient(opts: GatewayBrowserClientOptions) {
+  connections.push(opts);
+  const client = new GatewayBrowserClient(opts);
+  vi.spyOn(client, "start").mockImplementation(() => {});
+  vi.spyOn(client, "request").mockImplementation(async (method) => {
+    if (method === "agents.list") {
+      return mainRecord().agents;
+    }
+    if (method === "sessions.groups.list") {
+      return { groups: [], sectionOrder: [] };
+    }
+    if (method === "sessions.groups.defaults") {
+      return { defaults: {} };
+    }
+    return {};
+  });
+  return client;
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", createStorageMock());
@@ -36,30 +55,7 @@ beforeEach(() => {
   const createGateway = gatewayStore.createApplicationGateway;
   vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation(
     (settings, password, bootstrap, _factory, options) =>
-      createGateway(
-        settings,
-        password,
-        bootstrap,
-        (opts) => {
-          connections.push(opts);
-          const client = new GatewayBrowserClient(opts);
-          vi.spyOn(client, "start").mockImplementation(() => {});
-          vi.spyOn(client, "request").mockImplementation(async (method) => {
-            if (method === "agents.list") {
-              return mainRecord().agents;
-            }
-            if (method === "sessions.groups.list") {
-              return { groups: [], sectionOrder: [] };
-            }
-            if (method === "sessions.groups.defaults") {
-              return { defaults: {} };
-            }
-            return {};
-          });
-          return client;
-        },
-        options,
-      ),
+      createGateway(settings, password, bootstrap, createTestClient, options),
   );
 });
 afterEach(async () => {
@@ -177,8 +173,7 @@ it.each(["accepted", "rejected"])(
     const stored = JSON.parse(localStorage.getItem(key)!);
     expect(stored.recoveryScope).toBe("main-device");
     if (outcome === "accepted") {
-      expect(stored.authMethod).toBe("device-token");
-      expect(stored.credential).toBe("9d17676d");
+      expect(stored).toMatchObject({ authMethod: "device-token", credential: "9d17676d" });
       expect(JSON.stringify(stored)).not.toContain("synthetic-fresh-handoff");
     }
   },
