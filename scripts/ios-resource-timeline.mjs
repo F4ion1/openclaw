@@ -55,6 +55,8 @@ const phases = new Set([
   ...["iphone", "ipad", "watch", "all"].flatMap((device) =>
     [
       "build",
+      "host-idle",
+      "simulator-idle",
       "create",
       "boot",
       "shutdown",
@@ -78,6 +80,8 @@ const roles = new Set([
   "git",
   "xcodebuild",
   "XCBBuildService",
+  "SWBBuildService",
+  "DTServiceHub",
   "swift-frontend",
   "swift-driver",
   "swift",
@@ -106,6 +110,26 @@ const roles = new Set([
   "mds",
   "mds_stores",
   "mdworker_shared",
+  "CoreSpotlightService",
+  "spotlightknowledged",
+  "spotlightknowledged.updater",
+  "searchd",
+  "photoanalysisd",
+  "mediaanalysisd",
+  "assetsd",
+  "mobileassetd",
+  "UserEventAgent",
+  "configd_sim",
+  "ids_simd",
+  "cfprefsd",
+  "containermanagerd",
+  "containermanagerd_system",
+  "installd",
+  "installcoordinationd",
+  "lsd",
+  "notifyd",
+  "trustd",
+  "securityd",
   "testmanagerd",
   "xctest",
   "OpenClaw",
@@ -138,7 +162,7 @@ function delta(current, previous) {
 }
 
 function processRows(output, previous, elapsedMs) {
-  return output.split("\n").flatMap((line) => {
+  const rows = output.split("\n").flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+([\d:.-]+)\s+(\d+)\s+([A-Za-z+<>=-]+)\s+(.+)$/u.exec(line);
     if (!match) {
       return [];
@@ -148,12 +172,24 @@ function processRows(output, previous, elapsedMs) {
     const cpuMs =
       (Number(day) * 86_400 + clock.split(":").reduce((s, n) => s * 60 + Number(n), 0)) * 1_000;
     const cpuDeltaMs = delta(cpuMs, previous.get(Number(pid)));
-    const basename = path.basename(command.trim());
+    const executable = command.trim();
+    const basename = path.basename(executable);
+    const origin =
+      executable.startsWith("/Library/Developer/CoreSimulator/") &&
+      executable.includes("/RuntimeRoot/")
+        ? "simulator-runtime"
+        : executable.startsWith("/Applications/Xcode.app/")
+          ? "xcode"
+          : /^\/(?:System\/Library|usr\/(?:bin|sbin|libexec)|bin|sbin)\//u.test(executable)
+            ? "host-system"
+            : "other";
     return [
       {
         pid: Number(pid),
         parentPid: Number(ppid),
         role: roles.has(basename) ? basename : "other",
+        origin,
+        parentRole: "other",
         state,
         rssBytes: Number(rss) * 1024,
         cpuMs,
@@ -163,6 +199,38 @@ function processRows(output, previous, elapsedMs) {
       },
     ];
   });
+  const byPid = new Map(rows.map((row) => [row.pid, row]));
+  for (const row of rows) {
+    row.parentRole = byPid.get(row.parentPid)?.role ?? "other";
+  }
+  return rows;
+}
+
+function processSummary(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = `${row.origin}:${row.role}`;
+    const group = groups.get(key) ?? {
+      origin: row.origin,
+      role: row.role,
+      count: 0,
+      cpuObservedCount: 0,
+      cpuDeltaMs: 0,
+    };
+    group.count += 1;
+    if (row.cpuDeltaMs !== null) {
+      group.cpuObservedCount += 1;
+      group.cpuDeltaMs += row.cpuDeltaMs;
+    }
+    groups.set(key, group);
+  }
+  return {
+    count: rows.length,
+    runnableCount: rows.filter((row) => row.state.startsWith("R")).length,
+    uninterruptibleCount: rows.filter((row) => row.state.startsWith("U")).length,
+    // All observed rows contribute, including those outside the top-process display.
+    groups: [...groups.values()].toSorted((a, b) => b.cpuDeltaMs - a.cpuDeltaMs),
+  };
 }
 
 function memory(output) {
@@ -340,6 +408,7 @@ function startTimeline(output) {
       phase: phase(),
       intervalMs: samples === 1 ? null : Math.round(at - previousAt),
       sampleWallMs: Math.round(performance.now() - at),
+      processIntervalMs: previousProcesses.size ? Math.round(processAt - previousProcessAt) : null,
       probes: probeStatus,
       host: {
         cpuPercent:
@@ -374,6 +443,7 @@ function startTimeline(output) {
         })),
       },
       processes: selected,
+      processSummary: probeStatus.ps?.outcome === "ok" ? processSummary(rows) : null,
       collector: overhead(),
     });
     previousAt = at;
