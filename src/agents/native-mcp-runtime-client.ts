@@ -246,6 +246,7 @@ export function createNativeMcpClientBridge(params: {
       context,
       signal: viewSignal,
       assertCurrent() {
+        released.signal.throwIfAborted();
         viewSignal.throwIfAborted();
         assertOpen();
         context.assertCurrent();
