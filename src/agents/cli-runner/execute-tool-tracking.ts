@@ -686,7 +686,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     },
     shouldSuppressAssistantOutput,
     getActiveLoopbackAskUserDeadline: askUserDeadlines.get,
-    onActiveLoopbackAskUserDeadlineChange: askUserDeadlines.onChange,
+    setOnActiveLoopbackAskUserDeadlineChange: askUserDeadlines.setOnChange,
     handleCliToolUseStart,
     handleCliToolResult,
     resolveCliLoopbackTerminalOutcome,

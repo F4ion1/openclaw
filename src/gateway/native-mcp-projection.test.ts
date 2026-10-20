@@ -307,6 +307,7 @@ describe("native MCP projection over the Gateway loopback listener", () => {
     const updated: unknown[] = [];
     const logged: unknown[] = [];
     const delivered = Promise.withResolvers<void>();
+    const secondLogDelivered = Promise.withResolvers<void>();
     client.setNotificationHandler("notifications/resources/updated", (notification) => {
       updated.push(notification.params);
       if (updated.length === 1 && logged.length === 1) {
@@ -317,6 +318,9 @@ describe("native MCP projection over the Gateway loopback listener", () => {
       logged.push(notification.params);
       if (updated.length === 1 && logged.length === 1) {
         delivered.resolve();
+      }
+      if (logged.length === 2) {
+        secondLogDelivered.resolve();
       }
     });
     await client.request({ method: "resources/subscribe", params: { uri: "fixture://note" } });
@@ -337,6 +341,7 @@ describe("native MCP projection over the Gateway loopback listener", () => {
     expect(() => process.kill(original.pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     await client.request({ method: "resources/unsubscribe", params: { uri: "fixture://note" } });
     await client.callTool({ name: "inspect.raw", arguments: { operation: "notify" } });
+    await withinTest(secondLogDelivered.promise, signal);
     expect(updated).toHaveLength(1);
     expect(logged).toHaveLength(2);
     expect(await server.log()).toEqual(
