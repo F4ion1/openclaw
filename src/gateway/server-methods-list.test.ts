@@ -1,4 +1,3 @@
-/** Tests authority policies on registered Gateway methods. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { GATEWAY_EVENTS } from "./events.js";
 import {
@@ -24,24 +23,15 @@ describe("listGatewayMethods", () => {
     }
   }
 
-  it("advertises avatar generation with admin authority and inference throttling", () => {
-    expectAdvertised("agents.avatar.generate");
-    expect(descriptor("agents.avatar.generate")).toMatchObject({
-      scope: "operator.admin",
-      since: "2026.10",
-      controlPlaneWrite: true,
-    });
-  });
-
-  it("advertises private backgrounds with personal read/write scopes", () => {
-    for (const { name, scope } of [
-      { name: "users.background.get", scope: "operator.read" },
-      { name: "users.background.upload", scope: "operator.write" },
-      { name: "users.background.remove", scope: "operator.write" },
-    ]) {
-      expectAdvertised(name);
-      expect(descriptor(name)).toMatchObject({ scope });
-    }
+  it.each([
+    ["agents.avatar.generate", "operator.admin", { since: "2026.10", controlPlaneWrite: true }],
+    ["users.background.get", "operator.read", {}],
+    ["users.background.upload", "operator.write", {}],
+    ["users.background.remove", "operator.write", {}],
+    ["models.authSetApiKey", "operator.admin", { controlPlaneWrite: true }],
+  ] as const)("advertises and applies authority policy to %s", (name, scope, policy) => {
+    expectAdvertised(name);
+    expect(descriptor(name)).toMatchObject({ scope, ...policy });
   });
 
   it("appends the MCP event catalog with its current-train read policy", () => {
@@ -169,14 +159,6 @@ describe("listGatewayMethods", () => {
       "plugins.catalog.categories",
       "plugins.catalog.get",
     ]);
-  });
-
-  it("advertises API-key saving as an administrator control-plane write", () => {
-    expectAdvertised("models.authSetApiKey");
-    expect(descriptor("models.authSetApiKey")).toMatchObject({
-      scope: "operator.admin",
-      controlPlaneWrite: true,
-    });
   });
 
   it("advertises and wires cloud worker environment methods with their required scopes", () => {

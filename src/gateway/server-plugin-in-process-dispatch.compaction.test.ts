@@ -22,8 +22,8 @@ it.each([
   { authority: "opaque", revoke: false },
 ])(
   "keeps in-process manual compaction authority at its worker commit ($authority, revoked=$revoke)",
-  async ({ authority, revoke }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  ({ authority, revoke }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { agents: { entries: { main: {} } } };
       await state.writeConfig(cfg);
       const f = createSessionCompoundWorkerFixture();
@@ -102,11 +102,9 @@ it.each([
         } else {
           await expect(compact).resolves.toMatchObject({ compacted: true, kept: 3 });
         }
+        expect(commitChecks).toBe(authority === "prepared" ? 1 : 0);
         if (authority === "prepared") {
           expect(commits).toBe(1);
-          expect(commitChecks).toBe(1);
-        } else {
-          expect(commitChecks).toBe(0);
         }
         expect(sql.queries.filter((query) => /\btranscript_events\b/i.test(query))).toEqual([]);
       } finally {
@@ -124,6 +122,5 @@ it.each([
           rawBefore[4]!.eventJson,
         ]);
       }
-    });
-  },
+    }),
 );

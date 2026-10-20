@@ -106,23 +106,14 @@ it.each([
           event === "exec.finished" ? "owned exec result" : "Owned notification",
         ),
       ]);
-      expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith(
-        event === "exec.finished"
-          ? {
-              source: "exec-event",
-              intent: "event",
-              reason: "exec-event",
-              coalesceMs: 0,
-              agentId: "research",
-            }
-          : {
-              source: "notifications-event",
-              intent: "event",
-              reason: "notifications-event",
-              agentId: "research",
-              sessionKey: "global",
-            },
-      );
+      const source = event === "exec.finished" ? "exec-event" : "notifications-event";
+      expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
+        source,
+        intent: "event",
+        reason: source,
+        agentId: "research",
+        ...(event === "exec.finished" ? { coalesceMs: 0 } : { sessionKey: "global" }),
+      });
     },
   );
 });

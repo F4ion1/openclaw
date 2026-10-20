@@ -1,4 +1,3 @@
-// Server network runtime e2e tests verify gateway startup isolation, proxy env handling, and runtime cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -120,8 +119,8 @@ describe("gateway network runtime", () => {
     "starts with persisted canonical bind %s without rewriting config",
     async (bind) => {
       const { configPath, raw } = await writeConfig({
-        mode: "local" as const,
-        auth: { mode: "token" as const, token },
+        mode: "local",
+        auth: { mode: "token", token },
         ...(bind ? { bind } : {}),
         ...(bind === "custom" ? { customBindHost: "127.0.0.1" } : {}),
       });
