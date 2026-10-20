@@ -1099,6 +1099,7 @@ describe("CLI message authority integration", () => {
             mcpCapture: {
               captureKey: turn.capture.captureKey,
               beginCapture: tracking.beginGatewayCapture,
+              cancelCapture: tracking.cancelCapture,
             },
           },
         ),

@@ -412,7 +412,7 @@ export async function run({ root, directory, role, signal }) {
     assert.equal(unknown.length, 0, "unexpected additional native Claude process");
     return sessions;
   }
-  const provider = http.createServer(async (req, res) => {
+  const handleProviderRequest = async (req, res) => {
     try {
       let body = "";
       for await (const chunk of req) {
@@ -520,6 +520,9 @@ export async function run({ root, directory, role, signal }) {
       record("provider-error", { message: error.message });
       res.destroy(error);
     }
+  };
+  const provider = http.createServer((req, res) => {
+    void handleProviderRequest(req, res);
   });
   provider.on("connection", (socket) => {
     sockets.add(socket);

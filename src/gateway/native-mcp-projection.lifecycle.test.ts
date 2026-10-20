@@ -148,3 +148,32 @@ it("closes an explicitly removed modern grant's stream and upstream process", as
     await subscription.close();
   }
 });
+
+it.for([
+  { era: "legacy" as const, mode: "legacy" as const },
+  { era: "modern" as const, mode: "auto" as const },
+])(
+  "retires an idle $era view when its process grant is removed",
+  async ({ era, mode }, { signal }) => {
+    const server = await fixture(era);
+    const route = server.register();
+    const grant = await server.grant();
+    const consumer = await connect({ url: route.url, grant, mode });
+    const pid = toolPayload(
+      await consumer.client.callTool({ name: "inspect.raw", arguments: {} }),
+    ).pid;
+    await route.close();
+    revokeMcpLoopbackClientGrant(grant.token);
+    await withinTest(harness.receipts.waitForExit(server.file + ":" + pid), signal);
+
+    const next = await connect({
+      url: server.register().url,
+      grant: await server.grant(),
+      mode,
+    });
+    expect(
+      toolPayload(await next.client.callTool({ name: "inspect.raw", arguments: {} })).pid,
+    ).not.toBe(pid);
+    expect((await server.log()).filter((line) => line.startsWith("started "))).toHaveLength(2);
+  },
+);

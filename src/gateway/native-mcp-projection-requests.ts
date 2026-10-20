@@ -23,7 +23,13 @@ import {
   recordMcpLoopbackToolCallResult,
   updateMcpLoopbackToolCallCapture,
 } from "./mcp-http.loopback-runtime.js";
-import type { Connection, Exchange, Projection } from "./native-mcp-projection.js";
+import type {
+  Connection,
+  Continuation,
+  Exchange,
+  Projection,
+  ToolCapture,
+} from "./native-mcp-projection.types.js";
 
 export async function attachProjectionView(connection: Connection, view: NativeMcpServerView) {
   if (connection.closed || !connection.grant.isCurrent()) {
@@ -146,20 +152,6 @@ export function createProjectionClientContext(
   };
 }
 
-type ToolCapture = {
-  handle: ReturnType<typeof markMcpLoopbackToolCallStarted>;
-  toolName: string;
-  args: Record<string, unknown>;
-};
-export type Continuation<T> = {
-  signature: string;
-  captureKey: string;
-  resume: (
-    responses: Record<string, unknown>,
-    options: NativeMcpRequestOptions,
-  ) => Promise<NativeMcpResponse<T>>;
-  capture?: ToolCapture;
-};
 /** Close a request explicitly before its resumable stream loses the transport. */
 export async function settleProjectionExchanges(connection: Connection) {
   await Promise.allSettled(

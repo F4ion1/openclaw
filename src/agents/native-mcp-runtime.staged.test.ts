@@ -264,7 +264,7 @@ describe("staged native MCP ownership", () => {
       if (pending.kind !== "input-required") {
         throw new Error("Expected sampling continuation");
       }
-      expect(pending.result.inputRequests.sampling).toMatchObject({
+      expect(pending.result.inputRequests?.sampling).toMatchObject({
         method: "sampling/createMessage",
       });
       const responses = { sampling };
