@@ -363,14 +363,14 @@ describe("private MCP projection operations at the session owner", () => {
     });
     second.subscribe((event) => secondEvents.push(event));
     try {
-      expect(payload(await first.callTool({ name: "elicit" }, options(signal)))).toEqual({
-        action: "accept",
-        content: { choice: "first" },
-      });
-      expect(payload(await second.callTool({ name: "elicit" }, options(signal)))).toEqual({
-        action: "accept",
-        content: { choice: "second" },
-      });
+      const elicited = await Promise.all([
+        first.callTool({ name: "elicit" }, options(signal)),
+        second.callTool({ name: "elicit" }, options(signal)),
+      ]);
+      expect(elicited.map(payload)).toEqual([
+        { action: "accept", content: { choice: "first" } },
+        { action: "accept", content: { choice: "second" } },
+      ]);
       expect(payload(await first.callTool({ name: "elicitCustom" }, options(signal)))).toEqual({
         action: "accept",
         content: { choice: "first-custom", nested: { selected: ["a", "b"] } },

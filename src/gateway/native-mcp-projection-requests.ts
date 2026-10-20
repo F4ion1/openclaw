@@ -97,6 +97,7 @@ export function createProjectionClientContext(
   capabilities: ClientCapabilities,
   grant: { isCurrent: () => boolean },
   exchanges: Set<Exchange>,
+  capabilityContext: object = {},
 ): NativeMcpPreparationContext {
   const currentExchange = () => {
     if (exchanges.size !== 1) {
@@ -107,7 +108,7 @@ export function createProjectionClientContext(
     return exchange;
   };
   return {
-    capabilityContext: {},
+    capabilityContext,
     capabilities,
     assertCurrent() {
       if (entry.closed || !grant.isCurrent()) {

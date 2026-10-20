@@ -17,6 +17,7 @@ import {
   ReadResourceResultSchema,
 } from "@modelcontextprotocol/core";
 import { z } from "zod";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   captureGuardedFetchRequestAuthority,
   withGuardedFetchRequestAuthority,
@@ -83,6 +84,12 @@ export function createNativeMcpClientBridge(params: {
   const views = new Set<View>();
   const active = new Set<ActiveRequest>();
   const urlElicitations = new Map<string, View>();
+  const hasRequestCallbacks = Boolean(
+    params.context.capabilities.elicitation ||
+    params.context.capabilities.sampling ||
+    params.context.capabilities.extensions?.["openai/elicitation"],
+  );
+  let legacyOperations = Promise.resolve();
   let closed = false;
   const assertOpen = () => {
     if (closed) {
@@ -279,49 +286,65 @@ export function createNativeMcpClientBridge(params: {
               assertCurrent();
               requestOptions.signal.throwIfAborted();
             };
-            assertActive();
-            const call = {
-              view,
-              signal: requestOptions.signal,
-              assertCurrent: assertActive,
-              holdForHumanInput,
-            };
-            active.add(call);
-            let retirement: Promise<void> | undefined;
-            const onAbort = () => {
-              if (client.getProtocolEra() === "legacy") {
-                // Cancelled legacy work can still emit callbacks with no portable parent id.
-                retirement ??= params.retire();
-                void retirement.catch(() => undefined);
-              }
-            };
-            requestOptions.signal.addEventListener("abort", onAbort, { once: true });
-            try {
-              return await view.restore(() =>
-                withGuardedFetchRequestAuthority(assertActive, () =>
-                  request({
-                    ...requestOptions,
-                    onprogress: options.onprogress
-                      ? (progress) => {
-                          assertActive();
-                          view.restore(options.onprogress!, progress);
-                        }
-                      : undefined,
-                  }),
-                ),
-              );
-            } catch (error) {
-              requestOptions.signal.throwIfAborted();
-              throw error;
-            } finally {
-              requestOptions.signal.removeEventListener("abort", onAbort);
-              try {
-                if (retirement) {
-                  await retirement;
+            const execute = async () => {
+              assertActive();
+              const call = {
+                view,
+                signal: requestOptions.signal,
+                assertCurrent: assertActive,
+                holdForHumanInput,
+              };
+              active.add(call);
+              let retirement: Promise<void> | undefined;
+              const onAbort = () => {
+                if (client.getProtocolEra() === "legacy") {
+                  // Cancelled legacy work can still emit callbacks with no portable parent id.
+                  retirement ??= params.retire();
+                  void retirement.catch(() => undefined);
                 }
+              };
+              requestOptions.signal.addEventListener("abort", onAbort, { once: true });
+              try {
+                return await view.restore(() =>
+                  withGuardedFetchRequestAuthority(assertActive, () =>
+                    request({
+                      ...requestOptions,
+                      onprogress: options.onprogress
+                        ? (progress) => {
+                            assertActive();
+                            view.restore(options.onprogress!, progress);
+                          }
+                        : undefined,
+                    }),
+                  ),
+                );
+              } catch (error) {
+                requestOptions.signal.throwIfAborted();
+                throw error;
               } finally {
-                active.delete(call);
+                requestOptions.signal.removeEventListener("abort", onAbort);
+                try {
+                  if (retirement) {
+                    await retirement;
+                  }
+                } finally {
+                  active.delete(call);
+                }
               }
+            };
+            if (client.getProtocolEra() !== "legacy" || !hasRequestCallbacks) {
+              return execute();
+            }
+            // Legacy callbacks lack parent IDs. Serialize at the shared upstream,
+            // inside the existing request deadline, not at each downstream view.
+            const finished = Promise.withResolvers<void>();
+            const previous = legacyOperations;
+            legacyOperations = previous.then(() => finished.promise);
+            try {
+              await racePromiseWithAbortSignal(previous, requestOptions.signal);
+              return await execute();
+            } finally {
+              finished.resolve();
             }
           },
         );

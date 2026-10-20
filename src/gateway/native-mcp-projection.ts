@@ -241,7 +241,22 @@ function createConnection(
 ): Connection {
   const grant = { isCurrent: authority.isCurrent };
   const exchanges = new Set<Exchange>();
-  const context = createProjectionClientContext(entry, capabilities, grant, exchanges);
+  const capabilitiesKey = stableStringify(capabilities);
+  // A native client may reconnect concurrently from stream closure and a failed call.
+  // Share the upstream lifecycle, while each HTTP connection keeps its own callbacks.
+  const capabilityContext = [...entry.connections].find(
+    (candidate) =>
+      !candidate.closed &&
+      candidate.grantToken === authority.grantToken &&
+      stableStringify(candidate.capabilities) === capabilitiesKey,
+  )?.context.capabilityContext;
+  const context = createProjectionClientContext(
+    entry,
+    capabilities,
+    grant,
+    exchanges,
+    capabilityContext,
+  );
   let closing: Promise<void> | undefined;
   const connection: Connection = {
     capabilities,

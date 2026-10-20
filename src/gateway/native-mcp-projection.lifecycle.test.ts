@@ -9,6 +9,45 @@ import { toolPayload } from "./native-mcp-projection.test-support.js";
 const harness = createProjectionHarness();
 const { fixture, connect } = harness;
 
+it("shares a crashed upstream across overlapping reconnects without sharing requesters", async ({
+  signal,
+}) => {
+  const server = await fixture("legacy");
+  const route = server.register();
+  const grant = await server.grant();
+  const connection = { url: route.url, grant, mode: "legacy" as const, elicitation: true };
+  const first = await connect(connection);
+  const inspect = async (consumer: typeof first) =>
+    toolPayload(await consumer.client.callTool({ name: "inspect.raw", arguments: {} })).pid;
+  const originalPid = await inspect(first);
+  await expect(
+    first.client.callTool({ name: "inspect.raw", arguments: { operation: "crash" } }),
+  ).rejects.toThrow();
+  await withinTest(harness.receipts.waitForExit(server.file + ":" + originalPid), signal);
+
+  // Claude can reconnect from both stream closure and an expired-session tool response.
+  const [left, right] = await Promise.all([connect(connection), connect(connection)]);
+  const replacementPid = await inspect(left);
+  expect(await inspect(right)).toBe(replacementPid);
+  expect(replacementPid).not.toBe(originalPid);
+  expect((await server.log()).filter((line) => line.startsWith("started "))).toHaveLength(2);
+
+  await right.client.callTool({ name: "inspect.raw", arguments: { operation: "elicit" } });
+  expect(right.elicited).toHaveLength(1);
+  expect(left.elicited).toHaveLength(0);
+  await left.transport.terminateSession();
+  expect(await inspect(right)).toBe(replacementPid);
+
+  const changedRoots = await connect({
+    ...connection,
+    roots: () => ({ roots: [{ uri: "file:///another/workspace" }] }),
+  });
+  expect(await inspect(changedRoots)).not.toBe(replacementPid);
+  const anotherGrant = await connect({ ...connection, grant: await server.grant() });
+  expect(await inspect(anotherGrant)).not.toBe(replacementPid);
+  expect((await server.log()).filter((line) => line.startsWith("started "))).toHaveLength(4);
+});
+
 it("retires malformed legacy initialization without leaving cleanup pending", async ({
   signal,
 }) => {
