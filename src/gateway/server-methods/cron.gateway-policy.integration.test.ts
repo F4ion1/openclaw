@@ -436,23 +436,27 @@ describe("Gateway automation policy", () => {
   });
 
   it.each([
-    ["explicit restricted deployment", managed, {}, false],
-    ["explicit unrestricted deployment", {}, managed, true],
-    ["startup fallback", undefined, managed, false],
-  ] as const)("constructs tools using the %s", async (_name, config, startup, commandAllowed) => {
-    setRuntimeConfigSnapshot(startup);
-    await withModelTurn("control-ui-admin", async (identity) => {
-      const automation = createCronTool({ config, runId: identity.operationalRunInstance.runId });
-      expect(
-        Value.Check(automation.parameters, {
-          action: "update",
-          jobId: "command-job",
-          job: { payload: { kind: "command", argv: ["fixture-command"] } },
-        }),
-      ).toBe(commandAllowed);
-      expect(
-        bindCronManagementGrant(identity.operationalRunInstance.runId, config) !== undefined,
-      ).toBe(commandAllowed);
-    });
-  });
+    ["explicit restricted deployment", managed, {}, false, false],
+    ["explicit unrestricted deployment", {}, managed, true, true],
+    ["startup fallback", undefined, managed, false, false],
+    ["startup command restriction", undefined, commandRestricted, false, true],
+  ] as const)(
+    "constructs tools using the %s",
+    async (_name, config, startup, commandAllowed, managementAllowed) => {
+      setRuntimeConfigSnapshot(startup);
+      await withModelTurn("control-ui-admin", async (identity) => {
+        const automation = createCronTool({ config, runId: identity.operationalRunInstance.runId });
+        expect(
+          Value.Check(automation.parameters, {
+            action: "update",
+            jobId: "command-job",
+            job: { payload: { kind: "command", argv: ["fixture-command"] } },
+          }),
+        ).toBe(commandAllowed);
+        expect(
+          bindCronManagementGrant(identity.operationalRunInstance.runId, config) !== undefined,
+        ).toBe(managementAllowed);
+      });
+    },
+  );
 });
