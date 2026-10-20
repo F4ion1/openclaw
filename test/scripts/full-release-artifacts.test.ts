@@ -616,30 +616,44 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     ).toBe(true);
   });
 
-  it("adopts a newer producer attempt without replacing its original dispatch", () => {
-    const test = fixture();
-    test.artifact(
-      `${DISPATCH_ID}-dispatch`,
-      "dispatch.json",
-      {
-        request: artifactRequest(),
-        runId: "81",
-        runAttempt: "1",
-      },
-      true,
-    );
-    test.api(
-      "actions/runs/81",
-      workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" }),
-    );
-    const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.outputs).toMatchObject({
-      run_id: "81",
-      run_attempt: "2",
-      dispatch_id: DISPATCH_ID,
-    });
-  });
+  it.each(["npm", "docker", "candidate"])(
+    "adopts a newer %s producer attempt without replacing its original dispatch",
+    (stage) => {
+      const test = fixture();
+      const dispatchId = `full-release-validation-51-1-artifacts-${stage}`;
+      const request = { ...artifactRequest(), stage, dispatchId };
+      test.artifact(
+        `${dispatchId}-dispatch`,
+        "dispatch.json",
+        {
+          request,
+          runId: "81",
+          runAttempt: "1",
+        },
+        true,
+      );
+      test.api(
+        "actions/runs/81",
+        workflowRun({
+          run_attempt: 2,
+          status: "completed",
+          conclusion: "success",
+          display_title: `Full Release Artifacts ${dispatchId}`,
+        }),
+      );
+      const result = test.run("resolve", {
+        GITHUB_RUN_ATTEMPT: "2",
+        ARTIFACT_STAGE: stage,
+        ARTIFACT_DISPATCH_ID: dispatchId,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.outputs).toMatchObject({
+        run_id: "81",
+        run_attempt: "2",
+        dispatch_id: dispatchId,
+      });
+    },
+  );
 
   it.each([
     "contents retry",
