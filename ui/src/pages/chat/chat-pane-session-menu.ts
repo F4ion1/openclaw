@@ -69,7 +69,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       state,
       session ?? this.transcriptSessionProps(session).transcriptMetadata,
       this.sessionKey,
-      Boolean(hydration && areUiSessionKeysEquivalent(hydration.sessionKey, this.sessionKey)),
+      Boolean(
+        hydration?.titlePending &&
+        areUiSessionKeysEquivalent(hydration.sessionKey, this.sessionKey),
+      ),
     );
   }
 

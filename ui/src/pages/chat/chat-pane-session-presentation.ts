@@ -23,7 +23,12 @@ export function chatSessionPresentationTitle(
   );
   // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
   const source = presentation ?? row;
-  return !source && pending ? "" : resolveSessionDisplayName(source?.key ?? key, source);
+  if (!source && pending) {
+    return "";
+  }
+  return presentation
+    ? resolveSessionDisplayName(key, presentation)
+    : resolveSessionDisplayName(row?.key ?? key, row);
 }
 
 /** Capture rendered roster facts without retaining a mutable row as the previous value. */
