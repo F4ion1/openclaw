@@ -269,14 +269,9 @@ export function listControlUiLinkReaders(
   if (methods.pluginRegistry && methods.pluginRegistry !== registry) {
     return [];
   }
-  const loaded = new Set(
-    registry.plugins
-      .filter((plugin) => plugin.enabled && plugin.status === "loaded")
-      .map((plugin) => plugin.id),
-  );
-  const descriptors = new Map(methods.descriptors().map((method) => [method.name, method]));
+  const descriptors = methods.descriptors();
   const readable = (name: string, pluginId: string) => {
-    const method = descriptors.get(name);
+    const method = descriptors.find((candidate) => candidate.name === name);
     return (
       method?.owner.kind === "plugin" &&
       method.owner.pluginId === pluginId &&
@@ -292,7 +287,9 @@ export function listControlUiLinkReaders(
       if (
         descriptor.surface !== "link-reader" ||
         !metadata ||
-        !loaded.has(entry.pluginId) ||
+        !registry.plugins.some(
+          (plugin) => plugin.id === entry.pluginId && plugin.enabled && plugin.status === "loaded",
+        ) ||
         !readable(metadata.detailMethod, entry.pluginId) ||
         (metadata.previewMethod && !readable(metadata.previewMethod, entry.pluginId)) ||
         (metadata.imageMethod && !readable(metadata.imageMethod, entry.pluginId))

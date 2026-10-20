@@ -1315,6 +1315,14 @@ latency from time until all sidebars are current. Intentional disconnection does
 not imply event replay. These scenarios isolate RPC costs; they do not generate
 background session activity at production rates.
 
+For connect/reconnect comparisons, `--link-reader-fixture empty` disables the
+GitHub plugin and verifies an empty reader list in every hello. Use
+`--link-reader-fixture github` to enable its four reader descriptors, including
+the synthetic custom host `code.example`, and verify their IDs in every hello.
+This exercises metadata discovery without making GitHub requests. Omit the flag
+to preserve the fixture's default plugin selection. `--capture-responses` keeps
+the reader payload available for baseline/candidate equivalence comparisons.
+
 Every measured scenario records per-method request-to-response p50/p99, call rate,
 and uncompressed wire response bytes. Handler and worker queue timings remain in
 Gateway diagnostics. Whole-window CPU/allocation divided by source-event or

@@ -59,6 +59,7 @@ const { values } = parseArgs({
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
+    "link-reader-fixture": { type: "string" },
     "trace-gc": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
@@ -197,6 +198,13 @@ const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms",
 if (connectionScenario && listIntervalMs) {
   throw new Error("connection scenarios use their own sidebar refresh; omit --list-interval-ms");
 }
+const linkReaderFixture = values["link-reader-fixture"];
+if (
+  linkReaderFixture !== undefined &&
+  (!connectionScenario || !["empty", "github"].includes(linkReaderFixture))
+) {
+  throw new Error("--link-reader-fixture requires connect/reconnect and either empty or github");
+}
 if (values["stress-tools"] && !toolScenario) {
   throw new Error("--stress-tools requires chat.send, attempt-retention, or memory-soak");
 }
@@ -309,6 +317,15 @@ cfg.plugins = {
     "memory-core": { config: { dreaming: { enabled: false } } },
   },
 };
+if (linkReaderFixture) {
+  cfg.plugins.entries.github = { enabled: linkReaderFixture === "github" };
+  if (linkReaderFixture === "github") {
+    if (cfg.plugins.allow?.length) {
+      cfg.plugins.allow = [...new Set([...cfg.plugins.allow, "github"])];
+    }
+    cfg.gateway = { ...cfg.gateway, github: { host: "code.example" } };
+  }
+}
 if (values["active-work-diagnostics"]) {
   if (scenario !== "transcript-broadcast") {
     throw new Error("--active-work-diagnostics requires --scenario transcript-broadcast");
@@ -1572,6 +1589,19 @@ async function connectClient(index: number) {
   ) {
     throw new Error("connect did not return a valid hello snapshot");
   }
+  if (linkReaderFixture) {
+    const readers = hello.controlUiLinkReaders ?? [];
+    const expected =
+      linkReaderFixture === "github"
+        ? ["github", "github-commit", "github-session", "github-session-commit"]
+        : [];
+    if (
+      readers.some((reader) => reader.pluginId !== "github") ||
+      JSON.stringify(readers.map((reader) => reader.id)) !== JSON.stringify(expected)
+    ) {
+      throw new Error("connect did not advertise the expected synthetic link-reader fixture");
+    }
+  }
   if (measuring) {
     handshakeLatenciesMs.push(handshakeElapsedMs);
   }
@@ -2492,6 +2522,7 @@ try {
     cpuProfile: values["cpu-profile"],
     workloadCpuProfile: values["workload-cpu-profile"],
     captureResponses: values["capture-responses"],
+    linkReaderFixture: linkReaderFixture ?? null,
     traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],
