@@ -48,6 +48,7 @@ import {
   createGatewayBenchEnv,
   writePluginFixtures,
 } from "../lib/gateway-bench-runtime.ts";
+import { configureHeapRigCatalog } from "../lib/gateway-heap-rig-catalog.mjs";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -84,6 +85,8 @@ const { values } = parseArgs({
     "warmup-ms": { type: "string", default: "300000" },
     "round-interval-ms": { type: "string", default: "15000" },
     "memory-interval-ms": { type: "string", default: "60000" },
+    "memory-collect-garbage": { type: "boolean", default: false },
+    "catalog-retention": { type: "boolean", default: false },
     "retained-profile-ms": { type: "string", default: "600000" },
     "reset-every-rounds": { type: "string", default: "20" },
     chunks: { type: "string", default: "100" },
@@ -128,6 +131,9 @@ if (
 }
 const retentionScenario = scenario === "attempt-retention";
 const soakScenario = scenario === "memory-soak";
+if (values["catalog-retention"] && !soakScenario) {
+  throw new Error("--catalog-retention requires --scenario memory-soak");
+}
 const toolScenario = scenario === "chat.send" || retentionScenario || soakScenario;
 const turnScenario =
   scenario === "chat.send" ||
@@ -308,6 +314,9 @@ if (soakScenario) {
   if (values["stress-tools"]) {
     cfg.cron = { ...cfg.cron, enabled: true };
   }
+}
+if (values["catalog-retention"]) {
+  await configureHeapRigCatalog(cfg, root);
 }
 let reloadPluginId: string | undefined;
 if (scenario === "plugins.reload") {
@@ -1870,7 +1879,7 @@ try {
     collectedGarbage: boolean;
     resources: Awaited<ReturnType<typeof readGatewayResources>>;
   }> = [];
-  const sampleMemory = async (collectGarbage = false) => {
+  const sampleMemory = async (collectGarbage = values["memory-collect-garbage"]) => {
     const resources = await readGatewayResources(measuredGateway, { collectGarbage });
     const sample = {
       atEpochMs: Date.now(),
@@ -1946,6 +1955,7 @@ try {
       connect: [],
     };
     const listLatencies = rpcLatencies["sessions.list"]!;
+    const catalogLatencies: number[] = [];
     const initialPollPhasesMs: number[] = [];
     let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
     const listRequests: Array<{
@@ -2084,6 +2094,35 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
+        if (values["catalog-retention"]) {
+          for (const client of clients) {
+            const started = performance.now();
+            const page = await rpc(client, "sessions.catalog.list", {
+              agentId: "main",
+              limitPerHost: 100,
+              // Vary retained page keys while keeping the provider and row population fixed.
+              search: String(round % 128),
+              allowPartialResults: true,
+              progressId: `catalog-retention-${round}`,
+            });
+            if (
+              !isRecord(page) ||
+              !Array.isArray(page.catalogs) ||
+              !page.catalogs.some(
+                (catalog) =>
+                  isRecord(catalog) &&
+                  catalog.id === "heap-rig-catalog" &&
+                  Array.isArray(catalog.hosts) &&
+                  catalog.hosts.some(
+                    (host) => isRecord(host) && host.hostId === "gateway:heap-rig",
+                  ),
+              )
+            ) {
+              throw new Error("Synthetic retention catalog was not returned");
+            }
+            catalogLatencies.push(performance.now() - started);
+          }
+        }
         await drainEvents();
       } finally {
         polling = false;
@@ -2235,6 +2274,7 @@ try {
       eventBytes: Object.fromEntries(eventBytes),
       sessionEventSizes: Object.fromEntries(sessionEventSizes),
       representativeFrames: Object.fromEntries(representativeFrames),
+      ...(values["catalog-retention"] ? { catalogLatencies } : {}),
       ...(listIntervalMs
         ? {
             sessionsList: {
@@ -2325,7 +2365,9 @@ try {
   }
   let retainedProfile;
   if (soakScenario) {
-    await sampleMemory();
+    if (!values["memory-collect-garbage"]) {
+      await sampleMemory();
+    }
     await sampleMemory(true);
     if (retainedProfileStartedAt !== undefined) {
       await controlGatewayProfile(gateway, "heap", "stop", retainedProfilePath);
@@ -2461,6 +2503,8 @@ try {
           warmupMs,
           roundIntervalMs,
           memoryIntervalMs,
+          memoryCollectGarbage: values["memory-collect-garbage"],
+          catalogRetention: values["catalog-retention"],
           retainedProfileMs,
           resetEveryRounds,
           sessionResets,

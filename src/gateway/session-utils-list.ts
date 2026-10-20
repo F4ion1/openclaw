@@ -241,6 +241,28 @@ const sessionRowSelections = new WeakMap<
   Map<SelectionScope, Map<boolean, ReturnType<typeof createSessionRowSelection>>>
 >();
 
+// Keep the projection-lifetime listener outside request selection captures.
+function getSessionRowSelections(projection: SessionRowProjection) {
+  let scopes = sessionRowSelections.get(projection);
+  if (!scopes) {
+    scopes = new Map();
+    sessionRowSelections.set(projection, scopes);
+    const current = scopes;
+    projection.onSelectionChange((change) => {
+      if (change.kind === "reset") {
+        current.clear();
+      } else {
+        for (const variants of current.values()) {
+          for (const selection of variants.values()) {
+            selection.change(change);
+          }
+        }
+      }
+    });
+  }
+  return scopes;
+}
+
 /** Preserve federation before caller visibility and activity filters. */
 export function prepareSessionRowSelection(
   projection: SessionRowProjection,
@@ -269,23 +291,7 @@ export function prepareSessionRowSelection(
   const parentSessionKey = !keyed && !opts.involvingProfileId ? opts.spawnedBy : undefined;
   const broad = !keyed && !parentSessionKey;
   const activeOnly = opts.activeOnly === true;
-  let scopes = sessionRowSelections.get(projection);
-  if (!scopes) {
-    scopes = new Map();
-    sessionRowSelections.set(projection, scopes);
-    const current = scopes;
-    projection.onSelectionChange((change) => {
-      if (change.kind === "reset") {
-        current.clear();
-      } else {
-        for (const variants of current.values()) {
-          for (const selection of variants.values()) {
-            selection.change(change);
-          }
-        }
-      }
-    });
-  }
+  const scopes = getSessionRowSelections(projection);
   // Catalog adoption consumes raw resident order; exact/child reads retain their narrow selector.
   const retained = broad && prepared?.ordered && selectedScope.paths.size > 0;
   let selection = retained ? scopes.get(selectedScope)?.get(activeOnly) : undefined;

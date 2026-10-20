@@ -42,11 +42,11 @@ it("collects superseded resident rows and their materializations after metadata 
     }[] = [];
     const selections: WeakRef<object>[] = [];
     const snapshots: WeakRef<object>[] = [];
-    function captureSelections() {
+    function captureSelections(ordered = true) {
       for (const opts of [{}, { agentId: "main" }, { configuredAgentsOnly: true }]) {
         for (const activeOnly of [false, true]) {
           selections.push(
-            ...prepareSessionRowSelection(projection, { ...opts, activeOnly }, { ordered: true })
+            ...prepareSessionRowSelection(projection, { ...opts, activeOnly }, { ordered })
               .entries("all")
               .map((pair) => new WeakRef(pair)),
           );
@@ -77,6 +77,8 @@ it("collects superseded resident rows and their materializations after metadata 
     }
     try {
       await projection.ensureMaterialized();
+      // A first catalog-style read must not pin its rows in the projection's listener.
+      captureSelections(false);
       await captureList(0);
       for (let revision = 1; revision <= 4; revision++) {
         refreshEntries(revision);

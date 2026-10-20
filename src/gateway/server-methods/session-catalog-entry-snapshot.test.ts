@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -181,6 +183,40 @@ describe("session catalog entry snapshots", () => {
     await poll();
     expect(revisions[4]).not.toBe(revisions[3]);
     expect(labels).toEqual(["Before", "Before", "After", "After", "After"]);
+  });
+
+  it("releases superseded planning entries while a catalog page retains its adoption identities", async () => {
+    const key = "agent:main:retired-catalog-entry";
+    const cfg = {};
+    const current = () =>
+      createSessionCatalogRequestEntrySnapshot({ cfg, fallbackAgentId: "main", projection });
+    function capturePage() {
+      setEntries([{ sessionKey: key, entry: { label: "Before" } }]);
+      const planning = current();
+      planning.freeze();
+      const host = catalogHost({ sessions: [catalogSession("retained", { sessionKey: key })] });
+      const instances = new Map();
+      planning.captureHostInstances(host, instances);
+      return {
+        instances,
+        host,
+        entry: new WeakRef(planning.entryForSession(key)!),
+        entries: new WeakRef(planning.sessionEntries.entriesForCatalog!()),
+      };
+    }
+    const page = capturePage();
+    const control = new WeakRef({});
+    setEntries([{ sessionKey: key, entry: { label: "After", updatedAt: 2 } }]);
+    current().freeze();
+    const projected = current().projectHostSessions(page.host, page.instances);
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(page.entries.deref()).toBeUndefined();
+    expect(page.entry.deref()).toBeUndefined();
+    expect(page.instances.get(key)).toMatchObject({ sessionId: key });
+    expect(projected.sessions[0]?.sessionKey).toBe(key);
+    expect(current().entryForSession(key)?.label).toBe("After");
   });
 
   it("projects inherited profile creators from stored provenance, not provider metadata", () => {

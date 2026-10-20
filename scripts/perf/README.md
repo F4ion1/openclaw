@@ -845,6 +845,19 @@ sampled allocation total alone does not justify a change that raises promotion
 or GC time. Keep the same profile settings, fixture shape, reset phase, polling
 seed, and workload options on both revisions.
 
+For post-GC retention over time, add `--memory-collect-garbage`. Each periodic memory
+sample then collects garbage without writing a heap snapshot.
+`--trace-gc` writes V8 detailed traces to `gateway.stdout.log`, including promoted bytes,
+collection kinds and pauses, so retained-memory wins can be checked against
+old-generation promotion and collection cost.
+
+Add `--catalog-retention` to include the existing synthetic catalog provider.
+After each cohort, every connected viewer requests one of 128 rotating search
+pages. Retained pages then overlap subsequent row revisions, exercising catalog
+adoption identities without preserving old provider snapshots in the fixture.
+The report includes per-request `catalogLatencies` alongside the session-list
+latencies. Use identical flags on both sides of a comparison.
+
 Use identical fixtures, driver revisions and options for concurrent A/B pairs,
 separate state/ports, the existing `--start-at` barrier after warmup, the shared
 measurement lock and swapped sixteen-core halves. Check paired settled-memory
