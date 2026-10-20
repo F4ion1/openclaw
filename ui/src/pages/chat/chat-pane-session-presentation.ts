@@ -13,6 +13,7 @@ export function chatSessionPresentationTitle(
   state: Pick<ChatPageHost, "sessions" | "sessionKey" | "hello"> | undefined,
   row?: GatewaySessionRow,
   sessionKey = "",
+  pending = false,
 ): string {
   const key = state
     ? resolveSessionKey(state.sessionKey, state.hello) || state.sessionKey
@@ -21,9 +22,8 @@ export function chatSessionPresentationTitle(
     areUiSessionKeysEquivalent(candidate.key, key),
   );
   // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
-  return presentation
-    ? resolveSessionDisplayName(key, presentation)
-    : resolveSessionDisplayName(row?.key ?? key, row);
+  const source = presentation ?? row;
+  return !source && pending ? "" : resolveSessionDisplayName(source?.key ?? key, source);
 }
 
 /** Capture rendered roster facts without retaining a mutable row as the previous value. */

@@ -94,6 +94,7 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
       syncRetries: new Map(),
       historyLoad: { phase: "idle" },
       acceptedHistory: undefined,
+      initialSnapshotHydration: undefined,
     };
     chatHistoryPaneRequests.set(owner, requests);
   }
@@ -135,7 +136,7 @@ export function isChatHistoryRetrying(state: ChatState): boolean {
 export function retireInitialChatSnapshot(state: ChatState): void {
   const requests = chatHistoryRequests(state);
   const hydration = requests.initialSnapshotHydration;
-  delete requests.initialSnapshotHydration;
+  requests.initialSnapshotHydration = undefined;
   hydration?.cancel?.();
 }
 
@@ -168,7 +169,7 @@ export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<bool
     const finish = (current: boolean) => {
       clearTimeout(timeout);
       if (requests.initialSnapshotHydration === hydration) {
-        delete requests.initialSnapshotHydration;
+        requests.initialSnapshotHydration = undefined;
       }
       resolve(current);
     };
