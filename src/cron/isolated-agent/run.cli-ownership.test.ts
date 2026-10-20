@@ -1,28 +1,25 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunHandleActive,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  clearFastTestEnv,
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   patchSessionEntryMock,
-  resetRunCronIsolatedAgentTurnHarness,
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
   resolveThinkingDefaultMock,
-  restoreFastTestEnv,
   runCliAgentMock,
 } from "./run.test-harness.js";
 
@@ -30,36 +27,22 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 const sessionId = "cron-cli-diagnostic-session";
 
-function makeCliOwnershipParams(): RunCronAgentTurnParams {
-  const cfg = { session: { store: "/tmp/store.json" } };
-  setRuntimeConfigSnapshot(cfg);
-  return {
-    deliveryAttemptFence: null,
-    cfg,
-    deps: {},
+function makeCliOwnershipParams() {
+  return makeIsolatedAgentParamsFixture({
     job: {
       id: "cli-diagnostic-job",
       name: "CLI diagnostic ownership",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
       sessionTarget: "session:existing-cron-session",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "summarize", model: "test-cli/test-model" },
-      state: {},
     },
     message: "summarize",
     sessionKey: "existing-cron-session",
-  };
+  });
 }
 
 describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
-  let previousFastTestEnv: string | undefined;
-
+  setupRunCronIsolatedAgentTurnSuite();
   beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
     isCliProviderMock.mockImplementation((provider: string) => provider === "test-cli");
     resolveConfiguredModelRefMock.mockReturnValue({ provider: "test-cli", model: "test-model" });
     resolveAllowedModelRefMock.mockReturnValue({
@@ -70,10 +53,6 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
       makeCronSession({ sessionEntry: makeCronSessionEntry({ sessionId }), isNewSession: true }),
     );
     mockRunCronFallbackPassthrough();
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
   });
 
   it.each([
@@ -115,9 +94,7 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
       return committed;
     };
     runCliAgentMock.mockImplementationOnce(async (params) => {
-      expect(params.diagnosticOwner).toEqual(
-        expect.objectContaining({ sessionId, generation: expect.anything() }),
-      );
+      expect(params.diagnosticOwner).toMatchObject({ sessionId, generation: expect.anything() });
       expect(params.abortSignal).toBeInstanceOf(AbortSignal);
       expect(params.abortSignal.aborted).toBe(false);
       expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
@@ -179,8 +156,10 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
 
     const result = await runCronIsolatedAgentTurn(makeCliOwnershipParams());
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("agent run aborted | OPENCLAW_DIRECT_ABORT");
+    expect(result).toMatchObject({
+      status: "error",
+      error: "agent run aborted | OPENCLAW_DIRECT_ABORT",
+    });
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
   });
 });

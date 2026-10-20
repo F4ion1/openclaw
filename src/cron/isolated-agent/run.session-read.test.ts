@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -38,14 +38,29 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+function openTestDatabase() {
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-"));
+  return openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+}
+function prepareRun(storePath: string, sessionKey = "cron:test-job", job = {}) {
+  return prepareCronRunContext({
+    input: makeIsolatedAgentParamsFixture({
+      agentId: "main",
+      cfg: { session: { store: storePath } },
+      sessionKey,
+      job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" }, ...job }),
+    }),
+    isFastTestEnv: true,
+    onLifecycleInterrupt: () => {},
+  });
+}
 
 describe("cron session preparation", () => {
+  beforeEach(resetRunCronIsolatedAgentTurnHarness);
   it.each(["unchanged", "workspace"] as const)(
     "revalidates %s authority across absent-field snapshot representations",
     async (change) => {
-      resetRunCronIsolatedAgentTurnHarness();
-      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-authority-"));
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+      const database = openTestDatabase();
       const sessionKey = "agent:main:conversation";
       const target = { agentId: "main", storePath: database.path, sessionKey };
       const now = Date.now();
@@ -123,9 +138,7 @@ describe("cron session preparation", () => {
   );
 
   it("preserves a concurrent metadata write during detached preparation without caller SQL", async () => {
-    resetRunCronIsolatedAgentTurnHarness();
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-write-"));
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+    const database = openTestDatabase();
     const target = {
       agentId: "main",
       storePath: database.path,
@@ -156,16 +169,7 @@ describe("cron session preparation", () => {
         }
       },
     );
-    const result = await prepareCronRunContext({
-      input: makeIsolatedAgentParamsFixture({
-        agentId: "main",
-        cfg: { session: { store: database.path } },
-        sessionKey: "cron:test-job",
-        job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" } }),
-      }),
-      isFastTestEnv: true,
-      onLifecycleInterrupt: () => {},
-    });
+    const result = await prepareRun(database.path);
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error("Cron preparation failed");
@@ -192,10 +196,8 @@ describe("cron session preparation", () => {
   });
 
   it("prepares full target and source rows without host database reads", async () => {
-    resetRunCronIsolatedAgentTurnHarness();
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-cron-session-read-"));
+    const database = openTestDatabase();
     const scope = { agentId: "main", env: process.env };
-    const database = openOpenClawAgentDatabase(scope);
     const targetKey = "agent:main:cron:test-job";
     const sourceKey = "agent:main:source";
     const now = Date.now();
@@ -245,20 +247,7 @@ describe("cron session preparation", () => {
     const host = observeHostDataSql();
     try {
       await expect(
-        prepareCronRunContext({
-          input: makeIsolatedAgentParamsFixture({
-            agentId: "main",
-            cfg: { session: { store: database.path } },
-            sessionKey: sourceKey,
-            job: makeIsolatedAgentJobFixture({
-              sessionTarget: "current",
-              sessionKey: sourceKey,
-              delivery: { mode: "none" },
-            }),
-          }),
-          isFastTestEnv: true,
-          onLifecycleInterrupt: () => {},
-        }),
+        prepareRun(database.path, sourceKey, { sessionTarget: "current", sessionKey: sourceKey }),
       ).rejects.toBe(preparedBoundary);
       for (const calls of host.calls) {
         expect(calls).not.toHaveBeenCalled();

@@ -5,9 +5,9 @@ import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js"
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../../agents/cli-runner.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import {
   acquirePreparedModelRuntimeMock,
@@ -80,37 +80,27 @@ function makeSandboxAdmissionParams(
       },
     },
   };
-  setRuntimeConfigSnapshot(mergedCfg);
   resolveAgentConfigMock.mockImplementation(
     (config: OpenClawConfig | undefined, agentId: string) =>
       config?.agents?.entries?.[agentId] ?? mergedCfg.agents?.entries?.[agentId],
   );
-  return {
-    deliveryAttemptFence: null,
+  return makeIsolatedAgentParamsFixture({
     cfg: mergedCfg,
-    deps: {},
     agentId: "main",
     job: {
       id: "sandbox-admission-job",
       name: "Sandbox admission",
       agentId: "main",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
       sessionTarget: `session:${sessionKey}`,
-      wakeMode: "now",
       payload: {
         kind: "agentTurn",
         message: "summarize",
-        ...(payload?.model ? { model: payload.model } : {}),
-        ...(payload?.fallbacks ? { fallbacks: payload.fallbacks } : {}),
+        ...payload,
       },
-      state: {},
     },
     message: "summarize",
     sessionKey,
-  };
+  });
 }
 
 describe("cron isolated-agent sandbox placement admission", () => {
@@ -118,6 +108,19 @@ describe("cron isolated-agent sandbox placement admission", () => {
   let tempDir: string;
   let commandPath: string;
   let markerPath: string;
+  const config = (defaults: NonNullable<OpenClawConfig["agents"]>["defaults"]): OpenClawConfig => ({
+    agents: { defaults },
+  });
+  const run = (
+    cfg: OpenClawConfig,
+    payload?: { model?: string; fallbacks?: string[] },
+    sessionKey?: string,
+  ) => runCronIsolatedAgentTurn(makeSandboxAdmissionParams(cfg, tempDir, payload, sessionKey));
+  function expectSandboxRejection(result: Awaited<ReturnType<typeof run>>) {
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("cannot honor the sandbox");
+    expect(fs.existsSync(markerPath)).toBe(false);
+  }
 
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
@@ -195,17 +198,11 @@ describe("cron isolated-agent sandbox placement admission", () => {
   });
 
   it("fails closed when a sandboxed session inherits a CLI-backed subagent default before process launch", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "all" }, subagents: { model: "test-cli/claude-x" } },
-      },
-    };
-    const result = await runCronIsolatedAgentTurn(makeSandboxAdmissionParams(cfg, tempDir));
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("cannot honor the sandbox");
+    const result = await run(
+      config({ sandbox: { mode: "all" }, subagents: { model: "test-cli/claude-x" } }),
+    );
+    expectSandboxRejection(result);
     expect(result.error).toContain("agents.entries.<id>.subagents.model");
-    expect(fs.existsSync(markerPath)).toBe(false);
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -218,66 +215,35 @@ describe("cron isolated-agent sandbox placement admission", () => {
         status: 429,
       }),
     );
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all" },
-          subagents: {
-            model: {
-              primary: "openai/gpt-test",
-              fallbacks: ["test-cli/claude-x"],
-            },
-          },
-        },
-      },
-    };
-    const result = await runCronIsolatedAgentTurn(makeSandboxAdmissionParams(cfg, tempDir));
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("cannot honor the sandbox");
+    const result = await run(
+      config({
+        sandbox: { mode: "all" },
+        subagents: { model: { primary: "openai/gpt-test", fallbacks: ["test-cli/claude-x"] } },
+      }),
+    );
+    expectSandboxRejection(result);
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(fs.existsSync(markerPath)).toBe(false);
   });
 
   it("fails closed when a sandboxed session routes an API model to a CLI runtime override", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all" },
-          subagents: { model: "anthropic/claude-sonnet-4-6" },
-          models: {
-            "anthropic/claude-sonnet-4-6": {
-              agentRuntime: { id: "test-cli" },
-            },
-          },
-        },
-      },
-    };
-    const result = await runCronIsolatedAgentTurn(makeSandboxAdmissionParams(cfg, tempDir));
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("cannot honor the sandbox");
-    expect(fs.existsSync(markerPath)).toBe(false);
+    const result = await run(
+      config({
+        sandbox: { mode: "all" },
+        subagents: { model: "anthropic/claude-sonnet-4-6" },
+        models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "test-cli" } } },
+      }),
+    );
+    expectSandboxRejection(result);
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("fails closed for an explicit CLI payload model in a sandboxed session", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { sandbox: { mode: "all" } } },
-    };
-    const result = await runCronIsolatedAgentTurn(
-      makeSandboxAdmissionParams(cfg, tempDir, { model: "test-cli/claude-x" }),
+    expectSandboxRejection(
+      await run(config({ sandbox: { mode: "all" } }), { model: "test-cli/claude-x" }),
     );
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("cannot honor the sandbox");
-    expect(fs.existsSync(markerPath)).toBe(false);
   });
 
   it("fails closed when the session entry carries required sandbox isolation", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { subagents: { model: "test-cli/claude-x" } } },
-    };
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath: path.join(tempDir, "sessions.json"),
@@ -285,11 +251,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
         isNewSession: true,
       }),
     );
-    const result = await runCronIsolatedAgentTurn(makeSandboxAdmissionParams(cfg, tempDir));
-
-    expect(result.status).toBe("error");
-    expect(result.error).toContain("cannot honor the sandbox");
-    expect(fs.existsSync(markerPath)).toBe(false);
+    expectSandboxRejection(await run(config({ subagents: { model: "test-cli/claude-x" } })));
   });
 
   it("admits a sandboxed session when per-agent subagents.model overrides the global CLI default", async () => {
@@ -304,7 +266,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
         },
       },
     };
-    const result = await runCronIsolatedAgentTurn(makeSandboxAdmissionParams(cfg, tempDir));
+    const result = await run(cfg);
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe("ok");
@@ -313,10 +275,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
   });
 
   it("launches the real CLI process for permitted unsandboxed sessions", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { subagents: { model: "test-cli/claude-x" } } },
-    };
-    const result = await runCronIsolatedAgentTurn(makeSandboxAdmissionParams(cfg, tempDir));
+    const result = await run(config({ subagents: { model: "test-cli/claude-x" } }));
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe("ok");
@@ -326,16 +285,11 @@ describe("cron isolated-agent sandbox placement admission", () => {
   });
 
   it("rejects non-main cron sessions under sandbox mode non-main while permitting main-session CLI execution", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "non-main" }, subagents: { model: "test-cli/claude-x" } },
-      },
-    };
-    const nonMainResult = await runCronIsolatedAgentTurn(makeSandboxAdmissionParams(cfg, tempDir));
-
-    expect(nonMainResult.status).toBe("error");
-    expect(nonMainResult.error).toContain("cannot honor the sandbox");
-    expect(fs.existsSync(markerPath)).toBe(false);
+    const cfg = config({
+      sandbox: { mode: "non-main" },
+      subagents: { model: "test-cli/claude-x" },
+    });
+    expectSandboxRejection(await run(cfg));
 
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
@@ -344,9 +298,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
         isNewSession: true,
       }),
     );
-    const mainResult = await runCronIsolatedAgentTurn(
-      makeSandboxAdmissionParams(cfg, tempDir, undefined, "agent:main:main"),
-    );
+    const mainResult = await run(cfg, undefined, "agent:main:main");
 
     expect(mainResult.error).toBeUndefined();
     expect(mainResult.status).toBe("ok");

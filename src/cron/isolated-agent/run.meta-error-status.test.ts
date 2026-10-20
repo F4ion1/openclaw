@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -77,9 +76,12 @@ function mockAnnounceOutcome(
     ...overrides,
   });
 }
-function expectDispatch(expected: Record<string, unknown>) {
-  expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(expect.objectContaining(expected));
-}
+const failedDeliveryState = (error: string) => ({
+  status: "not-delivered",
+  delivered: false,
+  error,
+  failureNotification: { status: "not-requested" },
+});
 async function useRealOutcome() {
   const { resolveCronPayloadOutcome } =
     await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
@@ -104,12 +106,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
         delivered: false,
         deliveryAttempted: false,
         deliveryError,
-        deliveryState: {
-          status: "not-delivered",
-          delivered: false,
-          error: deliveryError,
-          failureNotification: { status: "not-requested" },
-        },
+        deliveryState: failedDeliveryState(deliveryError),
         summary: reply,
         outputText: reply,
         deliveryPayloads: [{ text: reply }],
@@ -154,13 +151,8 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       delivered: undefined,
       deliveryError: undefined,
     });
-    expect(result.diagnostics?.entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          source: "agent-run",
-          message: expectedError,
-        }),
-      ]),
+    expect(result.diagnostics?.entries).toContainEqual(
+      expect.objectContaining({ source: "agent-run", message: expectedError }),
     );
   });
 
@@ -251,16 +243,13 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       delivered: false,
       deliveryAttempted: true,
       deliveryError: error,
-      deliveryState: {
-        status: "not-delivered",
-        delivered: false,
-        error,
-        failureNotification: { status: "not-requested" },
-      },
+      deliveryState: failedDeliveryState(error),
       deliveryPayloads: [mediaPayload],
     });
     const result = await runTurn();
-    expectDispatch({ spawnOnlyHandoff: false });
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ spawnOnlyHandoff: false }),
+    );
     expectObjectFields(result, { status: "ok", deliveryError: error });
   });
 
@@ -279,14 +268,9 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.error).not.toContain("CommandLaneTaskTimeoutError");
     expect(result.error).not.toContain("cron-nested");
   });
-});
-
-const { buildEmbeddedRunPayloads } =
-  await import("../../agents/embedded-agent-runner/run/payloads.js");
-
-describe("delivered report outcome", () => {
-  setupRunCronIsolatedAgentTurnSuite();
   it("records a silently completed report as successful after a final read is rate-limited", async () => {
+    const { buildEmbeddedRunPayloads } =
+      await import("../../agents/embedded-agent-runner/run/payloads.js");
     await useRealOutcome();
     mockRunCronFallbackPassthrough();
     const delivery = { mode: "none" as const, channel: "topicchat", to: "room#42", threadId: 42 };
@@ -325,28 +309,24 @@ describe("delivered report outcome", () => {
       },
     });
 
-    const cfg = { session: { store: "/tmp/store.json" } };
-    setRuntimeConfigSnapshot(cfg);
-    const result = await runCronIsolatedAgentTurn({
-      deliveryAttemptFence: null,
-      cfg,
-      deps: {} as never,
-      job: {
+    const result = await runTurn({
+      job: makeIsolatedAgentJobFixture({
         id: "delivered-report",
         name: "Daily report",
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
         payload: { kind: "agentTurn", message: "Run the daily report" },
         delivery,
-      } as never,
+      }),
       message: "Run the daily report",
       sessionKey: "cron:delivered-report",
     });
 
     expect(runEmbeddedAgentMock, JSON.stringify(result)).toHaveBeenCalledTimes(1);
-    expect(result.status).toBe("ok");
-    expect(result.error).toBeUndefined();
-    expect(result.delivered).toBe(true);
-    expect(result.replyDisposition).toBe("silent");
+    expectObjectFields(result, {
+      status: "ok",
+      error: undefined,
+      delivered: true,
+      replyDisposition: "silent",
+    });
   });
 });
