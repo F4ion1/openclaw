@@ -17,6 +17,19 @@ const BACKEND_FIRST: CliBackendConfig = { ...BACKEND_ALWAYS, systemPromptWhen: "
 
 const SYSTEM_PROMPT = "You are a test assistant. Append SYSTEM-PROOF-ACTIVE after every reply.";
 const PROMPT_FILE = "/tmp/test-system-prompt.txt";
+const resumeArgs = {
+  baseArgs: ["--resume", "source-session"],
+  modelId: "claude-haiku-4-5",
+  sessionId: "source-session",
+  useResume: true,
+};
+const promptArgs = {
+  ...resumeArgs,
+  baseArgs: ["-p", "--output-format", "stream-json"],
+  sessionId: "test-session-id",
+  systemPrompt: SYSTEM_PROMPT,
+  systemPromptFilePath: PROMPT_FILE,
+};
 
 describe("resolveSystemPromptUsage — issue #80374", () => {
   it("legacy 'first': returns null on resumed session (prompt dropped)", () => {
@@ -41,15 +54,6 @@ describe("resolveSystemPromptUsage — issue #80374", () => {
 });
 
 describe("buildCliArgs — issue #80374", () => {
-  const promptArgs = {
-    baseArgs: ["-p", "--output-format", "stream-json"],
-    modelId: "claude-haiku-4-5",
-    sessionId: "test-session-id",
-    systemPrompt: SYSTEM_PROMPT,
-    systemPromptFilePath: PROMPT_FILE,
-    useResume: true,
-  };
-
   it("soft system-prompt drift includes --append-system-prompt-file on legacy resume", () => {
     const args = buildCliArgs({
       backend: BACKEND_FIRST,
@@ -61,10 +65,7 @@ describe("buildCliArgs — issue #80374", () => {
   });
 
   it("new 'always': includes --append-system-prompt-file on resume (issue #80374)", () => {
-    const args = buildCliArgs({
-      backend: BACKEND_ALWAYS,
-      ...promptArgs,
-    });
+    const args = buildCliArgs({ backend: BACKEND_ALWAYS, ...promptArgs });
     expect(args).toContain("--append-system-prompt-file");
     expect(args).toContain(PROMPT_FILE);
   });
@@ -77,24 +78,19 @@ describe("buildCliArgs — issue #80374", () => {
     };
     const resumed = buildCliArgs({
       backend,
-      baseArgs: ["--resume", "source-session"],
-      modelId: "claude-haiku-4-5",
-      sessionId: "source-session",
-      useResume: true,
+      ...resumeArgs,
       forkResume: true,
       resumeAt: "assistant-before-turn",
     });
     const subsequent = buildCliArgs({
       backend,
+      ...resumeArgs,
       baseArgs: ["--resume", "forked-session"],
-      modelId: "claude-haiku-4-5",
       sessionId: "forked-session",
-      useResume: true,
       forkResume: false,
     });
-    expect(resumed).toContain("--fork-session");
     expect(resumed).toEqual(
-      expect.arrayContaining(["--resume-session-at", "assistant-before-turn"]),
+      expect.arrayContaining(["--fork-session", "--resume-session-at", "assistant-before-turn"]),
     );
     expect(subsequent).not.toContain("--fork-session");
     expect(subsequent).not.toContain("--resume-session-at");
@@ -104,10 +100,7 @@ describe("buildCliArgs — issue #80374", () => {
     expect(() =>
       buildCliArgs({
         backend: BACKEND_ALWAYS,
-        baseArgs: ["--resume", "source-session"],
-        modelId: "claude-haiku-4-5",
-        sessionId: "source-session",
-        useResume: true,
+        ...resumeArgs,
         forkResume: true,
       }),
     ).toThrow("does not support forked session resume");
@@ -117,10 +110,7 @@ describe("buildCliArgs — issue #80374", () => {
     expect(() =>
       buildCliArgs({
         backend: { ...BACKEND_ALWAYS, forkArg: "--fork-session" },
-        baseArgs: ["--resume", "source-session"],
-        modelId: "claude-haiku-4-5",
-        sessionId: "source-session",
-        useResume: true,
+        ...resumeArgs,
         forkResume: true,
         resumeAt: "assistant-before-turn",
       }),

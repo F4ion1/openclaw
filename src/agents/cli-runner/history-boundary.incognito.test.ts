@@ -8,6 +8,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { sessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { persistCliRunBlock } from "./cli-run-transcript.js";
 import {
   prepareCliHistoryBoundary,
@@ -106,14 +107,7 @@ it("prepares private CLI history and refuses an unattributed append at execution
           model: "test-model",
           stopReason: "stop",
           timestamp: 2,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
         });
         await writer.assertReadable();
         expect(await hasCliSessionTranscript({ sessionTarget: target })).toBe(true);

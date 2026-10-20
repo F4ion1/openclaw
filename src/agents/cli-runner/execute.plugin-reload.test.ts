@@ -8,23 +8,11 @@ import type { CliBackendConfig, CliBackendExecute } from "../../plugins/cli-back
 import { PluginInstanceDrainTimeoutError } from "../../plugins/plugin-instance-error.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun } from "./execute.js";
 import { retainCliPluginExecutionConsumer } from "./execution-target.js";
-import type { PreparedCliRunContext } from "./types.js";
 
-const SUCCESS_RESULT = {
-  type: "result",
-  subtype: "success",
-  is_error: false,
-  result: "completed",
-  session_id: "sdk-session",
-};
-
-async function preparePluginContext(execute: CliBackendExecute): Promise<{
-  context: PreparedCliRunContext;
-  admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
-}> {
+async function preparePluginContext(execute: CliBackendExecute) {
   const backend: CliBackendConfig = {
     command: "/bin/sh",
     args: [],
@@ -34,37 +22,23 @@ async function preparePluginContext(execute: CliBackendExecute): Promise<{
     sessionMode: "existing",
   };
   const runId = "plugin-reload-run";
-  const context: PreparedCliRunContext = {
-    params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      provider: "claude-cli",
-      model: "opus",
-      thinkLevel: "low",
-      timeoutMs: 120_000,
-      runId,
-    },
-    started: Date.now(),
-    startedMonotonicMs: performance.now(),
-    workspaceDir: "/tmp",
-    backendResolved: { id: "claude-cli", config: backend, bundleMcp: false, pluginId: "anthropic" },
-    executionTarget: { kind: "plugin", execute },
-    pluginExecutionConsumer: retainCliPluginExecutionConsumer(execute),
-    preparedBackend: { backend, env: {} },
-    reusableCliSession: { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: "opus",
-    normalizedModel: "opus",
-    contextWindowInfo: { tokens: 150_000, referenceTokens: 200_000, source: "modelsConfig" },
-    systemPrompt: "You are a helpful assistant.",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
+  const context = buildPreparedCliRunContext({
+    model: "opus",
+    thinkLevel: "low",
+    timeoutMs: 120_000,
+    runId,
+  });
+  context.preparedBackend.backend = backend;
+  context.params.sessionFile = "/tmp/session.jsonl";
+  context.backendResolved = {
+    id: "claude-cli",
+    config: backend,
+    bundleMcp: false,
+    pluginId: "anthropic",
   };
+  context.executionTarget = { kind: "plugin", execute };
+  context.pluginExecutionConsumer = retainCliPluginExecutionConsumer(execute);
+  context.contextWindowInfo = { tokens: 150_000, referenceTokens: 200_000, source: "modelsConfig" };
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "plugin-reload-test");
   context.params.admittedRunContext = await admission.admit("plugin-harness");
   return { context, admission };
@@ -86,7 +60,13 @@ describe("plugin-owned CLI turns across a plugin hot reload", () => {
       yield { type: "system", subtype: "init", session_id: "sdk-session" };
       started.resolve();
       await finish.promise;
-      yield SUCCESS_RESULT;
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "completed",
+        session_id: "sdk-session",
+      };
     });
     const cleanup = owner.wrap(async () => {
       cleaned = true;

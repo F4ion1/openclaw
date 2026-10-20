@@ -4,51 +4,15 @@ import {
   mergeChannelProgressDraftLine,
 } from "../../channels/streaming.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import type { CliToolUseStartDelta } from "../cli-output-contracts.js";
 import { createCliEventHandlers } from "./execute-events.js";
+import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import type { PreparedCliRunContext } from "./types.js";
 
 describe("Claude CLI command progress", () => {
   it("keeps native Bash detail without asserting ambiguous MCP execution", () => {
     const runId = "cli-bash-progress";
-    const backend = {
-      command: "claude",
-      args: [],
-      output: "jsonl" as const,
-      input: "stdin" as const,
-      serialize: true,
-    };
-    const context = {
-      params: {
-        admittedRunContext: createTestAdmittedRunContext(runId),
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        prompt: "hi",
-        runId,
-        provider: "claude-cli",
-        model: "claude-haiku-4-5",
-        timeoutMs: 1_000,
-      },
-      started: Date.now(),
-      startedMonotonicMs: performance.now(),
-      workspaceDir: "/tmp",
-      backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
-      preparedBackend: { backend, env: {} },
-      executionTarget: { kind: "process" },
-      reusableCliSession: { mode: "none" },
-      hadSessionFile: false,
-      contextEngineConfig: {},
-      modelId: "claude-haiku-4-5",
-      normalizedModel: "claude-haiku-4-5",
-      systemPrompt: "system",
-      systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-      claudeSkillsPluginArgs: [],
-      authEpochVersion: 2,
-    } as PreparedCliRunContext;
+    const context = buildContext(runId);
     const tracking = {
       handleCliToolUseStart: vi.fn(),
       handleCliToolResult: vi.fn(),
@@ -65,19 +29,18 @@ describe("Claude CLI command progress", () => {
         events.push(event);
       }
     });
+    const complete = (
+      toolCallId: string,
+      name: string,
+      kind: CliToolUseStartDelta["kind"],
+      command: string,
+      result: string,
+    ) => {
+      handlers.emitParsedToolUseStart({ toolCallId, name, kind, args: { command } });
+      handlers.emitParsedToolResult({ toolCallId, name, isError: false, result });
+    };
     try {
-      handlers.emitParsedToolUseStart({
-        toolCallId: "bash-1",
-        name: "Bash",
-        kind: "tool_use",
-        args: { command: "echo retained" },
-      });
-      handlers.emitParsedToolResult({
-        toolCallId: "bash-1",
-        name: "Bash",
-        isError: false,
-        result: "retained",
-      });
+      complete("bash-1", "Bash", "tool_use", "echo retained", "retained");
 
       const start = events.find((event) => event.stream === "tool" && event.data.phase === "start");
       const end = events.find((event) => event.stream === "item" && event.data.phase === "end");
@@ -115,44 +78,13 @@ describe("Claude CLI command progress", () => {
         mergeChannelProgressDraftLine([startLine], endLine, { maxLines: 4 })[0]?.detail,
       ).toContain("echo retained");
 
-      handlers.emitParsedToolUseStart({
-        toolCallId: "mcp-1",
-        name: "mcp__openclaw__exec",
-        kind: "mcp_tool_use",
-        args: { command: "requested command" },
-      });
-      handlers.emitParsedToolResult({
-        toolCallId: "mcp-1",
-        name: "mcp__openclaw__exec",
-        isError: false,
-        result: "result with ambiguous execution",
-      });
-      const mcpEnd = events.find(
-        (event) =>
-          event.stream === "item" &&
-          event.data.phase === "end" &&
-          event.data.toolCallId === "mcp-1",
-      );
-      expect(mcpEnd?.data).toMatchObject({ status: "completed", name: "exec" });
-      expect(mcpEnd?.data.meta).toBeUndefined();
-
-      for (const [toolCallId, name, expectedName] of [
-        ["mcp-generic-1", "mcp__openclaw__exec", "exec"],
-        ["mcp-gemini-1", "mcp_openclaw_exec", "exec"],
-        ["mcp-third-party-1", "mcp_docs_exec", "mcp_docs_exec"],
+      for (const [toolCallId, name, expectedName, kind] of [
+        ["mcp-1", "mcp__openclaw__exec", "exec", "mcp_tool_use"],
+        ["mcp-generic-1", "mcp__openclaw__exec", "exec", "tool_use"],
+        ["mcp-gemini-1", "mcp_openclaw_exec", "exec", "tool_use"],
+        ["mcp-third-party-1", "mcp_docs_exec", "mcp_docs_exec", "tool_use"],
       ] as const) {
-        handlers.emitParsedToolUseStart({
-          toolCallId,
-          name,
-          kind: "tool_use",
-          args: { command: "requested command" },
-        });
-        handlers.emitParsedToolResult({
-          toolCallId,
-          name,
-          isError: false,
-          result: "result with ambiguous execution",
-        });
+        complete(toolCallId, name, kind, "requested command", "result with ambiguous execution");
         const mcpTerminal = events.find(
           (event) =>
             event.stream === "item" &&

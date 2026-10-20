@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   getInstallationTarget,
   withInstallationTarget,
@@ -15,86 +15,79 @@ import {
 } from "./execute.test-support.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
+const scratchEnv = {
+  OPENCLAW_STATE_DIR: "/fixture/scratch",
+  OPENCLAW_CONFIG_PATH: undefined,
+  OPENCLAW_WORKSPACE_DIR: "/fixture/execution-cwd",
+};
+const childWithEnv = (env: Record<string, unknown>) =>
+  expect.objectContaining({ env: expect.objectContaining(env) });
+
+beforeEach(() => {
+  supervisorSpawnMock.mockResolvedValue(
+    createManagedRun({ ...createSuccessfulProcessExit(), durationMs: 1, stdout: "done" }),
+  );
+});
 
 afterEach(() => {
   supervisorSpawnMock.mockReset();
   vi.useRealTimers();
 });
 
-describe("CLI installation target", () => {
-  it.each(["process", "node"] as const)(
-    "projects local child environment and fences %s placement",
-    async (kind) => {
-      const target = {
-        stateDir: "/fixture/diagnosed",
-        configPath: "/fixture/custom.json",
-        defaultWorkspaceDir: "/fixture/default-workspace",
-      };
-      const context = buildPreparedCliRunContext({
-        model: "fixture-model",
-        backend: {
-          command: "/bin/sh",
-          args: [],
-          output: "text",
-          systemPromptFileArg: undefined,
-          input: "stdin",
-        },
-      });
+it.each(["process", "node"] as const)(
+  "projects local child environment and fences %s placement",
+  async (kind) => {
+    const target = {
+      stateDir: "/fixture/diagnosed",
+      configPath: "/fixture/custom.json",
+      defaultWorkspaceDir: "/fixture/default-workspace",
+    };
+    const context = buildPreparedCliRunContext({
+      model: "fixture-model",
+      backend: {
+        command: "/bin/sh",
+        args: [],
+        output: "text",
+        systemPromptFileArg: undefined,
+        input: "stdin",
+      },
+    });
+    if (kind === "node") {
+      context.executionTarget = { kind, placement: { nodeId: "fixture-node" } };
+    }
+    await withEnvAsync(scratchEnv, async () => {
+      const run = withInstallationTarget(target, () => executePreparedCliRun(context));
+      expect(getInstallationTarget()).toBeUndefined();
       if (kind === "node") {
-        context.executionTarget = { kind, placement: { nodeId: "fixture-node" } };
+        await expect(run).rejects.toThrow("saved prompt");
+        expect(supervisorSpawnMock).not.toHaveBeenCalled();
+        return;
       }
-      supervisorSpawnMock.mockResolvedValue(
-        createManagedRun({
-          ...createSuccessfulProcessExit(),
-          durationMs: 1,
-          stdout: "done",
+      await expect(run).resolves.toMatchObject({ text: "done" });
+      const expectedEnv = {
+        OPENCLAW_STATE_DIR: target.stateDir,
+        OPENCLAW_CONFIG_PATH: target.configPath,
+        OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
+      };
+      expect(supervisorSpawnMock).toHaveBeenLastCalledWith(childWithEnv(expectedEnv));
+      expect({
+        OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+        OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+        OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
+      }).toEqual(scratchEnv);
+      await executePreparedCliRun(context);
+      expect(supervisorSpawnMock).toHaveBeenLastCalledWith(
+        childWithEnv({
+          OPENCLAW_STATE_DIR: "/fixture/scratch",
+          OPENCLAW_WORKSPACE_DIR: "/fixture/execution-cwd",
         }),
       );
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: "/fixture/scratch",
-          OPENCLAW_CONFIG_PATH: undefined,
-          OPENCLAW_WORKSPACE_DIR: "/fixture/execution-cwd",
-        },
-        async () => {
-          const run = withInstallationTarget(target, () => executePreparedCliRun(context));
-          expect(getInstallationTarget()).toBeUndefined();
-          if (kind === "node") {
-            await expect(run).rejects.toThrow("saved prompt");
-            expect(supervisorSpawnMock).not.toHaveBeenCalled();
-            return;
-          }
-          await expect(run).resolves.toMatchObject({ text: "done" });
-          const expectedEnv = {
-            OPENCLAW_STATE_DIR: target.stateDir,
-            OPENCLAW_CONFIG_PATH: target.configPath,
-            OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
-          };
-          expect(supervisorSpawnMock).toHaveBeenLastCalledWith(
-            expect.objectContaining({ env: expect.objectContaining(expectedEnv) }),
-          );
-          expect(process.env.OPENCLAW_STATE_DIR).toBe("/fixture/scratch");
-          expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-          expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe("/fixture/execution-cwd");
-          await executePreparedCliRun(context);
-          expect(supervisorSpawnMock).toHaveBeenLastCalledWith(
-            expect.objectContaining({
-              env: expect.objectContaining({
-                OPENCLAW_STATE_DIR: "/fixture/scratch",
-                OPENCLAW_WORKSPACE_DIR: "/fixture/execution-cwd",
-              }),
-            }),
-          );
-          expect(supervisorSpawnMock).not.toHaveBeenLastCalledWith(
-            expect.objectContaining({
-              env: expect.objectContaining({ OPENCLAW_CONFIG_PATH: expect.anything() }),
-            }),
-          );
-        },
+      expect(supervisorSpawnMock).not.toHaveBeenLastCalledWith(
+        childWithEnv({ OPENCLAW_CONFIG_PATH: expect.anything() }),
       );
-    },
-  );
-});
+    });
+  },
+);
 
 it("counts awaited backend setup against the automatic cutoff", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -113,13 +106,6 @@ it("counts awaited backend setup against the automatic cutoff", async () => {
   context.preparedBackend.beforeExecution = async () => {
     vi.setSystemTime(2001);
   };
-  supervisorSpawnMock.mockResolvedValue(
-    createManagedRun({
-      ...createSuccessfulProcessExit(),
-      stdout: "done",
-    }),
-  );
-
   await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "done" });
   expect(resolveExecutionArgs.mock.calls[0]?.[0].fastMode).toBe(false);
 });
