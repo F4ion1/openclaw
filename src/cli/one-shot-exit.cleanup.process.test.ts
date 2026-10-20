@@ -1,4 +1,3 @@
-import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -64,17 +63,9 @@ it.concurrent.for([
     observed.finalizationReturnedBeforeCleanup = database.isOpen;
   `;
 
-      let child: ChildProcess | undefined;
       const result = await fixture.track(
         runNodeScript(
-          [
-            "--disable-warning=ExperimentalWarning",
-            "--import",
-            "tsx",
-            "--input-type=module",
-            "--eval",
-            script,
-          ],
+          ["--import=tsx", "--input-type=module", "--eval", script],
           {
             PATH: process.env.PATH,
             SystemRoot: process.env.SystemRoot,
@@ -85,20 +76,10 @@ it.concurrent.for([
             TSX_DISABLE_CACHE: "1",
           },
           20_000,
-          {
-            signal,
-            maxBuffer: 1024 * 1024,
-            onReady: (startedChild) => {
-              child = startedChild;
-            },
-          },
+          { signal, maxBuffer: 1024 * 1024 },
         ),
       );
-      expect({ error: result.error, signal: child?.signalCode, code: result.status }).toEqual({
-        error: undefined,
-        signal: null,
-        code: exitCode,
-      });
+      expect(result).toMatchObject({ error: undefined, status: exitCode });
       expect(JSON.parse(result.stdout)).toEqual({ mode, outcome: "recorded" });
       expect(result.stderr).toContain("CLI cleanup timed out: native-write after 100ms");
       expect(JSON.parse(fs.readFileSync(exitPath, "utf8"))).toEqual({
@@ -110,10 +91,8 @@ it.concurrent.for([
         reportedErrors: mode === "failure" ? 1 : 0,
       });
       using database = new DatabaseSync(databasePath, { readOnly: true });
-      expect(database.prepare("SELECT value FROM observations ORDER BY value").all()).toEqual([
-        { value: 42 },
-        { value: 99 },
-      ]);
+      const rows = database.prepare("SELECT value FROM observations ORDER BY value").all();
+      expect(rows).toEqual([{ value: 42 }, { value: 99 }]);
     });
   },
 );
