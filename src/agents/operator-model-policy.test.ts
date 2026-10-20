@@ -70,20 +70,11 @@ it("derives membership from source models, aliases, wildcards, and explicit empt
 });
 
 it("replaces a denied default with an existing automatic fallback without granting a manual override", () => {
-  const policy = prepareOperatorModelPolicy({
-    cfg,
-    policy: { deny: ["vendor/primary", "vendor/restricted-*"] },
-    manifestPlugins: [],
-  });
+  const denied = ["vendor/primary", "vendor/restricted-*"];
+  const policy = prepareOperatorModelPolicy({ cfg, policy: { deny: denied }, manifestPlugins: [] });
+  const defaults = { cfg, policy, allows: () => false, manifestPlugins: [] };
   const resolve = (agentId: string, model: string) =>
-    resolveOperatorModelDefault({
-      cfg,
-      policy,
-      agentId,
-      model: { provider: "vendor", model },
-      allows: () => false,
-      manifestPlugins: [],
-    });
+    resolveOperatorModelDefault({ ...defaults, agentId, model: { provider: "vendor", model } });
   expect(resolve("shared", "primary")).toEqual({ provider: "vendor", model: "fallback" });
   expect(resolve("other", "other")).toBeUndefined();
 });

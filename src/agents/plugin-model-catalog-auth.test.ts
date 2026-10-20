@@ -26,25 +26,30 @@ import {
   replacePersistedPluginModelCatalogs as replaceCatalogs,
 } from "./plugin-model-catalog.js";
 
-const sharedStore = {
-  version: 1,
-  profiles: {
-    "fixture:shared": {
-      type: "oauth",
-      provider: "fixture",
-      access: "synthetic-access",
-      refresh: "synthetic-refresh",
-      expires: 0,
-    },
-  },
-} satisfies AuthProfileStore;
+function store(id: string, profile: AuthProfileStore["profiles"][string]): AuthProfileStore {
+  return { version: 1, profiles: { [id]: profile } };
+}
 
-const localStore = {
-  version: 1,
-  profiles: {
-    "fixture:local": { type: "api_key", provider: "fixture", key: "synthetic-key" },
-  },
-} satisfies AuthProfileStore;
+const sharedStore = store("fixture:shared", {
+  type: "oauth",
+  provider: "fixture",
+  access: "synthetic-access",
+  refresh: "synthetic-refresh",
+  expires: 0,
+});
+const localStore = store("fixture:local", {
+  type: "api_key",
+  provider: "fixture",
+  key: "synthetic-key",
+});
+
+function authOwner(
+  databasePath: string,
+  credentials: Record<string, string[]>,
+  kind: "agent" | "shared-state" = "agent",
+) {
+  return { databasePath, kind, credentials };
+}
 
 async function seedAuthRows(state: OpenClawTestState, local: unknown = localStore) {
   const shared = openOpenClawStateDatabase({ env: state.env });
@@ -82,18 +87,12 @@ it("captures cold shared and local credentials from the explicit root through wo
           async () => {
             // These spies belong to the parent; the real worker isolates read the seeded rows.
             await expect(capturePluginModelCatalogAuth(agentDir, state.env)).resolves.toEqual([
-              {
-                databasePath: sharedPath,
-                kind: "shared-state",
-                credentials: {
-                  "fixture:shared": ["synthetic-access", "synthetic-refresh"],
-                },
-              },
-              {
-                databasePath: localPath,
-                kind: "agent",
-                credentials: { "fixture:local": ["synthetic-key"] },
-              },
+              authOwner(
+                sharedPath,
+                { "fixture:shared": ["synthetic-access", "synthetic-refresh"] },
+                "shared-state",
+              ),
+              authOwner(localPath, { "fixture:local": ["synthetic-key"] }),
             ]);
           },
         );
@@ -117,6 +116,7 @@ it("refuses an unreadable local store instead of publishing a partial auth snaps
 it("returns committed rows when credential stripping skips invalid planned catalogs", () =>
   withOpenClawTestState({ label: "catalog-auth-receipt" }, async (state) => {
     const agentDir = state.agentDir("helper");
+    const databasePath = resolveAuthProfileDatabasePath(agentDir);
     const catalogContents = (provider: string, apiKey?: string) =>
       JSON.stringify({
         generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -140,7 +140,7 @@ it("returns committed rows when credential stripping skips invalid planned catal
     });
     await closeOpenClawAgentDatabasesAsync();
     {
-      using database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      using database = new DatabaseSync(databasePath);
       database
         .prepare("UPDATE cache_entries SET value_json = NULL WHERE scope = ? AND key = ?")
         .run("plugin-model-catalog-v1", "null-row");
@@ -148,13 +148,7 @@ it("returns committed rows when credential stripping skips invalid planned catal
 
     const publication = await replaceCatalogs({
       agentDir,
-      authSnapshot: [
-        {
-          databasePath: resolveAuthProfileDatabasePath(agentDir),
-          kind: "agent",
-          credentials: { removed: ["synthetic-removed"] },
-        },
-      ],
+      authSnapshot: [authOwner(databasePath, { removed: ["synthetic-removed"] })],
       pluginCatalogWrites: {
         [encode("keep")]: "{",
         [encode("absent")]: "{",
@@ -168,9 +162,7 @@ it("returns committed rows when credential stripping skips invalid planned catal
     ];
     expect(publication).toEqual({ changed: true, catalogs: expected });
     expect(readCatalogs(agentDir)).toEqual(expected);
-    using snapshot = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir), {
-      readOnly: true,
-    });
+    using snapshot = new DatabaseSync(databasePath, { readOnly: true });
     expect(
       snapshot
         .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
