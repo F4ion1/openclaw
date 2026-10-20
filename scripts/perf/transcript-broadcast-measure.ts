@@ -323,7 +323,10 @@ if (linkReaderFixture) {
     if (cfg.plugins.allow?.length) {
       cfg.plugins.allow = [...new Set([...cfg.plugins.allow, "github"])];
     }
-    cfg.gateway = { ...cfg.gateway, github: { host: "code.example" } };
+    cfg.gateway = {
+      ...cfg.gateway,
+      github: { host: "code.example", apiBaseUrl: "https://code.example/api/v3" },
+    };
   }
 }
 if (values["active-work-diagnostics"]) {
