@@ -11,7 +11,13 @@ import {
 import type { BeamStore } from "./store.js";
 import { BEAM_MAX_BODY_BYTES, BEAM_SESSION_SHARE_ROUTE, parseBeamUpload } from "./types.js";
 
-function currentRequestClient(req: IncomingMessage) {
+type BeamRequestClient = {
+  clientIp: string;
+  scopes: readonly string[];
+  profileId?: string;
+};
+
+function currentRequestClient(req: IncomingMessage): BeamRequestClient {
   const client = getPluginRuntimeGatewayRequestScope()?.client;
   return {
     clientIp: client?.clientIp ?? req.socket.remoteAddress ?? "unknown",
@@ -26,9 +32,10 @@ function canPublish(scopes: readonly string[]): boolean {
 
 export function createBeamRequestHandler(params: {
   store: BeamStore;
+  now?: () => number;
+  resolveClient?: (req: IncomingMessage) => BeamRequestClient;
   resolveControlUiBasePath: () => string | undefined;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
-  const now = Date.now;
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: 60_000,
     maxRequests: 60,
@@ -40,7 +47,7 @@ export function createBeamRequestHandler(params: {
   });
 
   return async (req, res) => {
-    const client = currentRequestClient(req);
+    const client = params.resolveClient?.(req) ?? currentRequestClient(req);
     if (!canPublish(client.scopes)) {
       sendJson(res, 403, { ok: false, error: "operator.write is required" });
       return true;
@@ -78,7 +85,7 @@ export function createBeamRequestHandler(params: {
       }
       const revalidatePublisher = getPluginRuntimeGatewayRequestScope()?.revalidate;
       await revalidatePublisher?.();
-      const receivedAt = now();
+      const receivedAt = params.now?.() ?? Date.now();
       await params.store.upload(parsed.value, {
         receivedAt,
         uploaderProfileId: client.profileId,

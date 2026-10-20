@@ -3,12 +3,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
+import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   beamMirrorTestFixture,
-  beamTestListActiveSessionCatalogs,
   beamTestLogger,
   beamTestMirrorConfig,
   beamTestNow,
@@ -27,6 +27,12 @@ import {
 import { BEAM_MAX_ITEMS, parseBeamUpload, type BeamUpload } from "./types.js";
 
 afterEach(() => vi.useRealTimers());
+
+vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-catalog-runtime")>();
+  return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
+});
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -517,7 +523,6 @@ describe("createBeamMirrorRunner", () => {
       async (origin) => {
         const warnings: string[] = [];
         let signal: AbortSignal | undefined;
-        const fetch = globalThis.fetch;
         const fetchFn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
           signal = init?.signal ?? undefined;
           return fetch(input, init);
@@ -657,8 +662,9 @@ describe("createBeamMirrorService", () => {
       onList: list,
       onRead: read,
     });
-    // Match the catalog binding used by the fixture's mirror module.
-    const listCatalogs = vi.mocked(beamTestListActiveSessionCatalogs).mockReturnValue([catalog]);
+    const listCatalogs = vi
+      .spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs")
+      .mockReturnValue([catalog]);
     const upload = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
       response: new Response("{}", { status: 200 }),
       finalUrl: "https://team.example/api/v1/beam/sessions",

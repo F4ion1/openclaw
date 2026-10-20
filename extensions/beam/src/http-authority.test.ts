@@ -22,17 +22,12 @@ function uploadRequest(store: ReturnType<typeof memoryStore>) {
   req.push(JSON.stringify(sampleUpload()));
   req.push(null);
   const res = new ServerResponse(req);
-  const originalNow = Date.now;
-  Date.now = () => 100;
-  try {
-    const handler = createBeamRequestHandler({
-      store,
-      resolveControlUiBasePath: () => undefined,
-    });
-    return { req, res, run: () => handler(req, res) };
-  } finally {
-    Date.now = originalNow;
-  }
+  const handler = createBeamRequestHandler({
+    store,
+    now: () => 100,
+    resolveControlUiBasePath: () => undefined,
+  });
+  return { req, res, run: () => handler(req, res) };
 }
 
 describe("Beam publisher authority continuation", () => {

@@ -10,10 +10,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import {
-  listActiveSessionCatalogs,
-  type ActiveSessionCatalog,
-} from "openclaw/plugin-sdk/session-catalog-runtime";
+import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, vi } from "vitest";
@@ -27,73 +24,19 @@ import {
   type BeamUpload,
 } from "./types.js";
 
-export { listActiveSessionCatalogs as beamTestListActiveSessionCatalogs };
-
-const beamRequestScope = vi.hoisted(() => vi.fn());
-// mock-isolation: HTTP fixtures supply admitted identities at the request-scope boundary.
-vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
-  getPluginRuntimeGatewayRequestScope: beamRequestScope,
-}));
-vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-catalog-runtime")>();
-  return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-  beamRequestScope.mockReset();
-  vi.mocked(listActiveSessionCatalogs).mockReset();
-});
-
-function withBeamTestClock<T>(now: () => number, create: () => T): T {
-  const originalNow = Date.now;
-  Date.now = now;
-  try {
-    return create();
-  } finally {
-    Date.now = originalNow;
-  }
-}
-
-type BeamTestClient = {
-  clientIp: string;
-  scopes: readonly string[];
-  profileId?: string;
-};
-type BeamHandlerOptions = Partial<Parameters<typeof createBeamRequestHandler>[0]> & {
-  now?: () => number;
-  resolveClient?: (req: IncomingMessage) => BeamTestClient;
-};
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 export function beamTestHandler(
   store: BeamStore,
-  options: BeamHandlerOptions = {},
+  options: Partial<Parameters<typeof createBeamRequestHandler>[0]> = {},
   failureStatus = 500,
 ) {
-  const {
-    now = Date.now,
-    resolveClient = (): BeamTestClient => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] }),
-    ...handlerOptions
-  } = options;
-  const handler = withBeamTestClock(now, () =>
-    createBeamRequestHandler({
-      resolveControlUiBasePath: () => undefined,
-      ...handlerOptions,
-      store,
-    }),
-  );
+  const handler = createBeamRequestHandler({
+    resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] }),
+    resolveControlUiBasePath: () => undefined,
+    ...options,
+    store,
+  });
   return (req: IncomingMessage, res: ServerResponse) => {
-    const client = resolveClient(req);
-    beamRequestScope.mockReturnValue({
-      client: {
-        clientIp: client.clientIp,
-        connect: { scopes: client.scopes },
-        authenticatedUserProfile: client.profileId ? { profileId: client.profileId } : undefined,
-      },
-    });
     void handler(req, res).catch((error: unknown) => {
       if (!res.writableEnded) {
         res.statusCode = failureStatus;
@@ -217,30 +160,18 @@ export function createBeamTestCatalog(
   };
 }
 
-type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0] & {
-  fetchFn?: typeof fetch;
-  now?: () => number;
-  listCatalogs?: () => ActiveSessionCatalog[];
-};
+type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0];
 export function createBeamTestRunner({
   endpoint,
-  now = () => beamTestNow,
-  listCatalogs = () => [],
-  fetchFn,
   ...options
 }: Pick<RunnerOptions, "listCatalogs"> & Partial<RunnerOptions> & { endpoint?: string }) {
-  vi.mocked(listActiveSessionCatalogs).mockImplementation(listCatalogs);
-  if (fetchFn) {
-    vi.stubGlobal("fetch", fetchFn);
-  }
-  return withBeamTestClock(now, () =>
-    createBeamMirrorRunner({
-      runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
-      logger: beamTestLogger,
-      signal: new AbortController().signal,
-      ...options,
-    }),
-  );
+  return createBeamMirrorRunner({
+    runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
+    logger: beamTestLogger,
+    now: () => beamTestNow,
+    signal: new AbortController().signal,
+    ...options,
+  });
 }
 
 export function createScheduledBeamTestRunner(options: Parameters<typeof createBeamTestRunner>[0]) {
