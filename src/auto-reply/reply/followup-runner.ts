@@ -442,6 +442,7 @@ export function createFollowupRunner(
         disposition = { kind: "retry", error };
       }
     } finally {
+      await activitySummaryCompletion?.settle();
       const claim = queued.controllerClaim ?? queued.controllerInput?.claim;
       if (
         disposition.kind === "retry" &&

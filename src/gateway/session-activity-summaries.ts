@@ -124,6 +124,7 @@ export function createSessionActivitySummaries(deps: {
   let pumpJob: GatewayScheduledJob | undefined;
   const owner = Symbol("activity-summary-owner");
   let disposed = false;
+  let stopping = false;
   const now = () => deps.scheduler.now();
   const modelRef = (target: ActivitySummaryTarget) =>
     resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId: target.agentId });
@@ -160,6 +161,7 @@ export function createSessionActivitySummaries(deps: {
   };
   const drop = (state: Tracked) => {
     state.controller?.abort(new ActivitySummaryCancelledError());
+    state.completion?.discard();
     states.delete(activitySummaryScope(state));
     const index = queue.indexOf(state);
     if (index >= 0) {
@@ -168,7 +170,7 @@ export function createSessionActivitySummaries(deps: {
     setSessionActivitySummaryState(state, owner);
   };
   const canTrack = (target: ActivitySummaryTarget) =>
-    !disposed &&
+    !stopping &&
     !isCronSessionKey(target.key) &&
     !isSubagentSessionKey(target.key) &&
     !isIncognitoSessionKey(target.key) &&
@@ -209,6 +211,10 @@ export function createSessionActivitySummaries(deps: {
         (candidate) => !candidate.inFlight && !queue.includes(candidate),
       );
       if (!evictable) {
+        return undefined;
+      }
+      if (evictable.completion?.pending()) {
+        void trackAdmission(evictable.completion.flush(true));
         return undefined;
       }
       drop(evictable);
@@ -402,22 +408,22 @@ export function createSessionActivitySummaries(deps: {
         totalMessages: snapshot.totalMessages,
         omittedContent: omitted,
       };
-      if (state.completion) {
-        assertCurrentOwner(state, ref);
-        assertCurrentEntry(state, state.entry);
-        state.completion.offer(summary);
-      } else {
-        // Sessions without a reply owner (for example archive-only recaps) have no carrier.
-        const committed = await applySessionEntryOperation(
+      const persist = (onCommitted?: (entry: SessionEntry) => void) =>
+        applySessionEntryOperation(
           scope(state),
           { kind: "activity-summary", summary, sessionKey: state.key },
           {
             preserveActivity: true,
-            workerGuard: {
-              assertCurrent: () => assertCurrentOwner(state, ref),
-            },
+            workerGuard: { assertCurrent: () => assertCurrentOwner(state, ref) },
+            onCommitted,
           },
         );
+      if (state.completion) {
+        assertCurrentOwner(state, ref);
+        assertCurrentEntry(state, state.entry);
+        state.completion.offer(summary, persist);
+      } else {
+        const committed = await persist();
         if (!committed || !current(state)) {
           state.dirty = true;
           return;
@@ -491,6 +497,7 @@ export function createSessionActivitySummaries(deps: {
         () => ownedWork.drain(),
       );
       state.controller = undefined;
+      await state.completion?.flush();
       state.inFlight = false;
       if (current(state) && (state.retryPending || (!state.retryAt && (partial || state.dirty)))) {
         schedule(state, state.retryPending || partial || state.immediate);
@@ -500,7 +507,7 @@ export function createSessionActivitySummaries(deps: {
   const pump = () => {
     pumpJob?.cancel();
     pumpJob = undefined;
-    if (disposed || deps.scheduler.signal.aborted) {
+    if (stopping || deps.scheduler.signal.aborted) {
       return;
     }
     while (running.size < 2 && queue.length) {
@@ -622,14 +629,21 @@ export function createSessionActivitySummaries(deps: {
       const target = eventTarget(requested.key, requested.agentId);
       const state = target && admit(target, entry, requested.storePath);
       return state
-        ? beginActivitySummaryCompletion(state, (committed) => {
-            state.entry = { ...state.entry, activitySummary: committed.activitySummary };
-            publish(
-              state,
-              state.dirty || state.completion?.pending() ? "updating" : "current",
-              true,
-            );
-          })
+        ? beginActivitySummaryCompletion(
+            state,
+            (committed) => {
+              state.entry = { ...state.entry, activitySummary: committed.activitySummary };
+              publish(
+                state,
+                state.dirty || state.completion?.pending() ? "updating" : "current",
+                true,
+              );
+            },
+            (error) => {
+              publish(state, "unavailable");
+              log.warn("Activity recap persistence failed", { error: formatErrorMessage(error) });
+            },
+          )
         : undefined;
     },
     ensure,
@@ -676,18 +690,25 @@ export function createSessionActivitySummaries(deps: {
       }
     },
     async dispose() {
-      disposed = true;
+      stopping = true;
       pumpJob?.cancel();
       pumpJob = undefined;
       modelBackoffs.clear();
+      for (const state of states.values()) {
+        state.controller?.abort(new ActivitySummaryCancelledError());
+      }
+      queue.length = 0;
+      await Promise.allSettled(admissions);
+      await Promise.allSettled(running);
+      for (const state of states.values()) {
+        await state.completion?.flush(true);
+      }
+      disposed = true;
       unsubscribeIdentity();
       unsubscribeFacts();
       for (const state of states.values()) {
         drop(state);
       }
-      queue.length = 0;
-      await Promise.allSettled(admissions);
-      await Promise.allSettled(running);
     },
   };
 }

@@ -190,17 +190,23 @@ it("retains an accepted rejected followup's recovery claim until source delivery
   const admission = vi
     .spyOn(followupAdmission, "prepareReplyAgentTurn")
     .mockResolvedValue({ kind: "admitted", configured: undefined, turn });
-  const execution = vi.spyOn(followupExecution, "executeFollowupTurn").mockResolvedValue({
-    commentaryPayloadsEnabled: false,
-    execution: {
-      runId: turn.runId,
-      outcome: { kind: "rejected", payload: { text: "Accepted setup failed", isError: true } },
-    },
-    runStartedAt: context.runStartedAt,
-    sessionCtx: {},
-    pendingToolTasks: new Set(),
-    progress: { drain: async () => {} },
-  });
+  const execution = vi
+    .spyOn(followupExecution, "executeFollowupTurn")
+    .mockImplementation(async (params) => {
+      const completed: Awaited<ReturnType<typeof followupExecution.executeFollowupTurn>> = {
+        commentaryPayloadsEnabled: false,
+        execution: {
+          runId: turn.runId,
+          outcome: { kind: "rejected", payload: { text: "Accepted setup failed", isError: true } },
+        },
+        runStartedAt: context.runStartedAt,
+        sessionCtx: {},
+        pendingToolTasks: new Set(),
+        progress: { drain: async () => {} },
+      };
+      await params.complete?.(completed);
+      return completed;
+    });
   try {
     await withAccountingProvider(() =>
       createFollowupRunner({

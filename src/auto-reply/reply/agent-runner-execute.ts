@@ -178,6 +178,7 @@ export async function executePreparedReplyAgentRun(
     }
     throw error;
   } finally {
+    await activitySummaryCompletion?.settle();
     if (terminalOutcome) {
       onAgentRunTerminalOutcome?.(terminalOutcome);
     }

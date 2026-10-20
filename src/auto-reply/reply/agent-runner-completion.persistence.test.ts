@@ -10,9 +10,18 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import type { SessionActivitySummary } from "../../config/sessions/activity-summary.js";
+import {
+  applySessionEntryOperation,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
+import {
+  beginActivitySummaryCompletion,
+  type PendingSessionActivitySummaryCompletion,
+} from "../../gateway/session-activity-summary-completion.js";
 import { createSessionLifecyclePersistenceOwner } from "../../gateway/session-lifecycle-persistence-owner.js";
 import type { defaultCompleteModel } from "../../gateway/session-observer-model.js";
 import * as observerModel from "../../gateway/session-observer-model.js";
@@ -30,6 +39,7 @@ import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnost
 import { publishAgentDeletionWorkAdmission } from "../../sessions/session-agent-work-admission.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
@@ -38,7 +48,6 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
   createAgentAccountingPersistenceFixture,
@@ -77,8 +86,8 @@ function createFixture() {
   });
 }
 
-it.for(["ready", "late", "abandoned"] as const)(
-  "carries a %s activity recap to completion without a standalone write",
+it.for(["ready", "late-idle", "shutdown", "abandoned", "replaced"] as const)(
+  "persists a %s activity recap without a second reply",
   async (timing, { signal }) => {
     const fixture = await createFixture();
     const sessionKey = fixture.context.sessionKey!;
@@ -96,8 +105,9 @@ it.for(["ready", "late", "abandoned"] as const)(
       },
     );
     const started = createDeferred();
+    const cleanup = createDeferred();
     const result = createDeferred<Awaited<ReturnType<typeof defaultCompleteModel>>>();
-    const published = createDeferred();
+    const work = new AsyncWorkScope();
     const scheduler = createTestGatewayScheduler();
     const prepare = vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue({
       config: cfg,
@@ -112,17 +122,14 @@ it.for(["ready", "late", "abandoned"] as const)(
     const complete = vi
       .spyOn(observerModel, "defaultCompleteModel")
       .mockImplementation(async () => {
+        void trackAsyncWork(() => cleanup.promise);
         started.resolve();
         return result.promise;
       });
     const service = createSessionActivitySummaries({
       scheduler,
       getConfig: () => cfg,
-      onChanged() {
-        if (fixture.read()?.activitySummary) {
-          published.resolve();
-        }
-      },
+      onChanged() {},
     });
     const finishModel = () =>
       result.resolve({
@@ -144,17 +151,19 @@ it.for(["ready", "late", "abandoned"] as const)(
     };
     const observer = observeCompletionCommands();
     try {
-      service.handleEvent({
-        sessionKey,
-        agentId: "main",
-        runId: fixture.context.runId,
-        seq: 1,
-        ts: Date.now(),
-        stream: "lifecycle",
-        data: { phase: "end" },
-      });
+      work.run(() =>
+        service.handleEvent({
+          sessionKey,
+          agentId: "main",
+          runId: fixture.context.runId,
+          seq: 1,
+          ts: Date.now(),
+          stream: "lifecycle",
+          data: { phase: "end" },
+        }),
+      );
       await withinTest(started.promise, signal);
-      if (timing !== "late") {
+      if (timing !== "late-idle") {
         finishModel();
         // Let the model's promise continuations offer their result before accounting starts.
         await new Promise<void>((resolve) => {
@@ -162,7 +171,7 @@ it.for(["ready", "late", "abandoned"] as const)(
         });
         expect(fixture.read()?.activitySummary).toBeUndefined();
       }
-      if (timing !== "abandoned") {
+      if (timing === "ready" || timing === "late-idle") {
         await expect(finalizeReplyAgentRun(fixture.context)).resolves.toMatchObject({
           text: "done",
         });
@@ -172,42 +181,49 @@ it.for(["ready", "late", "abandoned"] as const)(
         ).toHaveLength(1);
       }
       finishModel();
+      if (timing === "replaced") {
+        await replaceSessionEntry(
+          { storePath, sessionKey },
+          {
+            ...fixture.read()!,
+            sessionId: "replacement-session",
+            lifecycleRevision: "replacement",
+          },
+        );
+      }
       if (timing !== "ready") {
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
         await drainSessionStoreWriterQueuesForTest();
-        expect(observer.commands).not.toContain("session.entry.patch.commit");
+        if (timing !== "replaced") {
+          expect(observer.commands).not.toContain("session.entry.patch.commit");
+        }
         expect(fixture.read()?.activitySummary).toBeUndefined();
-        fixture.context.activitySummaryCompletion = service.beginCompletion(
-          { key: sessionKey, agentId: "main", storePath },
-          fixture.read(),
-        );
-        const before = observer.commands.length;
-        await withAgentTurnCompletion(
-          {
-            agentId: "main",
-            storePath,
-            sessionKey,
-            entry: fixture.read(),
-            operation: fixture.context.replyOperation,
-            activitySummaryCompletion: fixture.context.activitySummaryCompletion,
-            publish() {},
-          },
-          async () => {},
-        );
-        expect(observer.commands.slice(before)).not.toContain("session.actor.completeTurn");
-        await finalizeReplyAgentRun(fixture.context);
+        cleanup.resolve();
+        if (timing === "shutdown") {
+          await service.dispose();
+        } else if (timing === "abandoned") {
+          await completion.settle();
+        }
+        // A late result is saved by the recap job's existing idle-settlement tail.
       }
-      await withinTest(published.promise, signal);
+      cleanup.resolve();
+      await withinTest(work.drain(), signal);
+      if (timing === "replaced") {
+        await service.dispose();
+        expect(fixture.read()?.activitySummary).toBeUndefined();
+        return;
+      }
       expect(fixture.read()?.activitySummary).toMatchObject({
         text: "Verified the change.",
         coveredMessages: 1,
       });
       expect(
         observer.commands.filter((command) => command === "session.entry.patch.commit"),
-      ).toHaveLength(0);
+      ).toHaveLength(timing === "ready" ? 0 : 1);
     } finally {
+      cleanup.resolve();
       finishModel();
       await service.dispose();
       await scheduler.stop();
@@ -215,6 +231,65 @@ it.for(["ready", "late", "abandoned"] as const)(
       prepare.mockRestore();
       complete.mockRestore();
     }
+  },
+);
+
+it.for(["refused", "superseded"] as const)(
+  "retains the pending recap after a %s commit",
+  async (scenario) => {
+    const fixture = await createFixture();
+    const sessionKey = fixture.context.sessionKey!;
+    const owner: { completion?: PendingSessionActivitySummaryCompletion } = {};
+    const failed = vi.fn();
+    const completion = beginActivitySummaryCompletion(owner, () => {}, failed);
+    const summary: SessionActivitySummary = {
+      version: 1,
+      text: "First recap",
+      updatedAt: 1,
+      sessionId: fixture.sessionId,
+      lifecycleRevision: "generation-1",
+      generation: null,
+      maxSeq: null,
+      leafEntryId: null,
+      coveredMessages: 0,
+      totalMessages: 0,
+      omittedContent: false,
+    };
+    const offer = (value: SessionActivitySummary) =>
+      owner.completion!.offer(value, (onCommitted) =>
+        applySessionEntryOperation(
+          { storePath, sessionKey },
+          { kind: "activity-summary", sessionKey, summary: value },
+          { preserveActivity: true, result: "none", onCommitted },
+        ),
+      );
+    const newer = { ...summary, text: "Newer recap", updatedAt: 2 };
+    if (scenario === "refused") {
+      const refused = { ...summary, sessionId: "different-session" };
+      offer(refused);
+      await completion.settle();
+      expect(owner.completion!.pending()).toEqual(refused);
+      expect(fixture.read()?.activitySummary).toBeUndefined();
+      offer(newer);
+      await owner.completion!.flush();
+    } else {
+      offer(summary);
+      fixture.context.activitySummaryCompletion = completion;
+      fixture.setMeta({ usage: { input: 1, output: 1 } });
+      const observer = observeCompletionCommands({
+        beforeCommit() {
+          offer(newer);
+        },
+      });
+      try {
+        await finalizeReplyAgentRun(fixture.context);
+      } finally {
+        observer.restore();
+      }
+    }
+    expect(failed).not.toHaveBeenCalled();
+    expect(fixture.read()?.activitySummary?.text).toBe("Newer recap");
+    expect(owner.completion!.pending()).toBeUndefined();
   },
 );
 

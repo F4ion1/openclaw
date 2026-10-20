@@ -42,7 +42,11 @@ export async function withAgentTurnCompletion<T>(
 ): Promise<T> {
   const { storePath, sessionKey, entry, operation } = params;
   if (!storePath || !sessionKey || !entry) {
-    return consume(undefined);
+    try {
+      return await consume(undefined);
+    } finally {
+      await params.activitySummaryCompletion?.settle();
+    }
   }
   const writer = params.writer ?? entry;
   const expected = {
@@ -57,7 +61,7 @@ export async function withAgentTurnCompletion<T>(
     }
   };
   assertCurrent();
-  const result = await withSessionActor(
+  const pending = withSessionActor(
     { agentId: params.agentId, storePath, sessionKey },
     { assertCurrent, assertReadable: assertCurrent },
     async (actor) => {
@@ -240,6 +244,12 @@ export async function withAgentTurnCompletion<T>(
       }
     },
   );
+  let result: Awaited<typeof pending>;
+  try {
+    result = await pending;
+  } finally {
+    await params.activitySummaryCompletion?.settle();
+  }
   if (!result) {
     throw new Error("Terminal accounting session is unavailable");
   }
