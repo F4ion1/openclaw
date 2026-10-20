@@ -531,6 +531,7 @@ function artifactRecoveryJobs(workflow) {
 
 async function artifactRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
   const producers = [];
+  let pending = false;
   for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(workflow)) {
     const matches = parentJobs.filter(
       (job) => job.name === jobName && Number(job.run_attempt) === plan.parentRunAttempt,
@@ -543,7 +544,8 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       continue;
     }
     if (job.status !== "completed") {
-      return undefined;
+      pending = true;
+      continue;
     }
     const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
     const dispatches = [
@@ -582,7 +584,7 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
   if (new Set(producers.map((producer) => producer.runId)).size !== producers.length) {
     throw new Error("Original artifact producer dispatch identities overlap");
   }
-  return producers;
+  return { pending, producers };
 }
 
 function assertRootRunIdentity(run, source, allowNewerAttempt = false) {
@@ -715,7 +717,7 @@ export async function preflightContinuation(
       throw new Error("continuation differs from the authenticated original publication plan");
     }
   }
-  const artifactProducers = await artifactRecoveryProducers(
+  const artifactRecovery = await artifactRecoveryProducers(
     plan,
     parentJobs,
     client,
@@ -749,8 +751,8 @@ export async function preflightContinuation(
   }
   return {
     ...sourceRun,
-    artifactProducers: artifactProducers ?? [],
-    pendingArtifactProducers: artifactProducers === undefined,
+    artifactProducers: artifactRecovery.producers,
+    pendingArtifactProducers: artifactRecovery.pending,
     parentBinding: source,
   };
 }

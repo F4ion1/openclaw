@@ -523,6 +523,56 @@ describe("FRV continuation preflight", () => {
     expect(fixture.client.rerunFailed).toHaveBeenCalledWith("82");
   });
 
+  it("recovers a failed npm producer while the Docker dispatch job is still active", async () => {
+    const fixture = artifactFixture("npm");
+    fixture.producer.conclusion = "failure";
+    const readParentJobs = fixture.client.getParentJobs;
+    let parentJobsRead = 0;
+    fixture.client.getParentJobs = async () => {
+      parentJobsRead += 1;
+      return (await readParentJobs()).map((entry) =>
+        entry.name === "Prepare release Docker artifacts"
+          ? Object.assign(entry, {
+              id: 91,
+              status: parentJobsRead === 1 ? "in_progress" : "completed",
+              conclusion: parentJobsRead === 1 ? null : "skipped",
+            })
+          : entry,
+      );
+    };
+    let parentAttempt = 1;
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id: string) =>
+      id === "77"
+        ? rootRun(parentAttempt, parentAttempt === 1 ? "failure" : "success")
+        : structuredClone(await read(id)),
+    );
+    fixture.client.rerunFailed.mockImplementation(async (id: string) => {
+      expect(id).toBe("81");
+      fixture.producer.run_attempt = 2;
+      fixture.producer.conclusion = "success";
+    });
+    fixture.client.rerunParent.mockImplementation(async () => {
+      parentAttempt = 2;
+    });
+    vi.useFakeTimers();
+    try {
+      const result = expect(
+        continueFailed(
+          fixture.plan,
+          "77",
+          { ...fixture.client, verify: async () => "{}" },
+          { operationDeadline: Date.now() + 60_000 },
+        ),
+      ).resolves.toMatchObject({ action: "reran-parent" });
+      await Promise.all([result, vi.advanceTimersByTimeAsync(60_000)]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(fixture.client.rerunFailed).toHaveBeenCalledExactlyOnceWith("81");
+    expect(fixture.client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
+  });
+
   it("does not invent rerunnable producers for retained publication artifacts", async () => {
     const fixture = artifactFixture("npm");
     Reflect.set(fixture.plan, "evidenceReuse", { requested: true });
