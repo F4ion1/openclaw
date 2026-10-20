@@ -322,7 +322,7 @@ describe("original publication admission reader", () => {
       const operation = restoreOriginalPublicationAdmission({
         request: fixture.request,
         client,
-        ...(planSource === "cached" ? { cachedPlan: fixture.plan } : {}),
+        cachedPlan: planSource === "cached" ? fixture.plan : undefined,
       });
       if (planSource === "wrong-producer") {
         await expect(operation).rejects.toThrow("artifact producer mismatch");
