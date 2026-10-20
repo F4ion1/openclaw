@@ -58,6 +58,9 @@ drain, new suite, self-check, and reset requests return HTTP 503. Unaccepted req
 at the existing HTTP shutdown deadline; a suite whose planning crosses shutdown
 cannot start.
 
+A self-check execution or report-write error completes its recorded outcome as
+failed. The request still returns the original error, and a later run can start.
+
 For faster QA Lab UI iteration without rebuilding the Docker image each time,
 start the stack with a bind-mounted QA Lab bundle:
 
