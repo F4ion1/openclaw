@@ -29,6 +29,8 @@ import type {
   PendingInputMutation,
   PendingInputMutationReceipt,
 } from "./session-pending-input-operations.types.js";
+import { projectSessionLifecyclePatch } from "./session-run-lifecycle-projection.js";
+import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle.types.js";
 import type {
   SessionSourcePredicate,
   SessionSourceValidation,
@@ -101,13 +103,14 @@ export function applySessionActorPhaseWithBackend(
         "Session actor lifecycle changed before its durable phase",
       );
     }
+    const base = defer ? (entryUpdate ?? entry) : entry;
     const next = {
-      ...entry,
+      ...base,
       ...patch,
       ...(patch.restartRecoveryTerminalRunIds
         ? {
             restartRecoveryTerminalRunIds: mergeRestartRecoveryTerminalRunIds(
-              entry.restartRecoveryTerminalRunIds,
+              base.restartRecoveryTerminalRunIds,
               patch.restartRecoveryTerminalRunIds,
             ),
           }
@@ -138,6 +141,7 @@ export function applySessionActorPhaseWithBackend(
   };
   let result: SessionActorPhaseResults[SessionActorPhase];
   let pendingInputMutationReceipt: PendingInputMutationReceipt | undefined;
+  let lifecycleEffects: SessionLifecyclePatchEffects | undefined;
   switch (command.type) {
     case "session.actor.acceptInput": {
       const { pending, expectedState, lifecycle: patch } = command.input;
@@ -284,12 +288,21 @@ export function applySessionActorPhaseWithBackend(
     }
     case "session.actor.completeTurn": {
       const { turn: input, bookkeeping } = command.input;
+      if (command.input.lifecyclePatch) {
+        const entry = requireEntry();
+        const projection = projectSessionLifecyclePatch(entry, command.input.lifecyclePatch);
+        if (projection.patch) {
+          entryUpdate = { ...entry, ...projection.patch };
+          lifecycleEffects = projection.effects;
+        }
+      }
+      const lifecycleEntry = entryUpdate ?? hot.entry;
       const pendingFinalDelivery = command.input.pendingFinalDelivery
         ? {
             ...command.input.pendingFinalDelivery,
-            sourceRunId: hot.entry
+            sourceRunId: lifecycleEntry
               ? getRestartRecoveryPendingFinalSourceRunId(
-                  hot.entry,
+                  lifecycleEntry,
                   command.input.pendingFinalDelivery.context,
                 )
               : undefined,
@@ -469,5 +482,5 @@ export function applySessionActorPhaseWithBackend(
   if (committedTurn) {
     committedTurn.result.sessionEntry = structuredClone(requireEntry());
   }
-  return { value: result, pendingInputMutationReceipt, reducers };
+  return { value: result, pendingInputMutationReceipt, lifecycleEffects, reducers };
 }

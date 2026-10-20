@@ -286,7 +286,7 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
       }),
     };
   });
-  mocks.execute.mockImplementation(async ({ turn }) => {
+  mocks.execute.mockImplementation(async ({ turn, complete }) => {
     turn.operation.setPhase("running");
     markReplyOperationExecutionStarted(turn.operation);
     const source = turn.queued.queuedFollowupReplyDisposition;
@@ -307,7 +307,7 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
     execution.runId = turn.runId;
     execution.outcome.resolved = { provider: "test", model: "test" };
     execution.outcome.result.meta = { durationMs: 0 };
-    return {
+    const result = {
       commentaryPayloadsEnabled: false,
       execution,
       runStartedAt: Date.now(),
@@ -315,6 +315,8 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
       pendingToolTasks: new Set(),
       progress: { drain: async () => {} },
     } satisfies FollowupExecutionResult;
+    await complete?.(result);
+    return result;
   });
   const runner = async (run: FollowupRun) => {
     try {

@@ -1,18 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { readProviderRefusalReview } from "@openclaw/llm-core/diagnostics";
-import type { SessionProviderReview } from "../config/sessions/provider-review.types.js";
+import type {
+  ProviderReviewTarget,
+  SessionProviderReview,
+} from "../config/sessions/provider-review.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
-
-export type ProviderReviewTarget = {
-  agentId: string;
-  storePath: string;
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision?: string;
-};
 
 declare const acknowledgmentBrand: unique symbol;
 /** Host-issued capability; serialized request metadata cannot create one. */

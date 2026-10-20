@@ -52,7 +52,7 @@ import type {
 } from "./session-actor-memory-usage-contract.js";
 import type { SessionActorAuthority, SessionActorHotState } from "./session-actor-state.types.js";
 import type { PendingInputCustodyCandidate } from "./session-pending-input-history.types.js";
-import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle-projection.js";
+import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle.types.js";
 import type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 
 export type SessionActorStorageReads = SessionActorMemoryConversationReads &

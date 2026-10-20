@@ -22,3 +22,22 @@ export type SessionProviderReviewComparison = {
   expectedReview: Readonly<SessionProviderReview> | undefined;
   nextReview: SessionProviderReview | undefined;
 };
+
+export type ProviderReviewTarget = {
+  agentId: string;
+  storePath: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+};
+
+/** Carried only by the existing run owner; never serialized into event metadata. */
+export type ProviderReviewTerminalFact = Readonly<{
+  target: Readonly<ProviderReviewTarget>;
+  review: Readonly<SessionProviderReview>;
+  expectedWriterRunId: string;
+  lifecycleGeneration: string;
+  lifecycleStartedAt?: number;
+  capturedAtMs: number;
+  assertCurrent: () => void;
+}>;

@@ -3,22 +3,42 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
+import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
+import { createSessionLifecyclePersistenceOwner } from "../../gateway/session-lifecycle-persistence-owner.js";
 import type { defaultCompleteModel } from "../../gateway/session-observer-model.js";
 import * as observerModel from "../../gateway/session-observer-model.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
+import {
+  bindAgentRunTerminalWriteSettlement,
+  captureAgentRunTerminalPersistence,
+  drainAgentRunTerminalWrites,
+} from "../../infra/agent-run-terminal-writes.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { publishAgentDeletionWorkAdmission } from "../../sessions/session-agent-work-admission.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
   createAgentAccountingPersistenceFixture,
@@ -58,7 +78,7 @@ function createFixture() {
 }
 
 it.for(["ready", "late", "abandoned"] as const)(
-  "persists a %s activity recap without holding up terminal accounting",
+  "carries a %s activity recap to completion without a standalone write",
   async (timing, { signal }) => {
     const fixture = await createFixture();
     const sessionKey = fixture.context.sessionKey!;
@@ -151,8 +171,34 @@ it.for(["ready", "late", "abandoned"] as const)(
           observer.commands.filter((command) => command === "session.actor.completeTurn"),
         ).toHaveLength(1);
       }
-      completion.release();
       finishModel();
+      if (timing !== "ready") {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await drainSessionStoreWriterQueuesForTest();
+        expect(observer.commands).not.toContain("session.entry.patch.commit");
+        expect(fixture.read()?.activitySummary).toBeUndefined();
+        fixture.context.activitySummaryCompletion = service.beginCompletion(
+          { key: sessionKey, agentId: "main", storePath },
+          fixture.read(),
+        );
+        const before = observer.commands.length;
+        await withAgentTurnCompletion(
+          {
+            agentId: "main",
+            storePath,
+            sessionKey,
+            entry: fixture.read(),
+            operation: fixture.context.replyOperation,
+            activitySummaryCompletion: fixture.context.activitySummaryCompletion,
+            publish() {},
+          },
+          async () => {},
+        );
+        expect(observer.commands.slice(before)).not.toContain("session.actor.completeTurn");
+        await finalizeReplyAgentRun(fixture.context);
+      }
       await withinTest(published.promise, signal);
       expect(fixture.read()?.activitySummary).toMatchObject({
         text: "Verified the change.",
@@ -160,9 +206,8 @@ it.for(["ready", "late", "abandoned"] as const)(
       });
       expect(
         observer.commands.filter((command) => command === "session.entry.patch.commit"),
-      ).toHaveLength(timing === "ready" ? 0 : 1);
+      ).toHaveLength(0);
     } finally {
-      completion.release();
       finishModel();
       await service.dispose();
       await scheduler.stop();
@@ -445,3 +490,132 @@ it("rechecks the live reply operation at the final commit boundary", async () =>
     observer.restore();
   }
 });
+
+it.each(["commit", "rollback", "publication-failure", "deletion"] as const)(
+  "settles lifecycle and final delivery in one actor request after %s",
+  async (mode) => {
+    const fixture = await createFixture();
+    const { context, sessionId } = fixture;
+    const sessionKey = context.sessionKey!;
+    const runId = context.runId;
+    context.followupRun.run.agentId = "main";
+    setRuntimeConfigSnapshot(context.cfg);
+    const initial = { ...context.activeSessionEntry!, lifecycleRunId: runId, startedAt: 1_000 };
+    await fixture.replace(initial);
+    const before = fixture.read();
+    context.activeSessionEntry = initial;
+    const lifecycleGeneration = getAgentRunLifecycleGeneration();
+    const admission = prepareAgentCommandExecutionIdentity({
+      opts: { message: "Complete the request." },
+      prepared: {
+        cfg: context.cfg,
+        runId,
+        sessionAgentId: "main",
+        sessionId,
+        sessionKey,
+        sessionEntry: initial,
+        storePath,
+      },
+      ingress: { kind: "system", boundary: "completion-test", state: "present" },
+      lifecycleGeneration,
+    });
+    registerAgentRunContext(runId, { sessionKey, sessionId, agentId: "main", lifecycleGeneration });
+    bindAgentRunTerminalWriteSettlement(admission.operationalRunInstance, true);
+    context.completionInstance = admission.operationalRunInstance;
+    const owner = createSessionLifecyclePersistenceOwner();
+    const captured = captureAgentRunTerminalPersistence(runId);
+    const deletionOperationId = `completion-deletion-${runId}`;
+    const observer = observeCompletionCommands({
+      beforeCommit() {
+        if (mode === "rollback") {
+          throw new Error("refuse fused completion");
+        }
+        if (mode === "deletion") {
+          publishAgentDeletionWorkAdmission({ agentId: "main" }, deletionOperationId, true);
+        }
+      },
+    });
+    const persistence = owner.observe({
+      sessionKey,
+      agentId: "main",
+      writeContext: captured.writeContext,
+      event: {
+        runId,
+        sessionId,
+        lifecycleGeneration,
+        seq: 2,
+        stream: "lifecycle",
+        ts: 2_000,
+        data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+      },
+    });
+    captured.track?.(persistence);
+    void persistence.catch(() => {});
+    if (mode === "publication-failure") {
+      context.activeSessionStore = Object.freeze({ ...context.activeSessionStore });
+    }
+    try {
+      if (mode === "commit") {
+        await expect(finalizeReplyAgentRun(context)).resolves.toMatchObject({ text: "done" });
+      } else {
+        await expect(finalizeReplyAgentRun(context)).rejects.toThrow(
+          mode === "rollback"
+            ? "refuse fused completion"
+            : mode === "deletion"
+              ? "deletion cleanup is still pending"
+              : /read only|readonly|extensible/i,
+        );
+      }
+      await drainAgentRunTerminalWrites(admission.operationalRunInstance);
+      if (mode === "rollback") {
+        await expect(persistence).rejects.toThrow("refuse fused completion");
+        expect(fixture.read()).toEqual(before);
+      } else if (mode === "deletion") {
+        await expect(persistence).resolves.toBeUndefined();
+        expect(fixture.read()).toEqual(before);
+        expect(observer.commands).not.toContain("session.entry.patch.commit");
+        await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+        // Rollback replays retained outcomes under deletion's live cleanup authority.
+        await withAgentDeletion("main", async (begin) => {
+          const deletion = await begin({
+            agentId: "main",
+            agentDir: root,
+            workspaceDir: root,
+            sessionsDir: path.join(root, "sessions"),
+          });
+          await deletion.rollback();
+        });
+        expect(fixture.read()).toMatchObject({ status: "done", endedAt: 2_000 });
+        expect(fixture.read()?.lifecycleRunId).toBeUndefined();
+        expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+        expect(
+          observer.commands.filter((command) => command === "session.entry.patch.commit"),
+        ).toHaveLength(1);
+      } else {
+        await persistence;
+        expect(fixture.read()).toMatchObject({
+          status: "done",
+          endedAt: 2_000,
+          pendingFinalDelivery: { text: "done" },
+        });
+        expect(fixture.read()?.lifecycleRunId).toBeUndefined();
+      }
+      expect(
+        observer.commands.filter((command) => command === "session.actor.completeTurn"),
+      ).toHaveLength(1);
+      if (mode !== "deletion") {
+        expect(observer.commands).not.toContain("session.entry.patch.commit");
+      }
+    } finally {
+      await drainAgentRunTerminalWrites(admission.operationalRunInstance);
+      await owner.drain();
+      observer.restore();
+      if (mode === "deletion") {
+        publishAgentDeletionWorkAdmission({ agentId: "main" }, deletionOperationId, false);
+      }
+      admission.close();
+      clearAgentRunContext(runId, lifecycleGeneration);
+      clearRuntimeConfigSnapshot();
+    }
+  },
+);

@@ -14,6 +14,7 @@ import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js"
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -75,6 +76,7 @@ afterEach(() => {
 describe("cold restart recovery of native operator input", () => {
   it.each([
     "native source",
+    "native final answer before completion",
     "native steering",
     "peer follow-up",
     "requester continuation after cohort settlement",
@@ -101,6 +103,7 @@ describe("cold restart recovery of native operator input", () => {
         "mismatched lifecycle",
       ].includes(scenario);
       const sourceUnavailable = sourceMissing || sourceMismatch;
+      const finalBeforeCompletion = scenario === "native final answer before completion";
       const inputProvenance: InputProvenance | undefined =
         scenario === "peer follow-up"
           ? {
@@ -220,7 +223,7 @@ describe("cold restart recovery of native operator input", () => {
           };
       await replaceSessionEntry(fixture.target, {
         ...fixture.entry,
-        status: "interrupted",
+        status: finalBeforeCompletion ? undefined : "interrupted",
         lifecycleRunId: fixture.target.sourceRunId,
         restartRecoveryOperatorSource: savedSource,
       });
@@ -237,10 +240,31 @@ describe("cold restart recovery of native operator input", () => {
         ...(scenario === "native steering"
           ? [{ role: "user", content: "Also check its result", timestamp: 2 }]
           : []),
-        { role: "assistant", content: [], stopReason: "aborted", timestamp: 3 },
+        finalBeforeCompletion
+          ? {
+              role: "assistant",
+              content: [{ type: "text", text: "The synthetic task is complete." }],
+              stopReason: "stop",
+              timestamp: 3,
+            }
+          : { role: "assistant", content: [], stopReason: "aborted", timestamp: 3 },
       ];
       for (const message of messages) {
         await appendTranscriptMessage(fixture.target, { cwd: state.workspaceDir, message });
+      }
+      const originalTranscript = finalBeforeCompletion
+        ? await loadTranscriptEvents(fixture.target)
+        : undefined;
+      if (finalBeforeCompletion) {
+        const entry = expectDefined(
+          await readSessionEntryReadOnlyInWorker(fixture.target),
+          "unfinished entry before the completion commit",
+        );
+        expect(entry.lifecycleRunId).toBe(fixture.target.sourceRunId);
+        expect(entry.status).toBeUndefined();
+        expect(entry.endedAt).toBeUndefined();
+        expect(entry.pendingFinalDelivery).toBeUndefined();
+        expect(originalTranscript?.at(-1)).toMatchObject({ message: messages.at(-1) });
       }
 
       // Dispose old SQLite handles and process-lifetime owners. A fresh context
@@ -411,6 +435,29 @@ describe("cold restart recovery of native operator input", () => {
             skipped: 0,
           });
           expect(startTurn).toHaveBeenCalledOnce();
+        }
+        if (originalTranscript) {
+          // The settled claim, not the still-registered continuation, must prevent replay.
+          turnRegistration?.cleanup();
+          turnRegistration = undefined;
+          await expect(
+            markStartupOrphanedMainSessionsForRecovery({ stateDir: state.stateDir, cfg: {} }),
+          ).resolves.toMatchObject({ marked: 0, skipped: 0 });
+          await expect(
+            recoverStore({
+              storeAgentId: "main",
+              storePath: fixture.target.storePath,
+              stateDir: state.stateDir,
+              cfg: config,
+              handledSessionKeys: new Set(),
+              gatewayRuntime: runtime.recovery,
+            }),
+          ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+          expect(startTurn).toHaveBeenCalledOnce();
+          const recoveredTranscript = await loadTranscriptEvents(fixture.target);
+          expect(recoveredTranscript.slice(0, originalTranscript.length)).toEqual(
+            originalTranscript,
+          );
         }
         const jobs = (await loadCronStore(cronStorePath)).jobs;
         if (sourceUnavailable || scenario.includes("after admission")) {

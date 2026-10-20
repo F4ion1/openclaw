@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import {
@@ -13,6 +18,9 @@ import type { SessionEventExecution } from "./session-event-contract.js";
 useBundledProviderPolicyArtifactsForTest(["anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
 const executeAgentTurn = await getRawExecuteAgentTurnForTest();
+const { registerAgentRunContext } = await import("../../infra/agent-run-registry.js");
+const { captureAgentRunTerminalPersistence } =
+  await import("../../infra/agent-run-terminal-writes.js");
 
 function createEventExecution(): SessionEventExecution {
   return { onStarted: vi.fn(), onTerminal: vi.fn() };
@@ -86,4 +94,79 @@ describe("ordinary session event execution", () => {
     ).rejects.toThrow("event settlement retired");
     expect(terminal).toHaveBeenCalledExactlyOnceWith(expect.any(String), "completed");
   });
+
+  it.for([false, true])(
+    "completes before terminal drain and admission close, preserving the execution outcome (failure=%s)",
+    async (fails, { signal }) => {
+      const registry = await vi.importActual<typeof import("../../infra/agent-run-registry.js")>(
+        "../../infra/agent-run-registry.js",
+      );
+      vi.mocked(registerAgentRunContext).mockImplementationOnce(registry.registerAgentRunContext);
+      const terminalWrite = createDeferred();
+      const completionEntered = createDeferred();
+      const failure = new Error("completion failed");
+      const event = createEventExecution();
+      const onAgentRunTerminalOutcome = vi.fn();
+      const followupRun = createFollowupRun();
+      followupRun.run.internalEventExecution = event;
+      let admission: PreparedAgentRunAdmission | undefined;
+      let runId = "";
+      state.runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          runId = params.runId;
+          admission = params.preparedRunAdmission;
+          expect(admission).toBeDefined();
+          await admission!.admit("embedded");
+          const persistence = captureAgentRunTerminalPersistence(runId);
+          expect(persistence.track).toBeDefined();
+          persistence.track!(terminalWrite.promise);
+          return { payloads: [{ text: "done" }], meta: {} };
+        },
+      );
+      let finished = false;
+      const pending = executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
+        complete: async (execution, instance) => {
+          expect(execution.outcome).toMatchObject({ kind: "settled", status: "ok" });
+          expect(instance).toBe(admission!.operationalRunInstance);
+          await admission!.admit("embedded");
+          completionEntered.resolve();
+          if (fails) {
+            throw failure;
+          }
+        },
+      });
+      const observed = pending.then(
+        (value) => {
+          finished = true;
+          return { value };
+        },
+        (error: unknown) => {
+          finished = true;
+          return { error };
+        },
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(completionEntered.promise, pending, "completion was skipped"),
+          signal,
+        );
+        expect(finished).toBe(false);
+        await admission!.admit("embedded");
+        terminalWrite.resolve();
+        if (fails) {
+          expect(await observed).toEqual({ error: failure });
+        } else {
+          expect(await observed).toMatchObject({ value: { outcome: { status: "ok" } } });
+        }
+        await expect(admission!.admit("embedded")).rejects.toThrow("already closed");
+        expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
+        expect(event.onTerminal).toHaveBeenCalledExactlyOnceWith(runId, "completed");
+      } finally {
+        terminalWrite.resolve();
+        await observed;
+        registry.clearAgentRunContext(runId);
+      }
+    },
+  );
 });

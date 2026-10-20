@@ -12,6 +12,7 @@ import type { SessionActorAuthority } from "../../config/sessions/session-actor-
 import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { collectSessionAdmissionReferences } from "../../config/sessions/session-history-eviction-candidates.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -153,7 +154,7 @@ describe
       }
     });
 
-    it("commits transcript appends and metadata pairs, rolls back refused writes, and reopens", async () => {
+    it("commits transcript appends, metadata pairs, and terminal completion, rolls back refused writes, and reopens", async () => {
       const options = { agentId: "main", env: process.env };
       const sessionKey = "agent:main:actor-conformance";
       const sessionId = "actor-conformance";
@@ -231,6 +232,14 @@ describe
             }),
         };
       };
+      const terminalEntry = {
+        updatedAt: 543,
+        status: "done",
+        lastRunId: "completed-run",
+        startedAt: 100,
+        endedAt: 500,
+        runtimeMs: 400,
+      };
       const first = await acquire();
       try {
         const appended = await first.append("first input", true);
@@ -239,10 +248,35 @@ describe
           committed: { kind: "message", value: { snapshot: { ok: true } } },
         });
         const initial = first.actor.snapshot(authority);
-        assert(initial);
+        assert(initial?.entry);
         expect(initial.entry?.sessionId).toBe(sessionId);
-        const patched = await first.actor.patch(
-          { commandId: "warm", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 543 }] },
+        const completion = {
+          bookkeeping: {
+            sessionId,
+            lifecycleRevision: initial.entry.lifecycleRevision ?? null,
+            writerRunId: initial.entry.activeWriterRunId,
+            expectedState: buildRestartRecoveryExpectedState(initial.entry),
+          },
+          lifecyclePatch: {
+            event: {
+              ts: 500,
+              sessionId,
+              runId: "completed-run",
+              data: { phase: "end", startedAt: 100, endedAt: 500 },
+            },
+            currentLifecycleGeneration: "generation",
+            canonicalKey: sessionKey,
+            lifecycleRevision: initial.entry.lifecycleRevision,
+            exactCronRun: false,
+          },
+        };
+        const patched = await first.actor.completeTurn(
+          {
+            ...completion,
+            commandId: "warm",
+            phaseId: "turn",
+            reducers: [{ kind: "activity", updatedAt: 543 }],
+          },
           authority,
         );
         expect(patched).toMatchObject({
@@ -250,11 +284,24 @@ describe
           receipt: { beforeVersion: initial.version },
         });
         const beforeRefusal = first.actor.snapshot(authority);
-        assert(beforeRefusal);
-        expect(beforeRefusal.entry?.updatedAt).toBe(543);
+        assert(beforeRefusal?.entry);
+        expect(beforeRefusal.entry).toMatchObject(terminalEntry);
         expect(
-          await first.actor.patch(
+          await first.actor.completeTurn(
             {
+              ...completion,
+              bookkeeping: {
+                ...completion.bookkeeping,
+                expectedState: buildRestartRecoveryExpectedState(beforeRefusal.entry),
+              },
+              lifecyclePatch: {
+                ...completion.lifecyclePatch,
+                event: {
+                  ...completion.lifecyclePatch.event,
+                  ts: 900,
+                  data: { phase: "error", startedAt: 100, endedAt: 900, error: "refused" },
+                },
+              },
               commandId: "refused",
               phaseId: "turn",
               reducers: [{ kind: "activity", updatedAt: 999 }],
@@ -273,7 +320,7 @@ describe
           error: { message: "synthetic live authority revocation" },
         });
         const afterRefusal = await first.actor.read(authority);
-        expect(afterRefusal.entry?.updatedAt).toBe(543);
+        expect(afterRefusal.entry).toEqual(beforeRefusal.entry);
         // Both engines invalidate attempted-write witnesses, even when the data rolls back.
         expect(afterRefusal.writeToken).not.toBe(beforeRefusal.writeToken);
         expect(afterRefusal.version).not.toEqual(beforeRefusal.version);
@@ -403,7 +450,7 @@ describe
 
       const reopened = await acquire();
       try {
-        expect((await reopened.actor.read(authority)).entry?.updatedAt).toBe(543);
+        expect((await reopened.actor.read(authority)).entry).toMatchObject(terminalEntry);
         expect((await reopened.append("continued input")).failure).toBeUndefined();
         expect(readRows().map((row) => JSON.parse(row.eventJson))).toMatchObject([
           { type: "session", id: sessionId },

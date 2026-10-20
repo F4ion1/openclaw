@@ -44,8 +44,15 @@ vi.mock("./reply-agent-turn-preparation.js", async (importOriginal) => ({
   prepareReplyAgentTurn: (...args: unknown[]) => state.admit(...args),
 }));
 
+// mock-isolation: exercise queue bookkeeping without starting model or runtime execution.
 vi.mock("./followup-turn-execution.js", () => ({
-  executeFollowupTurn: (...args: unknown[]) => state.execute(...args),
+  executeFollowupTurn: async (
+    params: Parameters<typeof import("./followup-turn-execution.js").executeFollowupTurn>[0],
+  ) => {
+    const execution = await state.execute(params);
+    await params.complete?.(execution);
+    return execution;
+  },
 }));
 
 vi.mock("./followup-delivery.js", () => ({
@@ -678,6 +685,33 @@ describe("createFollowupRunner", () => {
     expect(state.deliver).toHaveBeenCalledOnce();
     expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        completion: { kind: "failed", error: failure.message },
+        payloads: [],
+      }),
+    );
+  });
+
+  it("does not replay completed execution when its completion callback fails", async () => {
+    const typing = createTypingController();
+    const turn = createTurn();
+    const failure = new Error("completion accounting failed");
+    const deliver = vi.fn(async () => {});
+    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockResolvedValue(createSettledExecution());
+    state.account.mockRejectedValueOnce(failure);
+
+    await expect(
+      createFollowupRunner({ typing, typingMode: "never", defaultModel: "claude" })(turn.queued),
+    ).resolves.toBeUndefined();
+
+    expect(state.execute).toHaveBeenCalledOnce();
+    expect(state.account).toHaveBeenCalledOnce();
+    expect(state.deliver).not.toHaveBeenCalled();
+    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({

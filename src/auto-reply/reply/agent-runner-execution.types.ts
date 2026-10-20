@@ -6,6 +6,7 @@ import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -123,6 +124,11 @@ export type ReplyAgentTurnContext = {
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = ReplyAgentTurnContext & {
+  /** Settle final bookkeeping while the execution's terminal-write owner is retained. */
+  complete?: (
+    execution: AgentTurnExecutionResult,
+    instance: AgentRunDelegatedAuthority["operationalRunInstance"],
+  ) => Promise<void>;
   /** The admitted queued delivery owner settles every terminal outcome. */
   completionSource?: "reply-dispatch";
   replyThreading?: TemplateContext["ReplyThreading"];

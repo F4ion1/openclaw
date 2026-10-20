@@ -1,4 +1,5 @@
 import { resolveSessionWorkStartError } from "../../../config/sessions/lifecycle.js";
+import type { ProviderReviewTarget } from "../../../config/sessions/provider-review.types.js";
 import { captureAgentRunProviderReview } from "../../../sessions/provider-review-terminal.js";
 import {
   assertSessionProviderReviewWorkStart,
@@ -6,7 +7,6 @@ import {
   createSessionProviderReview,
   readProviderReviewAcknowledgment,
   recordSessionProviderReview,
-  type ProviderReviewTarget,
 } from "../../../sessions/provider-review.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { isIncognitoSessionKey } from "../../../shared/incognito-session-key.js";

@@ -9,10 +9,13 @@ import {
   runSessionActorCommand,
   withSessionActor,
 } from "../../config/sessions/session-actor-scope.js";
+import { projectSessionLifecyclePatch } from "../../config/sessions/session-run-lifecycle-projection.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { logVerbose } from "../../globals.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
+import { takeAgentRunTerminalEntry } from "../../infra/agent-run-terminal-writes.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
@@ -30,6 +33,7 @@ export async function withAgentTurnCompletion<T>(
     entry?: SessionEntry;
     writer?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">;
     operation: ReplyOperation;
+    completionInstance?: AgentRunDelegatedAuthority["operationalRunInstance"];
     activitySummaryCompletion?: SessionActivitySummaryCompletion;
     prepareRestartClaimCleanup?: (entry: SessionEntry) => AgentTurnRestartClaimCleanup | undefined;
     publish(entry: SessionEntry): void;
@@ -72,10 +76,30 @@ export async function withAgentTurnCompletion<T>(
         },
       };
       let snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
+      const terminalEntry = params.completionInstance
+        ? await takeAgentRunTerminalEntry(params.completionInstance, {
+            agentId: params.agentId,
+            storePath,
+            sessionKey,
+          })
+        : undefined;
+      authority.assertCurrent = () => {
+        assertCurrent();
+        terminalEntry?.write.assertCurrent?.();
+      };
       const prepared: Parameters<AgentTurnCompletion["patch"]>[0][] = [];
       let finished = false;
+      const lifecycleEntry = () => {
+        const current = snapshot.entry!;
+        return terminalEntry
+          ? {
+              ...current,
+              ...projectSessionLifecyclePatch(current, terminalEntry.write.lifecycle).patch,
+            }
+          : current;
+      };
       const project = () => {
-        let next = snapshot.entry!;
+        let next = lifecycleEntry();
         const reducers: SessionActorReducer[] = [];
         for (const preparation of prepared) {
           const reducer = typeof preparation === "function" ? preparation(next) : preparation;
@@ -113,58 +137,66 @@ export async function withAgentTurnCompletion<T>(
           }
           finished = true;
           await refresh();
-          let restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
+          let restartClaimCleanup = params.prepareRestartClaimCleanup?.(lifecycleEntry());
           let { reducers } = project();
-          const activitySummary = params.activitySummaryCompletion?.take();
           if (
             reducers.length === 0 &&
             !pendingFinalDelivery &&
             !restartClaimCleanup &&
-            !activitySummary
+            !terminalEntry
           ) {
             return snapshot.entry!;
           }
+          const activitySummary = params.activitySummaryCompletion?.take();
           const committed: { receipt?: SessionActorReceipt } = {};
           const outcome = await runSessionActorCommand(actor, authority, async (current) => {
             snapshot = current ?? actor.snapshot(authority) ?? (await actor.read(authority));
             ({ reducers } = project());
-            restartClaimCleanup = params.prepareRestartClaimCleanup?.(snapshot.entry!);
-            return actor.completeTurn(
-              {
-                commandId: randomUUID(),
-                phaseId: `complete:${operationKey}`,
-                expected: actor.target.database.kind === "memory" ? undefined : snapshot.version,
-                reducers,
-                activitySummary,
-                bookkeeping: {
-                  sessionId: expected.sessionId,
-                  lifecycleRevision: expected.lifecycleRevision ?? null,
-                  writerRunId: expected.writerRunId,
-                  expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
+            restartClaimCleanup = params.prepareRestartClaimCleanup?.(lifecycleEntry());
+            const complete = () =>
+              actor.completeTurn(
+                {
+                  commandId: randomUUID(),
+                  phaseId: `complete:${operationKey}`,
+                  expected: actor.target.database.kind === "memory" ? undefined : snapshot.version,
+                  reducers,
+                  lifecyclePatch: terminalEntry?.write.lifecycle,
+                  activitySummary,
+                  bookkeeping: {
+                    sessionId: expected.sessionId,
+                    lifecycleRevision: expected.lifecycleRevision ?? null,
+                    writerRunId: expected.writerRunId,
+                    expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
+                  },
+                  pendingFinalDelivery,
+                  restartClaimCleanup: restartClaimCleanup?.operation,
                 },
-                pendingFinalDelivery,
-                restartClaimCleanup: restartClaimCleanup?.operation,
-              },
-              authority,
-              {
-                committed: (receipt) => {
-                  committed.receipt = receipt.receipt;
-                  if (activitySummary && receipt.receipt.postimage.entry) {
-                    params.activitySummaryCompletion?.committed(receipt.receipt.postimage.entry);
-                  }
-                  restartClaimCleanup?.committed();
+                authority,
+                {
+                  committed: (receipt) => {
+                    committed.receipt = receipt.receipt;
+                    if (activitySummary && receipt.receipt.postimage.entry) {
+                      params.activitySummaryCompletion?.committed(receipt.receipt.postimage.entry);
+                    }
+                    restartClaimCleanup?.committed();
+                  },
                 },
-              },
-            );
+              );
+            return terminalEntry?.write.run ? terminalEntry.write.run(complete) : complete();
           });
           if (committed.receipt) {
             snapshot = committed.receipt.postimage;
-            params.publish(snapshot.entry!);
+            try {
+              params.publish(snapshot.entry!);
+            } finally {
+              terminalEntry?.committed(snapshot.entry ?? null, committed.receipt.lifecycleEffects);
+            }
           }
           if (
             outcome.kind === "rolled-back" &&
             outcome.reason !== "stale-state" &&
             !pendingFinalDelivery &&
+            !terminalEntry &&
             reducers.every((reducer) => reducer.kind === "usage")
           ) {
             await refresh();
@@ -184,23 +216,28 @@ export async function withAgentTurnCompletion<T>(
           return snapshot.entry!;
         },
       };
-      let value: T;
       try {
-        value = await consume(completion);
-      } catch (error) {
+        let value: T;
         try {
-          await completion.complete();
-        } catch (settlementError) {
-          throw new AggregateError(
-            [error, settlementError],
-            "Terminal accounting failed to settle",
-            { cause: settlementError },
-          );
+          value = await consume(completion);
+        } catch (error) {
+          try {
+            await completion.complete();
+          } catch (settlementError) {
+            throw new AggregateError(
+              [error, settlementError],
+              "Terminal accounting failed to settle",
+              { cause: settlementError },
+            );
+          }
+          throw error;
         }
+        await completion.complete();
+        return { value };
+      } catch (error) {
+        terminalEntry?.failed(error);
         throw error;
       }
-      await completion.complete();
-      return { value };
     },
   );
   if (!result) {

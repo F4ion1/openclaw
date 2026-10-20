@@ -52,6 +52,7 @@ export function createSessionActorCommittedOutcome<
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
+    lifecycleEffects?: SessionActorReceipt["lifecycleEffects"];
     reducers: SessionActorReducerOutcome[];
   };
 }): Extract<SessionActorOutcome<Value>, { kind: "committed" }> {
@@ -103,6 +104,7 @@ export function createSessionActorCommittedOutcome<
       pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
       pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),
+      lifecycleEffects: applied.lifecycleEffects,
       reducers: applied.reducers,
       postimage: after,
     },

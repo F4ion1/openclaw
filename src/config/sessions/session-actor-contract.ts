@@ -33,6 +33,10 @@ import type {
   PendingInputSnapshot,
 } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputWorkerReceipt } from "./session-pending-input.types.js";
+import type {
+  SessionLifecyclePatchEffects,
+  SessionLifecyclePatchInput,
+} from "./session-run-lifecycle.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
@@ -165,7 +169,7 @@ export type SessionActorPhaseInputs = {
       }
     | { append: SessionActorAppend; eventJson?: never };
   completeTurn: (
-    | { turn: SessionTurnPlan; bookkeeping?: never }
+    | { turn: SessionTurnPlan; bookkeeping?: never; lifecyclePatch?: never }
     | {
         turn?: never;
         /** The assistant transcript is already durable; this command must not append it again. */
@@ -176,6 +180,8 @@ export type SessionActorPhaseInputs = {
           expectedState: SessionTranscriptTurnExpectedState;
           lifecycle?: SessionTranscriptTurnLifecyclePatch;
         };
+        /** The terminal event shares the completion write, before bookkeeping reducers. */
+        lifecyclePatch?: SessionLifecyclePatchInput;
       }
   ) & {
     completion?: Extract<PendingInputMutation, { kind: "complete" }>;
@@ -273,6 +279,7 @@ export type SessionActorReceipt = {
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
+  lifecycleEffects?: SessionLifecyclePatchEffects;
   reducers: SessionActorReducerOutcome[];
   /** Complete detached postimage, installed on MAIN before acknowledgement. */
   postimage: SessionActorHotState;

@@ -20,6 +20,7 @@ export async function finalizeReplyAgentRun(
       entry: context.activeSessionEntry,
       writer: context.execution.sessionWriter,
       operation: context.replyOperation,
+      completionInstance: context.completionInstance,
       activitySummaryCompletion: context.activitySummaryCompletion,
       prepareRestartClaimCleanup: context.prepareRestartClaimCleanup,
       publish(entry) {

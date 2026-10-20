@@ -1,20 +1,13 @@
-import type { SessionProviderReview } from "../config/sessions/provider-review.types.js";
+import type {
+  ProviderReviewTarget,
+  ProviderReviewTerminalFact,
+  SessionProviderReview,
+} from "../config/sessions/provider-review.types.js";
 import { getAgentRunContext, getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { snapshotSessionProviderReview, type ProviderReviewTarget } from "./provider-review.js";
-
-/** Carried only by the existing run owner; never serialized into event metadata. */
-export type ProviderReviewTerminalFact = Readonly<{
-  target: Readonly<ProviderReviewTarget>;
-  review: Readonly<SessionProviderReview>;
-  expectedWriterRunId: string;
-  lifecycleGeneration: string;
-  lifecycleStartedAt?: number;
-  capturedAtMs: number;
-  assertCurrent: () => void;
-}>;
+import { snapshotSessionProviderReview } from "./provider-review.js";
 
 const issuedFacts = resolveGlobalSingleton(
   Symbol.for("openclaw.providerReviewTerminalFacts"),

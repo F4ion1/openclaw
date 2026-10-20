@@ -1,3 +1,8 @@
+import type {
+  SessionLifecyclePatchEffects,
+  SessionLifecyclePatchInput,
+} from "../config/sessions/session-run-lifecycle.types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 import {
   getAgentRunContext,
@@ -8,11 +13,33 @@ import type { AgentRunContext } from "./agent-run-registry.types.js";
 
 type OperationalRunInstance = AgentRunDelegatedAuthority["operationalRunInstance"];
 type TerminalWriteContext = { run: <T>(write: () => T) => T };
+export type AgentRunTerminalEntryWrite = {
+  target: { agentId?: string; storePath: string; sessionKey: string };
+  lifecycle: SessionLifecyclePatchInput;
+  run?: TerminalWriteContext["run"];
+  assertCurrent?: () => void;
+  persist: () => Promise<InternalSessionEntry | null>;
+  committed(entry: InternalSessionEntry | null, effects?: SessionLifecyclePatchEffects): void;
+};
+
+type DeferredTerminalEntry = {
+  prepared: Promise<AgentRunTerminalEntryWrite | undefined>;
+  resolve: (entry: InternalSessionEntry | null) => void;
+  reject: (error: unknown) => void;
+};
+
+export type AgentRunTerminalEntryCommit = {
+  write: AgentRunTerminalEntryWrite;
+  committed(entry: InternalSessionEntry | null, effects?: SessionLifecyclePatchEffects): void;
+  failed(error: unknown): void;
+};
+
 type TerminalWrites = {
   owner: AgentRunContext;
   instance: OperationalRunInstance;
   context?: TerminalWriteContext;
   pending: Set<Promise<void>>;
+  entry?: "available" | DeferredTerminalEntry;
 };
 
 const terminalWrites = new WeakMap<AgentRunContext, TerminalWrites>();
@@ -37,10 +64,16 @@ function prepareTerminalWrites(owner: AgentRunContext, instance: OperationalRunI
 }
 
 /** Register settlement before a projected turn can fail prior to runtime admission. */
-export function bindAgentRunTerminalWriteSettlement(instance: OperationalRunInstance): void {
+export function bindAgentRunTerminalWriteSettlement(
+  instance: OperationalRunInstance,
+  deferEntry = false,
+): void {
   const owner = getAgentRunContext(instance.runId);
   if (owner) {
-    prepareTerminalWrites(owner, instance);
+    const current = prepareTerminalWrites(owner, instance);
+    if (deferEntry) {
+      current.entry ??= "available";
+    }
   }
 }
 
@@ -94,6 +127,11 @@ export function clearAgentRunTerminalWriteContext(instance: OperationalRunInstan
 export type CapturedAgentRunTerminalWriteContext = TerminalWriteContext & {
   assertCurrent: () => void;
   track: (persistence: Promise<void>) => void;
+  prepareEntry?: (
+    persist: (
+      defer?: (write: AgentRunTerminalEntryWrite) => Promise<InternalSessionEntry | null>,
+    ) => Promise<void>,
+  ) => Promise<void>;
 };
 
 /** Capture before async session resolution; a replaced candidate revokes this exact capture. */
@@ -139,6 +177,71 @@ function captureAgentRunTerminalWriteContext(
       return context ? context.run(write) : write();
     },
     track: (persistence) => trackTerminalWrite(captured, persistence),
+    prepareEntry: captured.entry
+      ? (persist) => {
+          if (captured.entry !== "available") {
+            return persist();
+          }
+          const ready = Promise.withResolvers<AgentRunTerminalEntryWrite | undefined>();
+          const result = Promise.withResolvers<InternalSessionEntry | null>();
+          captured.entry = {
+            prepared: ready.promise,
+            resolve: result.resolve,
+            reject: result.reject,
+          };
+          const settled = persist((write) => {
+            ready.resolve({
+              ...write,
+              run: context?.run,
+              persist: () => (context ? context.run(write.persist) : write.persist()),
+            });
+            return result.promise;
+          });
+          void settled.then(
+            () => ready.resolve(undefined),
+            () => ready.resolve(undefined),
+          );
+          return settled;
+        }
+      : undefined,
+  };
+}
+
+/** Transfer a prepared lifecycle patch to the same target's final actor transaction. */
+export async function takeAgentRunTerminalEntry(
+  instance: OperationalRunInstance,
+  target: AgentRunTerminalEntryWrite["target"],
+): Promise<AgentRunTerminalEntryCommit | undefined> {
+  const current = operationalTerminalWrites.get(instance);
+  if (!current) {
+    return undefined;
+  }
+  const entry = current.entry;
+  if (!entry || entry === "available") {
+    current.entry = undefined;
+    return undefined;
+  }
+  const write = await entry.prepared;
+  if (
+    !write ||
+    write.target.storePath !== target.storePath ||
+    write.target.sessionKey !== target.sessionKey ||
+    write.target.agentId !== target.agentId
+  ) {
+    return undefined;
+  }
+  current.entry = undefined;
+  return {
+    write,
+    committed(postimage, effects) {
+      try {
+        write.committed(postimage, effects);
+        entry.resolve(postimage);
+      } catch (error) {
+        entry.reject(error);
+      }
+    },
+    failed: entry.reject,
   };
 }
 
@@ -146,6 +249,15 @@ function captureAgentRunTerminalWriteContext(
 export async function drainAgentRunTerminalWrites(instance: OperationalRunInstance): Promise<void> {
   const current = operationalTerminalWrites.get(instance);
   if (current) {
+    const entry = current.entry;
+    current.entry = undefined;
+    if (entry && entry !== "available") {
+      try {
+        entry.resolve((await (await entry.prepared)?.persist()) ?? null);
+      } catch (error) {
+        entry.reject(error);
+      }
+    }
     while (current.pending.size > 0) {
       await Promise.allSettled(current.pending);
     }

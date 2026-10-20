@@ -2,7 +2,7 @@ import type { Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
-import type { SessionLifecyclePatchEffects } from "../config/sessions/session-run-lifecycle-projection.js";
+import type { SessionLifecyclePatchEffects } from "../config/sessions/session-run-lifecycle.types.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 export type UpdateSessionEntry =

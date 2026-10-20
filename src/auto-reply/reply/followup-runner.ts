@@ -21,13 +21,13 @@ import { getReplyOperationSessionReader } from "../../sessions/session-controlle
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
-import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
+import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { createCompactionNoticePayload } from "./compaction-notice.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
-import { executeFollowupTurn } from "./followup-turn-execution.js";
+import { executeFollowupTurn, type FollowupExecutionResult } from "./followup-turn-execution.js";
 import { enqueueGoalContinuation, createGoalContinuationReturn } from "./goal-continuation.js";
 import { completeFollowupRunLifecycle, type FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
@@ -249,97 +249,108 @@ export function createFollowupRunner(
             }
           : undefined,
       );
+      const finalize = async (
+        execution: FollowupExecutionResult,
+        completionInstance?: Parameters<NonNullable<AgentTurnParams["complete"]>>[1],
+      ) => {
+        // A closed execution result is terminal queue work. Commit consumption
+        // before accounting/delivery so their failures cannot replay model or tool effects.
+        disposition = { kind: "consumed" };
+        completion =
+          turn.queued.stalledTurnRecovery === true &&
+          isReplyOperationStalledBeforeOutput(turn.operation)
+            ? // A watchdog stall is a failure, not a user cancel: source owners
+              // surface its last-resort notice through their terminal error.
+              { kind: "failed", error: STALLED_TURN_NOTICE_TEXT }
+            : resolveFollowupCompletion(execution.execution.outcome);
+        try {
+          await execution.progress.drain();
+        } catch (error) {
+          if (completion.kind === "completed") {
+            completion = { kind: "failed", error: formatErrorMessage(error) };
+          }
+          // Execution already settled; replaying the queued prompt could duplicate side effects.
+          defaultRuntime.error?.(
+            `followup queue: progress presentation failed after execution: ${formatErrorMessage(error)}`,
+          );
+          turn.operation.fail("run_failed", error);
+        }
+        // Admission can fail after compaction. Publish its notices only once this
+        // execution is consumed and its terminal delivery owner can close the run.
+        if (
+          admissionNotices.length > 0 &&
+          turn.sendPolicy === "allow" &&
+          turn.queued.currentInboundEventKind !== "room_event"
+        ) {
+          await deliverProgress(turn, admissionNotices, "block");
+        }
+        if (
+          execution.execution.outcome.kind === "settled" &&
+          hasCompletedSourceReplyDeliveryEvidence(execution.execution.outcome.result)
+        ) {
+          await onObservedReplyDelivery();
+        }
+        const deliveryOpts = {
+          ...defaults.opts,
+          sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
+          resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+          resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
+          commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
+          onObservedReplyDelivery,
+        };
+        return await runWithGoalReturn(() =>
+          withAgentTurnCompletion(
+            {
+              agentId: turn.queued.run.agentId,
+              storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+              sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+              entry: turn.session.current(),
+              writer:
+                execution.execution.outcome.kind === "settled"
+                  ? execution.execution.outcome.sessionWriter
+                  : undefined,
+              operation: turn.operation,
+              completionInstance,
+              prepareRestartClaimCleanup:
+                execution.execution.outcome.kind === "settled"
+                  ? turn.restartRecovery?.prepareCompletionCleanup
+                  : undefined,
+              activitySummaryCompletion,
+              publish: (entry) => turn.session.publish(entry),
+            },
+            async (turnCompletion) => {
+              const accounting = await accountFollowupTurn({
+                turn,
+                defaults,
+                execution,
+                completion: turnCompletion,
+              });
+              const resolved = await resolveFollowupDeliveryDecision({
+                turn,
+                execution: execution.execution,
+                accounting,
+                opts: deliveryOpts,
+              });
+              await turnCompletion?.complete();
+              return { decision: resolved, accounting };
+            },
+          ),
+        );
+      };
+      let finalized!: Awaited<ReturnType<typeof finalize>>;
       executionEntered = true;
       const execution = await runWithGoalReturn(() =>
         executeFollowupTurn({
           turn,
           defaults,
+          complete: async (completedExecution, instance) => {
+            finalized = await finalize(completedExecution, instance);
+          },
           onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
           onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
         }),
       );
-      // A closed execution result is terminal queue work. Commit consumption
-      // before accounting/delivery so their failures cannot replay model or tool effects.
-      disposition = { kind: "consumed" };
-      completion =
-        turn.queued.stalledTurnRecovery === true &&
-        isReplyOperationStalledBeforeOutput(turn.operation)
-          ? // A watchdog stall is a failure, not a user cancel: source owners
-            // surface its last-resort notice through their terminal error.
-            { kind: "failed", error: STALLED_TURN_NOTICE_TEXT }
-          : resolveFollowupCompletion(execution.execution.outcome);
-      try {
-        await execution.progress.drain();
-      } catch (error) {
-        if (completion.kind === "completed") {
-          completion = { kind: "failed", error: formatErrorMessage(error) };
-        }
-        // Execution already settled; replaying the queued prompt could duplicate side effects.
-        defaultRuntime.error?.(
-          `followup queue: progress presentation failed after execution: ${formatErrorMessage(error)}`,
-        );
-        operation.fail("run_failed", error);
-      }
-      // Admission can fail after compaction. Publish its notices only once this
-      // execution is consumed and its terminal delivery owner can close the run.
-      if (
-        admissionNotices.length > 0 &&
-        turn.sendPolicy === "allow" &&
-        turn.queued.currentInboundEventKind !== "room_event"
-      ) {
-        await deliverProgress(turn, admissionNotices, "block");
-      }
-      if (
-        execution.execution.outcome.kind === "settled" &&
-        hasCompletedSourceReplyDeliveryEvidence(execution.execution.outcome.result)
-      ) {
-        await onObservedReplyDelivery();
-      }
-      const deliveryOpts = {
-        ...defaults.opts,
-        sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
-        resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
-        resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
-        commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
-        onObservedReplyDelivery,
-      };
-      const { decision, accounting: completedAccounting } = await runWithGoalReturn(() =>
-        withAgentTurnCompletion(
-          {
-            agentId: turn.queued.run.agentId,
-            storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-            sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
-            entry: turn.session.current(),
-            writer:
-              execution.execution.outcome.kind === "settled"
-                ? execution.execution.outcome.sessionWriter
-                : undefined,
-            operation: turn.operation,
-            prepareRestartClaimCleanup:
-              execution.execution.outcome.kind === "settled"
-                ? turn.restartRecovery?.prepareCompletionCleanup
-                : undefined,
-            activitySummaryCompletion,
-            publish: (entry) => turn.session.publish(entry),
-          },
-          async (turnCompletion) => {
-            const accounting = await accountFollowupTurn({
-              turn,
-              defaults,
-              execution,
-              completion: turnCompletion,
-            });
-            const resolved = await resolveFollowupDeliveryDecision({
-              turn,
-              execution: execution.execution,
-              accounting,
-              opts: deliveryOpts,
-            });
-            await turnCompletion?.complete();
-            return { decision: resolved, accounting };
-          },
-        ),
-      );
+      const { decision, accounting: completedAccounting } = finalized;
       if (decision.kind === "deliver") {
         for (const payload of decision.payloads) {
           progressContinuation = getReplyPayloadMetadata(payload)?.progressContinuation;
@@ -441,7 +452,6 @@ export function createFollowupRunner(
         operation?.fail("run_failed", disposition.error);
         disposition = { kind: "consumed" };
       }
-      activitySummaryCompletion?.release();
       const sourceDisposition = (admittedTurn?.queued ?? queued).queuedFollowupReplyDisposition;
       if (
         disposition.kind === "consumed" &&

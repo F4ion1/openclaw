@@ -14,6 +14,7 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
+import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import { markPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { accountAgentTurnCompaction } from "./agent-runner-result-accounting.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
@@ -177,7 +178,6 @@ export async function executePreparedReplyAgentRun(
     }
     throw error;
   } finally {
-    activitySummaryCompletion?.release();
     if (terminalOutcome) {
       onAgentRunTerminalOutcome?.(terminalOutcome);
     }
@@ -257,6 +257,73 @@ async function executePreparedReplyAgentRunWithCompletion(
         }
       : undefined,
   );
+  const finalize = async (
+    runOutcome: AgentTurnExecutionResult,
+    completionInstance?: Parameters<NonNullable<AgentTurnParams["complete"]>>[1],
+  ): Promise<ReplyPayload | ReplyPayload[] | undefined> => {
+    const operationSuperseded = isReplyOperationSuperseded(replyOperation);
+    recordReplyOperationAgentTurn(
+      followupRun.replyOperationRunStates,
+      replyOperation,
+      runOutcome.outcome,
+    );
+    activeSessionEntry = getActiveSessionEntry();
+
+    if (runOutcome.outcome.kind !== "settled") {
+      // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
+      await accountAgentTurnCompaction({
+        compaction: runOutcome.outcome.compaction,
+        sessionStore: activeSessionStore,
+        replyOperation,
+      });
+    }
+    if (operationSuperseded) {
+      return {};
+    }
+    if (runOutcome.outcome.kind !== "settled") {
+      if (
+        runOutcome.outcome.kind === "rejected" &&
+        !replyOperation.result &&
+        resolveReplyOperationRunState(opts)?.replyCompletion?.outcome !== "pending"
+      ) {
+        replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
+      }
+      return returnWithQueuedFollowupDrain(
+        runOutcome.outcome.kind === "rejected"
+          ? markPostCompactionModelFailurePayload(
+              runOutcome.outcome.postCompactionModelFailure,
+              runOutcome.outcome.payload,
+            )
+          : {},
+      );
+    }
+
+    const execution = runOutcome.outcome;
+    const result = await runWithGoalReturn(() =>
+      finalizeReplyAgentRun({
+        ...context,
+        opts: executionOpts,
+        activeSessionEntry,
+        preflightCompactionApplied,
+        runFollowupTurn,
+        execution,
+        completionInstance,
+        runId: runOutcome.runId,
+        runStartedAt,
+      }),
+    );
+    const { postCompactionModelFailure } = execution;
+    if (Array.isArray(result)) {
+      return result.map((payload) =>
+        markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
+      );
+    }
+    return result
+      ? markPostCompactionModelFailurePayload(postCompactionModelFailure, result)
+      : result;
+  };
+  let finalized = false;
+  let reply: ReplyPayload | ReplyPayload[] | undefined;
   const runOutcome = await withBeforeAgentReplyObserver(
     {
       beforeDispatch: async () => {
@@ -329,6 +396,10 @@ async function executePreparedReplyAgentRunWithCompletion(
             executeAgentTurn({
               ...context,
               opts: executionOpts,
+              complete: async (execution, instance) => {
+                finalized = true;
+                reply = await finalize(execution, instance);
+              },
               resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
               replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
             }),
@@ -336,63 +407,5 @@ async function executePreparedReplyAgentRunWithCompletion(
         ),
       ),
   );
-  const operationSuperseded = isReplyOperationSuperseded(replyOperation);
-  recordReplyOperationAgentTurn(
-    followupRun.replyOperationRunStates,
-    replyOperation,
-    runOutcome.outcome,
-  );
-  activeSessionEntry = getActiveSessionEntry();
-
-  if (runOutcome.outcome.kind !== "settled") {
-    // Only captured facts cross cancellation; no successor adoption, hooks, or reply work.
-    await accountAgentTurnCompaction({
-      compaction: runOutcome.outcome.compaction,
-      sessionStore: activeSessionStore,
-      replyOperation,
-    });
-  }
-  if (operationSuperseded) {
-    return {};
-  }
-  if (runOutcome.outcome.kind !== "settled") {
-    if (
-      runOutcome.outcome.kind === "rejected" &&
-      !replyOperation.result &&
-      resolveReplyOperationRunState(opts)?.replyCompletion?.outcome !== "pending"
-    ) {
-      replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
-    }
-    return returnWithQueuedFollowupDrain(
-      runOutcome.outcome.kind === "rejected"
-        ? markPostCompactionModelFailurePayload(
-            runOutcome.outcome.postCompactionModelFailure,
-            runOutcome.outcome.payload,
-          )
-        : {},
-    );
-  }
-
-  const execution = runOutcome.outcome;
-  const result = await runWithGoalReturn(() =>
-    finalizeReplyAgentRun({
-      ...context,
-      opts: executionOpts,
-      activeSessionEntry,
-      preflightCompactionApplied,
-      runFollowupTurn,
-      execution,
-      runId: runOutcome.runId,
-      runStartedAt,
-    }),
-  );
-  const { postCompactionModelFailure } = execution;
-  if (Array.isArray(result)) {
-    return result.map((payload) =>
-      markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
-    );
-  }
-  return result
-    ? markPostCompactionModelFailurePayload(postCompactionModelFailure, result)
-    : result;
+  return finalized ? reply : finalize(runOutcome);
 }

@@ -36,7 +36,13 @@ vi.mock("./reply-agent-turn-preparation.js", async (importOriginal) => ({
 }));
 vi.mock("./followup-turn-execution.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./followup-turn-execution.js")>()),
-  executeFollowupTurn: (...args: unknown[]) => state.execute(...args),
+  executeFollowupTurn: async (
+    params: Parameters<typeof import("./followup-turn-execution.js").executeFollowupTurn>[0],
+  ) => {
+    const execution = await state.execute(params);
+    await params.complete?.(execution);
+    return execution;
+  },
 }));
 vi.mock("./agent-runner-result-accounting.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-result-accounting.js")>()),

@@ -95,8 +95,9 @@ export function createSessionLifecyclePersistenceOwner() {
       return Promise.reject(createAgentRunStaleLifecycleError());
     }
     const authority = params.authority;
-    const persist = () =>
+    const persist = (defer?: LifecyclePersistenceParams["defer"]) =>
       enqueue({
+        ...(defer ? { defer } : {}),
         sessionKey: params.sessionKey,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         event: params.event,
@@ -110,8 +111,11 @@ export function createSessionLifecyclePersistenceOwner() {
             }
           : {}),
       });
+    const context = params.writeContext;
     const promise = track(() =>
-      params.writeContext ? params.writeContext.run(persist) : persist(),
+      context
+        ? context.run(() => (context.prepareEntry ? context.prepareEntry(persist) : persist()))
+        : persist(),
     );
     prepared.set(params.event, promise);
     return promise;

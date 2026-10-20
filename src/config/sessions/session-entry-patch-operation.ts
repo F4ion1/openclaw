@@ -20,11 +20,11 @@ import {
   projectSessionEntryUsageUpdate,
   type SessionEntryUsageUpdate,
 } from "./session-entry-usage.js";
-import {
-  projectSessionLifecyclePatch,
-  type SessionLifecyclePatchInput,
-  type SessionLifecyclePatchEffects,
-} from "./session-run-lifecycle-projection.js";
+import { projectSessionLifecyclePatch } from "./session-run-lifecycle-projection.js";
+import type {
+  SessionLifecyclePatchInput,
+  SessionLifecyclePatchEffects,
+} from "./session-run-lifecycle.types.js";
 import { mergeSessionSnapshotChanges } from "./session-snapshot-merge.js";
 import {
   mergeSessionEntry,

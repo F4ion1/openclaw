@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type {
@@ -34,6 +35,7 @@ export type FinalizeReplyAgentRunInput = Pick<
   | "shouldInjectGroupIntro"
   | "storePath"
 > & {
+  completionInstance?: AgentRunDelegatedAuthority["operationalRunInstance"];
   activeIsNewSession: boolean;
   activeSessionEntry: SessionEntry | undefined;
   activeSessionStore: Record<string, SessionEntry> | undefined;

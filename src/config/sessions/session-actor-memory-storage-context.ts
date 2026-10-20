@@ -1,7 +1,7 @@
 import type { SessionActorMemoryConversationOwner } from "./session-actor-memory-conversation-contract.js";
 import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
 import type { SessionActorPhaseBackend } from "./session-actor-phase.js";
-import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle-projection.js";
+import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle.types.js";
 
 /** One synchronous operation owns these working copies until atomic installation. */
 export type SessionActorMemoryStorageContext = {

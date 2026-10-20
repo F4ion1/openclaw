@@ -4,7 +4,7 @@ import type { SessionEntryReplacementPublication } from "./session-accessor.sqli
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryPatchOperation } from "./session-entry-patch-operation.js";
 import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
-import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle-projection.js";
+import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle.types.js";
 import type {
   SessionSourceAssertion,
   SessionSourcePredicate,

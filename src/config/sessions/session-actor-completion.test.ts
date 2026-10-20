@@ -44,7 +44,11 @@ function completion(
   commandId: string,
   input: Pick<
     Completion["input"],
-    "reducers" | "activitySummary" | "pendingFinalDelivery" | "restartClaimCleanup"
+    | "reducers"
+    | "activitySummary"
+    | "pendingFinalDelivery"
+    | "restartClaimCleanup"
+    | "lifecyclePatch"
   > & { phaseId?: string },
 ): Completion {
   const before = f.read();
@@ -87,12 +91,14 @@ function recap(
   };
 }
 
-it("commits final custody, recap, usage, and claim cleanup together across rollback and restart", async () => {
+it("commits terminal lifecycle, final custody, recap, usage, and claim cleanup together across rollback and restart", async () => {
   await withActor(async (f) => {
     f.writeEntry({
       ...f.nativeEntry()!,
       lifecycleRevision: "completion-lifecycle",
       activeWriterRunId: "writer",
+      lifecycleRunId: "writer",
+      startedAt: 10,
       restartRecoveryDeliveryRunId: "recovery",
       restartRecoveryDeliverySourceRunId: "source",
       restartRecoveryRuns: [{ runId: "writer", lifecycleGeneration: "generation" }],
@@ -117,6 +123,21 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
       deliveries: [{ id: "payload", state: "prepared" }],
     };
     const command = completion(f, "complete-with-cleanup", {
+      lifecyclePatch: {
+        event: {
+          ts: 40,
+          sessionId: f.scope.sessionId,
+          runId: "writer",
+          lifecycleGeneration: "generation",
+          mainSessionRestartRecovery: true,
+          data: { phase: "error", startedAt: 10, endedAt: 40, error: "synthetic failure" },
+        },
+        currentLifecycleGeneration: "generation",
+        lastRunError: "synthetic failure",
+        canonicalKey: f.target.sessionKey,
+        lifecycleRevision: before.entry!.lifecycleRevision,
+        exactCronRun: false,
+      },
       activitySummary,
       pendingFinalDelivery: pending,
       restartClaimCleanup: {
@@ -133,6 +154,7 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
       },
       reducers: [{ kind: "group-intro", needsSystemIntro: false }, usageReducer],
     });
+    command.input.bookkeeping!.lifecycle = { lastRunError: "final diagnostic" };
     await f.prepare(command);
     f.hooks.admit = (stage) => {
       if (stage === "commit") {
@@ -171,6 +193,7 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
       inputTokens: 12,
       outputTokens: 4,
     });
+    expect(after?.lifecycleRunId).toBeUndefined();
     expect(after?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(after?.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(after?.restartRecoveryRuns).toBeUndefined();

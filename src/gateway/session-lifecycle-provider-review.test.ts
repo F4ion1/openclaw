@@ -18,7 +18,10 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
+import {
+  bindAgentRunTerminalWriteSettlement,
+  captureAgentRunTerminalPersistence,
+} from "../infra/agent-run-terminal-writes.js";
 import {
   captureAgentRunProviderReview,
   readAgentRunProviderReview,
@@ -94,6 +97,7 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         lifecycleGeneration,
         lifecycleStartedAt: 1_000,
       });
+      bindAgentRunTerminalWriteSettlement(admission.operationalRunInstance, true);
       captureAgentRunProviderReview({
         runId,
         target,

@@ -7,69 +7,16 @@ import {
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { projectMainSessionRecoveryLifecycle } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
-import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
 import { isMainRestartRecoveryCandidate, recordLifecycleFence } from "./restart-recovery-state.js";
+import type {
+  LifecycleEventLike,
+  LifecyclePhase,
+  SessionLifecyclePatchEffects,
+  SessionLifecyclePatchInput,
+  SessionLifecycleProviderReview,
+} from "./session-run-lifecycle.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-export type SessionLifecycleProviderReview = Pick<
-  ProviderReviewTerminalFact,
-  "target" | "expectedWriterRunId" | "review"
->;
-
-export type SessionLifecyclePatchInput = {
-  event: LifecycleEventLike;
-  currentLifecycleGeneration: string;
-  lastRunError?: string;
-  canonicalKey: string;
-  lifecycleRevision?: string;
-  exactCronRun: boolean;
-  providerReview?: SessionLifecycleProviderReview;
-  expectedWriter?: {
-    requireYielded?: true;
-    runId: string;
-    sessionId: string;
-    lifecycleRevision?: string;
-  };
-};
-
-export type SessionLifecyclePatchEffects = {
-  terminalRecovery?: { runId: string; outcome: AgentRunTerminalOutcome };
-  failedRun?: {
-    runId: string;
-    error: unknown;
-    errorKind?: "state_contention";
-    suppressErrorNotice?: boolean;
-  };
-};
-
-export type LifecyclePhase = "start" | "end" | "error";
-
-export type LifecycleEventLike = { ts: number; sessionId?: string } & {
-  controlUiVisible?: boolean;
-  isHeartbeat?: boolean;
-  contextClaimId?: string;
-  runId?: string;
-  clientRunId?: string;
-  lifecycleGeneration?: string;
-  mainSessionRestartRecovery?: true;
-  data?: {
-    phase?: unknown;
-    startedAt?: unknown;
-    endedAt?: unknown;
-    aborted?: unknown;
-    stopReason?: unknown;
-    error?: unknown;
-    errorKind?: unknown;
-    suppressErrorNotice?: unknown;
-    executionStarted?: unknown;
-    livenessState?: unknown;
-    timeoutPhase?: unknown;
-    providerStarted?: unknown;
-    yielded?: unknown;
-    status?: unknown;
-  };
-};
 
 type LifecycleSessionShape = Pick<
   SessionEntry,

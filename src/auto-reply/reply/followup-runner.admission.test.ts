@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -49,7 +50,13 @@ vi.mock("./followup-turn-execution.js", async (importOriginal) => ({
 
 // mock-isolation: Exercise queue admission and source acceptance without starting a model runtime.
 vi.mock("./agent-runner-execution.js", () => ({
-  executeAgentTurn: async () => createSettledExecution().execution,
+  executeAgentTurn: async (
+    params: Parameters<typeof import("./agent-runner-execution.js").executeAgentTurn>[0],
+  ) => {
+    const execution = createSettledExecution().execution;
+    await params.complete?.(execution, createOperationalRunInstanceRef(execution.runId));
+    return execution;
+  },
 }));
 
 const { createFollowupRunner } = await import("./followup-runner.js");
@@ -122,7 +129,11 @@ afterEach(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   state.account.mockResolvedValue(undefined);
-  state.execute.mockResolvedValue(createSettledExecution());
+  state.execute.mockImplementation(async (params) => {
+    const execution = createSettledExecution();
+    await params.complete?.(execution);
+    return execution;
+  });
   state.preflight.mockImplementation(async (params) => params.sessionEntry);
   state.resolveDecision.mockResolvedValue({ kind: "suppress", reason: "silent" });
   state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });

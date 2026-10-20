@@ -12,7 +12,7 @@ export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   /** Trusted refusal fact consumed only by this run's existing terminal mutation. */
-  providerReviewTerminal?: import("../sessions/provider-review-terminal.js").ProviderReviewTerminalFact;
+  providerReviewTerminal?: import("../config/sessions/provider-review.types.js").ProviderReviewTerminalFact;
   /** Queued reply delivery, rather than runtime execution, owns chat completion. */
   completionSource?: "reply-dispatch";
   /** Retained background work cannot add automatic delivery to a private run. */

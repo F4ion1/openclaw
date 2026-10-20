@@ -568,6 +568,15 @@ do not publish. Observer run supersession is checked before enqueue, so a queued
 digest may briefly outlive its run until the next observation; session lifecycle
 and revision predicates still prevent overwriting a reset or newer digest.
 
+For sessions with a reply completion owner, activity recaps join the existing
+`completeTurn` transaction instead of issuing a separate entry patch. A late
+recap stays in the bounded session owner until the next reply completion that
+already needs a write; it never creates a request, timer, or poll. Readers keep
+the last committed recap until that receipt publishes. A restart or owner
+eviction discards an uncommitted recap, and a session with no later reply can
+keep its old recap indefinitely. Archive-only and backfill sessions without a
+reply completion owner still use the closed entry operation.
+
 Session mutation candidates carry their final transfer frames in the existing
 commit-authority exchange. Ordinary candidates need no separate transfer
 acknowledgments; larger candidates retain bounded intermediate frames. The host
@@ -2297,6 +2306,16 @@ FIFO, so an earlier terminal write cannot make a new input stale before admissio
 Transcript appends and terminal accounting use the same command owner. Message
 preparation and external hooks remain outside this reservation; each native
 transaction still settles before another command starts.
+
+On direct and queued reply turns, the terminal lifecycle entry patch joins the
+existing `completeTurn` transaction with accounting and final-delivery custody.
+Execution invokes completion before draining terminal writes and closing admission.
+Session listing, history, and restart readers see terminal fields at that commit.
+A crash before it preserves the preceding entry and any already durable transcript;
+restart recovery may continue an unfinished claim even when assistant text exists.
+Provider-review transitions and routes without a matching completion target keep
+standalone persistence. A refused completion rolls back both patches; unknown
+commit outcomes never replay the terminal patch.
 
 Canonical retry payloads stay with the existing bounded reader. A fresh input
 can prove absence from complete MAIN pending, completion, and idempotency facts;

@@ -170,7 +170,10 @@ async function executeAgentTurnInternalLoop(
       completionSource: params.completionSource,
       sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),
     });
-    bindAgentRunTerminalWriteSettlement(preparedRunAdmission.operationalRunInstance);
+    bindAgentRunTerminalWriteSettlement(
+      preparedRunAdmission.operationalRunInstance,
+      Boolean(params.complete),
+    );
   }
   if (isDiagnosticsEnabled(runtimeConfig)) {
     logSessionTurnCreated({
@@ -584,9 +587,32 @@ async function executeAgentTurnOutcome(
     terminalOutcomeCommitted = true;
     executionParams.replyOperation?.freezeAbort();
   };
+  const toExecution = (internal: AgentTurnInternalResult): AgentTurnExecutionResult => {
+    const abortReason =
+      internal.kind !== "aborted" &&
+      resolveReplyOperationAbortReason(executionParams.replyOperation);
+    if (abortReason) {
+      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
+    }
+    const outcome: AgentTurnExecutionResult["outcome"] =
+      internal.kind === "final"
+        ? {
+            kind: "rejected",
+            payload: internal.payload,
+            resolved: internal.resolved,
+            ...(internal.postCompactionModelFailure
+              ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+              : {}),
+          }
+        : internal;
+    return {
+      runId,
+      outcome: { ...outcome, ...completedCompaction() },
+    };
+  };
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   try {
-    const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
         const admittedRunContext: { current?: AdmittedRunContext } = {};
         const gatewayContextResolver =
@@ -638,51 +664,35 @@ async function executeAgentTurnOutcome(
           }),
         });
         try {
-          return await executeAgentTurnInternalLoop(
-            executionParams,
-            runId,
-            commitTerminalOutcome,
-            prepareMcpAppModelContext,
-            preparedRunAdmission,
-            admittedRunContext,
-            deferredLifecycle,
-            compaction,
-          );
-        } finally {
+          let internal: AgentTurnInternalResult;
           try {
-            await deferredLifecycle.complete();
-          } finally {
-            await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(
-              preparedRunAdmission.close,
+            internal = await executeAgentTurnInternalLoop(
+              executionParams,
+              runId,
+              commitTerminalOutcome,
+              prepareMcpAppModelContext,
+              preparedRunAdmission,
+              admittedRunContext,
+              deferredLifecycle,
+              compaction,
             );
+          } finally {
+            await deferredLifecycle.complete();
           }
+          commitTerminalOutcome();
+          const execution = toExecution(internal);
+          await executionParams.complete?.(execution, preparedRunAdmission.operationalRunInstance);
+          return execution;
+        } finally {
+          await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(
+            preparedRunAdmission.close,
+          );
         }
       } finally {
         modelContextLease?.rollback();
         commitTerminalOutcome();
       }
     });
-    const abortReason =
-      internal.kind !== "aborted" &&
-      resolveReplyOperationAbortReason(executionParams.replyOperation);
-    if (abortReason) {
-      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
-    }
-    const outcome: AgentTurnExecutionResult["outcome"] =
-      internal.kind === "final"
-        ? {
-            kind: "rejected",
-            payload: internal.payload,
-            resolved: internal.resolved,
-            ...(internal.postCompactionModelFailure
-              ? { postCompactionModelFailure: internal.postCompactionModelFailure }
-              : {}),
-          }
-        : internal;
-    return {
-      runId,
-      outcome: { ...outcome, ...completedCompaction() },
-    };
   } catch (error) {
     const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation, error);
     if (abortReason) {
@@ -700,7 +710,7 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  return await runAgentTurnWithOutcome(executionParams, runId, () =>
-    executeAgentTurnOutcome(executionParams, runId),
+  return await runAgentTurnWithOutcome(executionParams, runId, (current) =>
+    executeAgentTurnOutcome(current, runId),
   );
 }

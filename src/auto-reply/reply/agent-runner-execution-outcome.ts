@@ -106,11 +106,26 @@ async function recordSessionEventTerminalOutcome(
 export async function runAgentTurnWithOutcome(
   params: AgentTurnParams,
   runId: string,
-  run: () => Promise<AgentTurnExecutionResult>,
+  run: (params: AgentTurnParams) => Promise<AgentTurnExecutionResult>,
 ): Promise<AgentTurnExecutionResult> {
   bindGoalContinuationExecution(runId, params.sessionKey ?? params.followupRun.run.sessionKey);
   const eventExecution = params.followupRun.run.internalEventExecution;
   let terminalRecorded = false;
+  let result: AgentTurnExecutionResult;
+  let completionFailure: { error: unknown } | undefined;
+  const complete = params.complete;
+  const executionParams = {
+    ...params,
+    complete: complete
+      ? async (...args: Parameters<typeof complete>) => {
+          try {
+            await complete(...args);
+          } catch (error) {
+            completionFailure = { error };
+          }
+        }
+      : undefined,
+  };
   try {
     if (eventExecution) {
       eventExecution.assertCurrent?.();
@@ -118,7 +133,7 @@ export async function runAgentTurnWithOutcome(
       params.replyOperation?.abortSignal.throwIfAborted();
       eventExecution.assertCurrent?.();
     }
-    const result = await withExecRequestTurn(
+    result = await withExecRequestTurn(
       {
         identity: {
           runId,
@@ -137,13 +152,12 @@ export async function runAgentTurnWithOutcome(
             requesterSessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
             report: params.opts?.onVisibleWorkSessions,
           },
-          run,
+          () => run(executionParams),
         ),
     );
     await recordAgentTurnExecutionOutcome(params, result);
     terminalRecorded = true;
     await recordSessionEventTerminalOutcome(eventExecution, runId, result);
-    return result;
   } catch (error) {
     if (!terminalRecorded) {
       await recordAgentTurnExecutionOutcome(params, undefined);
@@ -151,4 +165,9 @@ export async function runAgentTurnWithOutcome(
     }
     throw error;
   }
+  // Accounting failure must not rewrite an already settled execution outcome.
+  if (completionFailure) {
+    throw completionFailure.error;
+  }
+  return result;
 }

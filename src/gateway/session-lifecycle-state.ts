@@ -7,13 +7,17 @@ import {
   derivePersistedSessionLifecyclePatch,
   matchesProviderReviewWriter,
   resolveLifecyclePhase,
-  type LifecycleEventLike,
-  type LifecyclePhase,
-  type SessionLifecyclePatchEffects,
 } from "../config/sessions/session-run-lifecycle-projection.js";
+import type {
+  LifecycleEventLike,
+  LifecyclePhase,
+  SessionLifecyclePatchEffects,
+} from "../config/sessions/session-run-lifecycle.types.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import type { AgentRunTerminalEntryWrite } from "../infra/agent-run-terminal-writes.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readAgentRunProviderReview } from "../sessions/provider-review-terminal.js";
 import {
@@ -73,6 +77,7 @@ type GatewaySessionLifecycleEventParams = {
   clientRunId?: string;
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
+  defer?: (write: AgentRunTerminalEntryWrite) => ReturnType<AgentRunTerminalEntryWrite["persist"]>;
   expectedWriter?: {
     requireYielded?: true;
     runId: string;
@@ -109,7 +114,11 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
       // Drain settlement transfers the outcome to deletion, not to a successful write.
       if (
         phase === "start" ||
-        !(error instanceof AgentDeletionPendingError) ||
+        !(
+          error instanceof AgentDeletionPendingError ||
+          // Actor refusals cross the worker as error facts; uncertain commits never replay.
+          (params.defer && error instanceof SqliteWorkerError && error.code === "unavailable")
+        ) ||
         !retainAgentDeletionTerminalWrite(
           { agentId: sessionEntry.agentId },
           {
@@ -120,7 +129,7 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
             // The run has drained. Deletion now owns replay of this captured outcome.
             persist: (assertCommitAllowed) =>
               persistPreparedGatewaySessionLifecycleEvent(
-                { ...params, assertCommitAllowed },
+                { ...params, assertCommitAllowed, defer: undefined },
                 phase,
                 sessionEntry,
               ),
@@ -176,71 +185,84 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       ? terminalReview
       : undefined;
   let effects: SessionLifecyclePatchEffects | undefined;
-  const persisted = await applySessionEntryTargetOperation(
-    {
+  const operation = {
+    kind: "lifecycle",
+    lifecycle: {
+      // Runtime event metadata includes non-enumerable generation and host-only callbacks.
+      event: {
+        ts: params.event.ts,
+        sessionId: params.event.sessionId,
+        runId: params.event.runId,
+        clientRunId: params.clientRunId ?? params.event.clientRunId,
+        lifecycleGeneration: params.event.lifecycleGeneration,
+        mainSessionRestartRecovery: params.event.mainSessionRestartRecovery,
+        controlUiVisible: params.event.controlUiVisible,
+        isHeartbeat: params.event.isHeartbeat,
+        contextClaimId: params.event.contextClaimId,
+        data: params.event.data,
+      },
+      currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      lastRunError: resolveLifecycleFailureSummary(params.event),
+      canonicalKey: sessionEntry.canonicalKey,
+      lifecycleRevision,
+      exactCronRun: parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined,
+      expectedWriter: params.expectedWriter,
+      providerReview: providerReview
+        ? {
+            target: providerReview.target,
+            expectedWriterRunId: providerReview.expectedWriterRunId,
+            review: providerReview.review,
+          }
+        : undefined,
+    },
+  } as const;
+  const assertCurrent = composeSessionSourceAssertion([
+    params.assertCommitAllowed,
+    providerReview?.assertCurrent,
+  ]);
+  const committed: AgentRunTerminalEntryWrite["committed"] = (_entry, lifecycleEffects) => {
+    effects = lifecycleEffects;
+    sessionChanges.emit({
+      sessionKey: sessionEntry.canonicalKey,
       agentId: sessionEntry.agentId,
       storePath: sessionEntry.storePath,
-      readSource: sessionEntry.capturedReadSource,
-      target: {
-        canonicalKey: sessionEntry.canonicalKey,
-        storeKeys: sessionEntry.storeKeys,
+      scope: "runtime",
+      facts: { kind: "unchanged" },
+    });
+  };
+  const persist = () =>
+    applySessionEntryTargetOperation(
+      {
+        agentId: sessionEntry.agentId,
+        storePath: sessionEntry.storePath,
+        readSource: sessionEntry.capturedReadSource,
+        target: { canonicalKey: sessionEntry.canonicalKey, storeKeys: sessionEntry.storeKeys },
       },
-    },
-    {
-      kind: "lifecycle",
-      lifecycle: {
-        // Runtime event metadata includes non-enumerable generation and host-only callbacks.
-        event: {
-          ts: params.event.ts,
-          sessionId: params.event.sessionId,
-          runId: params.event.runId,
-          clientRunId: params.clientRunId ?? params.event.clientRunId,
-          lifecycleGeneration: params.event.lifecycleGeneration,
-          mainSessionRestartRecovery: params.event.mainSessionRestartRecovery,
-          controlUiVisible: params.event.controlUiVisible,
-          isHeartbeat: params.event.isHeartbeat,
-          contextClaimId: params.event.contextClaimId,
-          data: params.event.data,
-        },
-        currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
-        lastRunError: resolveLifecycleFailureSummary(params.event),
-        canonicalKey: sessionEntry.canonicalKey,
-        lifecycleRevision,
-        exactCronRun: parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined,
-        expectedWriter: params.expectedWriter,
-        providerReview: providerReview
-          ? {
-              target: providerReview.target,
-              expectedWriterRunId: providerReview.expectedWriterRunId,
-              review: providerReview.review,
-            }
-          : undefined,
+      operation,
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+        requireWriteSuccess: true,
+        workerGuard: { source: assertCurrent },
+        ...(providerReview ? { providerReviewMutation: true } : {}),
+        onCommitted: (entry, _predicate, lifecycleEffects) => committed(entry, lifecycleEffects),
       },
-    },
-    {
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      requireWriteSuccess: true,
-      workerGuard: {
-        source: composeSessionSourceAssertion([
-          params.assertCommitAllowed,
-          providerReview?.assertCurrent,
-        ]),
-      },
-      ...(providerReview ? { providerReviewMutation: true } : {}),
-      onCommitted: (_entry, _predicate, lifecycleEffects) => {
-        effects = lifecycleEffects;
-        sessionChanges.emit({
-          sessionKey: sessionEntry.canonicalKey,
-          agentId: sessionEntry.agentId,
-          storePath: sessionEntry.storePath,
-          // The writer already published stored facts; this adapter only projects run state.
-          scope: "runtime",
-          facts: { kind: "unchanged" },
-        });
-      },
-    },
-  );
+    );
+  // Provider-review transitions retain their dedicated write policy.
+  const persisted =
+    params.defer && !providerReview
+      ? await params.defer({
+          target: {
+            agentId: sessionEntry.agentId,
+            storePath: sessionEntry.storePath,
+            sessionKey: sessionEntry.canonicalKey,
+          },
+          lifecycle: operation.lifecycle,
+          assertCurrent,
+          persist,
+          committed,
+        })
+      : await persist();
   const { terminalRecovery, failedRun } = effects ?? {};
   if (persisted && terminalRecovery) {
     const message = `main-session restart recovery terminal: session=${sessionEntry.canonicalKey} run=${terminalRecovery.runId} status=${terminalRecovery.outcome.status} reason=${terminalRecovery.outcome.reason}`;

@@ -3,7 +3,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { applySessionEntryTargetOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
-import type { SessionLifecyclePatchEffects } from "../config/sessions/session-run-lifecycle-projection.js";
+import type { SessionLifecyclePatchEffects } from "../config/sessions/session-run-lifecycle.types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";

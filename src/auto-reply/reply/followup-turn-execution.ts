@@ -17,7 +17,7 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
-import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
+import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
@@ -84,6 +84,10 @@ export async function executeFollowupTurn(params: {
   defaults: FollowupRunnerParams;
   onToolResult: (payload: ReplyPayload) => Promise<void>;
   onCompactionNoticePayload: (payload: ReplyPayload) => Promise<void>;
+  complete?: (
+    execution: FollowupExecutionResult,
+    instance?: Parameters<NonNullable<AgentTurnParams["complete"]>>[1],
+  ) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
@@ -358,6 +362,40 @@ export async function executeFollowupTurn(params: {
   let accepted = false;
   let execution: AgentTurnExecutionResult;
   const runStartedAt = Date.now();
+  const prepareResult = (result: AgentTurnExecutionResult): FollowupExecutionResult => {
+    // Runner defaults may be newer; only the queued sources own this execution result.
+    recordReplyOperationAgentTurn(
+      turn.queued.replyOperationRunStates,
+      turn.operation,
+      result.outcome,
+    );
+    return {
+      commentaryPayloadsEnabled,
+      execution: result,
+      runStartedAt,
+      sessionCtx,
+      pendingToolTasks,
+      progress: {
+        drain: async () => {
+          await drainPendingWork();
+          const firstFailure: unknown = pendingTaskFailures.progress ?? pendingTaskFailures.tool;
+          if (firstFailure !== undefined) {
+            throw firstFailure instanceof Error
+              ? firstFailure
+              : new Error(formatErrorMessage(firstFailure));
+          }
+        },
+      },
+    };
+  };
+  let completed: FollowupExecutionResult | undefined;
+  const complete = async (
+    result: AgentTurnExecutionResult,
+    instance?: Parameters<NonNullable<AgentTurnParams["complete"]>>[1],
+  ) => {
+    completed = prepareResult(result);
+    await params.complete?.(completed, instance);
+  };
   try {
     // A session event rejected for stale policy is re-admitted by its owner under the
     // same durable source id; reject it before admission records that source claim.
@@ -397,6 +435,7 @@ export async function executeFollowupTurn(params: {
       }
       const execute = () =>
         executeAgentTurn({
+          complete: params.complete ? complete : undefined,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
           transcriptCommandBody: turn.queued.transcriptPrompt,
@@ -468,6 +507,9 @@ export async function executeFollowupTurn(params: {
         : await runWithInput();
     }
   } catch (error) {
+    if (completed) {
+      throw error;
+    }
     await drainPendingWork();
     const ingressTimedOut =
       isIngressAdoptionLostError(error) &&
@@ -491,28 +533,8 @@ export async function executeFollowupTurn(params: {
       },
     };
   }
-  // Runner defaults may be newer; only the queued sources own this execution result.
-  recordReplyOperationAgentTurn(
-    turn.queued.replyOperationRunStates,
-    turn.operation,
-    execution.outcome,
-  );
-  return {
-    commentaryPayloadsEnabled,
-    execution,
-    runStartedAt,
-    sessionCtx,
-    pendingToolTasks,
-    progress: {
-      drain: async () => {
-        await drainPendingWork();
-        const firstFailure: unknown = pendingTaskFailures.progress ?? pendingTaskFailures.tool;
-        if (firstFailure !== undefined) {
-          throw firstFailure instanceof Error
-            ? firstFailure
-            : new Error(formatErrorMessage(firstFailure));
-        }
-      },
-    },
-  };
+  if (!completed) {
+    await complete(execution);
+  }
+  return completed!;
 }
