@@ -23,29 +23,19 @@ describe("Mention Inbox worker snapshots", () => {
     }
   });
 
-  function open(location: string) {
-    const database = openNodeSqliteDatabase(location);
-    databases.push(database);
-    return database;
-  }
-
   function createStore() {
     const filename = path.join(tempDirs.make("mention-snapshot-"), "state.sqlite");
-    const writer = open(filename);
+    const writer = openNodeSqliteDatabase(filename);
+    databases.push(writer);
     writer.exec(`PRAGMA journal_mode = WAL;
       CREATE TABLE config_machine_state (
         state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL
       )`);
     admitSqliteSchema(writer);
-    const reader = open(filename);
+    const reader = openNodeSqliteDatabase(filename);
+    databases.push(reader);
     admitSqliteSchema(reader);
     return { writer, reader };
-  }
-
-  function write<T>(database: DatabaseSync, operation: () => T): T {
-    return withSqlitePostCommitPublications(database, () =>
-      runSqliteImmediateTransactionSync(database, operation),
-    );
   }
 
   const first: MentionStoreSource = {
@@ -56,11 +46,16 @@ describe("Mention Inbox worker snapshots", () => {
   };
   const second: MentionStoreSource = { ...first, key: "b".repeat(64), sequence: 1 };
 
-  function addSource(writer: DatabaseSync, source: MentionStoreSource) {
-    writeMentionStoreChanges(
-      writer,
-      { revision: source.sequence, nextSequence: source.sequence + 1 },
-      new Map([[source.key, source]]),
+  function addSource(writer: DatabaseSync, source: MentionStoreSource, afterWrite = () => {}) {
+    withSqlitePostCommitPublications(writer, () =>
+      runSqliteImmediateTransactionSync(writer, () => {
+        writeMentionStoreChanges(
+          writer,
+          { revision: source.sequence, nextSequence: source.sequence + 1 },
+          new Map([[source.key, source]]),
+        );
+        afterWrite();
+      }),
     );
   }
 
@@ -82,11 +77,10 @@ describe("Mention Inbox worker snapshots", () => {
       expect(reads.queries).toEqual([]);
       expect(exec).not.toHaveBeenCalled();
 
-      write(writer, () => addSource(writer, first));
+      addSource(writer, first);
       expect(read(0, reader).snapshot).toEqual(snapshot([first]));
       expect(() =>
-        write(writer, () => {
-          addSource(writer, second);
+        addSource(writer, second, () => {
           throw new Error("rollback mention");
         }),
       ).toThrow("rollback mention");
@@ -105,7 +99,7 @@ describe("Mention Inbox worker snapshots", () => {
 
   it("keeps an atomic header and source snapshot when its owner commits during result delivery", () => {
     const { writer, reader } = createStore();
-    write(writer, () => addSource(writer, first));
+    addSource(writer, first);
     let committed = false;
     for (const method of ["all", "iterate"] as const) {
       const original = StatementSync.prototype[method];
@@ -117,7 +111,7 @@ describe("Mention Inbox worker snapshots", () => {
             const rows = method === "iterate" ? [...result] : result;
             if (!committed && receiver.sourceSQL.includes('from "config_machine_state"')) {
               committed = true;
-              write(writer, () => addSource(writer, second));
+              addSource(writer, second);
             }
             return method === "iterate" ? rows.values() : rows;
           },

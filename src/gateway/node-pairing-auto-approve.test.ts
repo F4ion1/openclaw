@@ -39,20 +39,13 @@ describe("resolveNodePairingClientIpSource", () => {
 });
 
 describe("shouldAutoApproveNodePairingFromTrustedCidrs", () => {
-  it("is disabled by default when no CIDRs are configured", () => {
-    expect(
-      shouldAutoApproveNodePairingFromTrustedCidrs({
-        ...BASE_PARAMS,
-        autoApproveCidrs: undefined,
-      }),
-    ).toBe(false);
-  });
-
   it("accepts first-time node pairing from a matching direct IPv4 CIDR", () => {
     expect(shouldAutoApproveNodePairingFromTrustedCidrs(BASE_PARAMS)).toBe(true);
   });
 
   it.each([
+    { name: "no configured CIDRs", patch: { autoApproveCidrs: undefined } },
+    { name: "role upgrade", patch: { reason: "role-upgrade" as const } },
     { name: "existing paired device", patch: { existingPairedDevice: true } },
     { name: "operator role", patch: { role: "operator" } },
     { name: "non-matching CIDR", patch: { reportedClientIp: "192.168.2.42" } },
@@ -71,14 +64,5 @@ describe("shouldAutoApproveNodePairingFromTrustedCidrs", () => {
     { name: "invalid CIDR config", patch: { autoApproveCidrs: ["invalid/24"] } },
   ])("rejects $name", ({ patch }) => {
     expect(shouldAutoApproveNodePairingFromTrustedCidrs({ ...BASE_PARAMS, ...patch })).toBe(false);
-  });
-
-  it.each(["role-upgrade"] as const)("rejects %s requests", (reason) => {
-    expect(
-      shouldAutoApproveNodePairingFromTrustedCidrs({
-        ...BASE_PARAMS,
-        reason,
-      }),
-    ).toBe(false);
   });
 });
