@@ -423,7 +423,10 @@ test("an open Files editor cannot save into a replacement managed workspace", as
     directSessionReq<SessionsFilesGetResult>("sessions.files.get", request, options);
   const opened = await read();
   expect(opened.ok, JSON.stringify(opened.error)).toBe(true);
-  expect(opened.payload).toMatchObject({ workspaceId: original.id, file: { content: "base\n" } });
+  expect(opened.payload).toMatchObject({
+    source: { workspaceId: original.id },
+    file: { content: "base\n" },
+  });
   const staleSave = () =>
     directSessionReq(
       "sessions.files.set",
@@ -431,7 +434,7 @@ test("an open Files editor cannot save into a replacement managed workspace", as
         ...request,
         content: "draft from the original workspace\n",
         expectedHash: opened.payload!.file.hash,
-        expectedWorkspaceId: opened.payload!.workspaceId,
+        expectedSource: opened.payload!.source,
       },
       options,
     );
@@ -451,19 +454,22 @@ test("an open Files editor cannot save into a replacement managed workspace", as
   await expect(fs.readFile(path.join(current.path, "README.md"), "utf8")).resolves.toBe("base\n");
 
   const fresh = await read();
-  expect(fresh.payload).toMatchObject({ workspaceId: current.id, file: { content: "base\n" } });
+  expect(fresh.payload).toMatchObject({
+    source: { workspaceId: current.id },
+    file: { content: "base\n" },
+  });
   const saved = await directSessionReq<SessionsFilesGetResult>(
     "sessions.files.set",
     {
       ...request,
       content: "fresh edit\n",
       expectedHash: fresh.payload!.file.hash,
-      expectedWorkspaceId: fresh.payload!.workspaceId,
+      expectedSource: fresh.payload!.source,
     },
     options,
   );
   expect(saved.ok, JSON.stringify(saved.error)).toBe(true);
-  expect(saved.payload?.workspaceId).toBe(current.id);
+  expect(saved.payload?.source?.workspaceId).toBe(current.id);
   await expect(fs.readFile(path.join(current.path, "README.md"), "utf8")).resolves.toBe(
     "fresh edit\n",
   );
@@ -495,4 +501,67 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
   } finally {
     testState.agentConfig = undefined;
   }
+});
+
+test("an explicit cwd reset refuses the previous managed file source", async () => {
+  await using fixture = await setupResetWorktree("openclaw-files-explicit-cwd-");
+  const created = await mainSession({ worktree: true });
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  const original = created.payload!.worktree;
+  fixture.track(original.id);
+  const request = { sessionKey: "agent:main:main", path: "README.md" };
+  const options = { client: { connect: { scopes: ["operator.admin"] } } as never };
+  const opened = await directSessionReq<SessionsFilesGetResult>(
+    "sessions.files.get",
+    request,
+    options,
+  );
+  expect(opened.payload).toMatchObject({
+    source: { workspaceId: original.id },
+    file: { content: "base\n" },
+  });
+  const replacement = path.join(fixture.workspace, "replacement");
+  await fs.mkdir(replacement);
+  await fs.writeFile(path.join(replacement, "README.md"), "base\n");
+  const reset = await mainSession({ cwd: replacement });
+  expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+  expect(reset.payload?.entry.spawnedCwd).toBe(replacement);
+  expect(reset.payload?.entry.worktree?.id).toBe(original.id);
+  const fresh = await directSessionReq<SessionsFilesGetResult>(
+    "sessions.files.get",
+    request,
+    options,
+  );
+  expect(fresh.payload).toMatchObject({
+    source: { workspaceId: original.id },
+    file: { content: "base\n" },
+  });
+  await expect(
+    directSessionReq(
+      "sessions.files.set",
+      {
+        ...request,
+        content: "draft from A\n",
+        expectedHash: opened.payload!.file.hash,
+        expectedSource: opened.payload!.source,
+      },
+      options,
+    ),
+  ).rejects.toMatchObject({ error: { details: { type: "session_file_source_changed" } } });
+  await expect(fs.readFile(path.join(replacement, "README.md"), "utf8")).resolves.toBe("base\n");
+  expect(fresh.payload?.source).not.toEqual(opened.payload?.source);
+  const saved = await directSessionReq(
+    "sessions.files.set",
+    {
+      ...request,
+      content: "fresh edit in B\n",
+      expectedHash: fresh.payload!.file.hash,
+      expectedSource: fresh.payload!.source,
+    },
+    options,
+  );
+  expect(saved.ok, JSON.stringify(saved.error)).toBe(true);
+  await expect(fs.readFile(path.join(replacement, "README.md"), "utf8")).resolves.toBe(
+    "fresh edit in B\n",
+  );
 });

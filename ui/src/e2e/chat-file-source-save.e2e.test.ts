@@ -37,7 +37,7 @@ suite.define(() => {
               "sessions.files.get": () => ({
                 sessionKey,
                 root: "/workspace",
-                workspaceId,
+                source: { workspaceId, root: "/workspace", fileRoot: "/workspace" },
                 file: {
                   name: "notes.md",
                   path: "notes.md",
@@ -51,10 +51,15 @@ suite.define(() => {
                 },
               }),
               "sessions.files.set": (params) => {
-                const request = params as { content: string; expectedWorkspaceId?: string };
+                const request = params as {
+                  content: string;
+                  expectedSource?: { workspaceId: string; root: string; fileRoot: string };
+                };
                 if (
-                  request.expectedWorkspaceId !== undefined &&
-                  request.expectedWorkspaceId !== workspaceId
+                  request.expectedSource !== undefined &&
+                  (request.expectedSource.workspaceId !== workspaceId ||
+                    request.expectedSource.root !== "/workspace" ||
+                    request.expectedSource.fileRoot !== "/workspace")
                 ) {
                   return {
                     __mockError: {
@@ -66,7 +71,11 @@ suite.define(() => {
                 }
                 saves += 1;
                 savedContent = request.content;
-                return { sessionKey, workspaceId, file: { hash: "saved-file-hash" } };
+                return {
+                  sessionKey,
+                  source: { workspaceId, root: "/workspace", fileRoot: "/workspace" },
+                  file: { hash: "saved-file-hash" },
+                };
               },
             },
           },

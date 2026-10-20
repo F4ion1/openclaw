@@ -263,9 +263,15 @@ export const SessionsFilesGetParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
+const SessionFileSourceSchema = closedObject({
+  workspaceId: NonEmptyString,
+  root: Type.Union([NonEmptyString, Type.Null()]),
+  fileRoot: Type.Union([NonEmptyString, Type.Null()]),
+});
+
 export const SessionsFilesGetResultSchema = closedObject({
   sessionKey: NonEmptyString,
-  workspaceId: Type.Optional(NonEmptyString),
+  source: Type.Optional(SessionFileSourceSchema),
   root: Type.Optional(NonEmptyString),
   file: SessionFileEntrySchema,
 });
@@ -318,7 +324,7 @@ export const SessionsFilesAssetsResultSchema = closedObject({
 /** Overwrites an existing file with content and optional managed-source preconditions. */
 export const SessionsFilesSetParamsSchema = closedObject({
   ...SessionsFilesGetParamsSchema.properties,
-  expectedWorkspaceId: Type.Optional(NonEmptyString),
+  expectedSource: Type.Optional(SessionFileSourceSchema),
   content: Type.String(),
   expectedHash: SessionFileHashSchema,
 });

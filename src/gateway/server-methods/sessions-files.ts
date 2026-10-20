@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
@@ -95,24 +96,17 @@ function rejectDeviceFolderFiles(
 }
 
 async function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
-  if (!loaded.entry?.sessionId) {
-    return {
-      ...loaded,
-      agentId: undefined,
+  if (!loaded.entry?.sessionId || loaded.entry.repositoryWorkspaceId) {
+    const unavailable = {
+      source: undefined,
       root: undefined,
       fileRoot: undefined,
       diffCwd: undefined,
       fileWorkspace: undefined,
     };
-  }
-  if (loaded.entry.repositoryWorkspaceId) {
-    return {
-      ...loaded,
-      root: undefined,
-      fileRoot: undefined,
-      diffCwd: undefined,
-      fileWorkspace: undefined,
-    };
+    return loaded.entry?.sessionId
+      ? { ...loaded, ...unavailable }
+      : { ...loaded, ...unavailable, agentId: undefined };
   }
   const fileWorkspace = await prepareSessionFileWorkspace(
     loaded.cfg,
@@ -121,11 +115,16 @@ async function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
     loaded.entry,
   );
   const { spawnedCwd, root, diffCwd } = fileWorkspace;
+  const fileRoot = resolveFileRoot({ root, spawnedCwd });
+  const source = loaded.entry.worktree?.id
+    ? { workspaceId: loaded.entry.worktree.id, root: root ?? null, fileRoot: fileRoot ?? null }
+    : undefined;
   return {
     ...loaded,
     fileWorkspace,
     root,
-    fileRoot: resolveFileRoot({ root, spawnedCwd }),
+    fileRoot,
+    source,
     diffCwd,
   };
 }
@@ -448,9 +447,7 @@ async function handleSessionFilesRead(
                 : {
                     sessionKey: params.sessionKey,
                     ...result,
-                    ...(request.kind === "get" && source.entry?.worktree?.id
-                      ? { workspaceId: source.entry.worktree.id }
-                      : {}),
+                    ...(request.kind === "get" && source.source ? { source: source.source } : {}),
                     ...(repository ? { root: undefined } : {}),
                   },
             );
@@ -536,13 +533,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           respondSessionFileNotFound(respond, params.path);
           return;
         }
-        const workspaceId = loaded.entry.worktree?.id;
+        const source = loaded.source;
         const authorize = () => {
           assertSourceCurrent();
           sessionMutationAuthorization?.assertCurrent();
           if (
-            params.expectedWorkspaceId !== undefined &&
-            params.expectedWorkspaceId !== workspaceId
+            params.expectedSource !== undefined &&
+            !isDeepStrictEqual(params.expectedSource, source)
           ) {
             throw new SessionMutationAuthorizationChangedError(
               sessionFilesError(
@@ -610,7 +607,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         }
         respond(true, {
           sessionKey: params.sessionKey,
-          ...(workspaceId ? { workspaceId } : {}),
+          ...(source ? { source } : {}),
           ...(repository ? {} : { root: update.root }),
           file: update.file,
         });

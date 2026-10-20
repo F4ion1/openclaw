@@ -289,7 +289,7 @@ function openFile(
                   {
                     agentId,
                     expectedHash,
-                    ...(result.workspaceId ? { expectedWorkspaceId: result.workspaceId } : {}),
+                    ...(result.source ? { expectedSource: result.source } : {}),
                   },
                 );
                 const hash = saved?.file.hash;
@@ -331,7 +331,11 @@ function openFile(
                 agentId,
               });
               // A hash-conflict recovery still belongs to the file source that was opened.
-              if (latest?.workspaceId !== result.workspaceId) {
+              if (
+                latest?.source?.workspaceId !== result.source?.workspaceId ||
+                latest?.source?.root !== result.source?.root ||
+                latest?.source?.fileRoot !== result.source?.fileRoot
+              ) {
                 return null;
               }
               const latestFile = latest?.file;
@@ -370,7 +374,9 @@ function openFile(
           result.sessionKey,
           result.root ?? "",
           filePath,
-          ...(result.workspaceId ? [result.workspaceId] : []),
+          ...(result.source
+            ? [result.source.workspaceId, result.source.root ?? "", result.source.fileRoot ?? ""]
+            : []),
         ].join("\u0000"),
         draftContext: {
           sessionKey: result.sessionKey,

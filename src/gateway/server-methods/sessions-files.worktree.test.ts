@@ -138,6 +138,52 @@ function seedReplicaPressure(env: NodeJS.ProcessEnv) {
 }
 
 describe("sessions.files for managed-worktree sessions", () => {
+  it("refuses a changed file lookup root inside the same managed workspace", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const entry = await seedWorktreeSession(state.workspaceDir);
+      const original = { ...entry, spawnedWorkspaceDir: state.workspaceDir };
+      await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, original);
+      const source = {
+        workspaceId: entry.worktree.id,
+        root: state.workspaceDir,
+        fileRoot: entry.spawnedCwd,
+      };
+      const opened = await dispatch("sessions.files.get", "preview.html");
+      expect(opened.mock.calls[0]?.[1]).toMatchObject({
+        source,
+        file: { content: "<h1>boo</h1>\n" },
+      });
+      const replacement = path.join(state.workspaceDir, "replacement");
+      fs.mkdirSync(replacement);
+      fs.writeFileSync(path.join(replacement, "preview.html"), "<h1>boo</h1>\n");
+      await sessions.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { ...original, spawnedCwd: replacement },
+      );
+      const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+      const save = {
+        sessionKey: key,
+        path: "preview.html",
+        content: "new draft",
+        expectedHash: createHash("sha256").update("<h1>boo</h1>\n").digest("hex"),
+        expectedSource: source,
+      };
+      await expect(invoke("sessions.files.set", save)).rejects.toMatchObject({
+        error: { details: { type: "session_file_source_changed" } },
+      });
+      expect(fs.readFileSync(path.join(replacement, "preview.html"), "utf8")).toBe(
+        "<h1>boo</h1>\n",
+      );
+      const freshSource = { ...source, fileRoot: replacement };
+      const fresh = await dispatch("sessions.files.get", "preview.html");
+      expect(fresh.mock.calls[0]?.[1]).toMatchObject({ source: freshSource });
+      expect(
+        await invoke("sessions.files.set", { ...save, expectedSource: freshSource }),
+      ).toMatchObject([{ ok: true }]);
+      expect(fs.readFileSync(path.join(replacement, "preview.html"), "utf8")).toBe("new draft");
+    });
+  });
+
   it.each(["workspace", "authorization"] as const)(
     "preserves the file when %s changes during a source-aware save",
     async (change) => {
@@ -175,7 +221,11 @@ describe("sessions.files for managed-worktree sessions", () => {
             path: "preview.html",
             content: "unapproved replacement",
             expectedHash: createHash("sha256").update("<h1>boo</h1>\n").digest("hex"),
-            expectedWorkspaceId: entry.worktree.id,
+            expectedSource: {
+              workspaceId: entry.worktree.id,
+              root: entry.spawnedCwd,
+              fileRoot: entry.spawnedCwd,
+            },
           },
           {},
           {
