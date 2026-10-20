@@ -2549,7 +2549,7 @@ jobs:
 
       # Explicit saving also retains a valid checkpoint from an interrupted seal.
       - name: Save immutable release execution plan
-        if: ${{ always() && steps.plan_witness.outcome == 'success' }}
+        if: ${{ always() && github.run_attempt == 1 && steps.plan_witness.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: full-release-execution-plan
