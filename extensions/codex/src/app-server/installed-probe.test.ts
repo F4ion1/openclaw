@@ -17,6 +17,13 @@ const missingPreferences = {
   killed: false,
   termination: "exit" as const,
 };
+const programData = { ...missingPreferences, stdout: "C:\\ProgramData", stderr: "", code: 0 };
+function mockCommand(result = missingPreferences) {
+  return vi.spyOn(processRuntime, "runUtf8CommandWithTimeout").mockResolvedValue(result);
+}
+function setPlatform(platform: string) {
+  Object.defineProperty(process, "platform", { value: platform });
+}
 // mock-isolation: never read or depend on the host's managed Codex configuration.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof FsPromises>();
@@ -41,20 +48,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 beforeEach(() => {
   fixture.blockedPath = "";
   if (originalPlatform === "darwin") {
-    Object.defineProperty(process, "platform", { value: "linux" });
+    setPlatform("linux");
   }
   if (originalPlatform === "win32") {
-    vi.spyOn(processRuntime, "runUtf8CommandWithTimeout").mockResolvedValue({
-      ...missingPreferences,
-      stdout: "C:\\ProgramData",
-      stderr: "",
-      code: 0,
-    });
+    mockCommand(programData);
   }
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  Object.defineProperty(process, "platform", { value: originalPlatform });
+  setPlatform(originalPlatform);
   vi.unstubAllEnvs();
 });
 
@@ -70,9 +72,9 @@ it.each([
 ])(
   "isolates Codex SQLite state from $source during the selection handshake",
   async ({ source, platform }) => {
-    Object.defineProperty(process, "platform", { value: platform });
+    setPlatform(platform);
     if (platform === "darwin") {
-      vi.spyOn(processRuntime, "runUtf8CommandWithTimeout").mockResolvedValue(missingPreferences);
+      mockCommand();
     }
     await withTempDir("openclaw-installed-probe-", async (root) => {
       const existingHome = path.join(root, "existing-codex-state");
@@ -125,15 +127,10 @@ it.each([
     file: "C:/ProgramData/OpenAI/Codex/requirements.toml",
   },
 ])("does not launch a selection probe under $name", async ({ platform, file }) => {
-  Object.defineProperty(process, "platform", { value: platform });
+  setPlatform(platform);
   fixture.blockedPath = file;
   if (platform === "win32") {
-    vi.spyOn(processRuntime, "runUtf8CommandWithTimeout").mockResolvedValue({
-      ...missingPreferences,
-      stdout: "C:\\ProgramData",
-      stderr: "",
-      code: 0,
-    });
+    mockCommand(programData);
   }
   await expect(probeCodexAppServerHandshake(process.execPath)).rejects.toThrow(
     "managed Codex configuration prevents an isolated selection probe",
@@ -143,8 +140,8 @@ it.each([
 it.each(["config_toml_base64", "requirements_toml_base64"])(
   "does not launch a selection probe under macOS managed %s",
   async (key) => {
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    vi.spyOn(processRuntime, "runUtf8CommandWithTimeout").mockImplementation(async (argv) =>
+    setPlatform("darwin");
+    mockCommand().mockImplementation(async (argv) =>
       argv.at(-1) === key
         ? { ...missingPreferences, code: 0, stdout: "Type is string", stderr: "" }
         : {

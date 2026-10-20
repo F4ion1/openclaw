@@ -1,4 +1,3 @@
-// Codex tests cover managed binary plugin behavior.
 import { access, chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,14 +34,33 @@ function startOptions(
   };
 }
 
+function resolveStart(
+  options: Parameters<typeof resolveManagedCodexAppServerStartOptions>[1],
+  order?: CodexAppServerStartOptions["managedCommandOrder"],
+) {
+  return resolveManagedCodexAppServerStartOptions(startOptions("managed", order), options);
+}
+
+function resolvedStart(command: string, order?: CodexAppServerStartOptions["managedCommandOrder"]) {
+  return { ...startOptions("managed", order), command, commandSource: "resolved-managed" };
+}
+
 function managedCommandPath(root: string, platform: NodeJS.Platform): string {
   return path.join(root, "node_modules", ".bin", platform === "win32" ? "codex.cmd" : "codex");
 }
 
-async function writeExecutable(file: string): Promise<void> {
+async function writeFixture(file: string, contents: string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, "#!/usr/bin/env node\n");
+  await writeFile(file, contents);
+}
+
+async function writeExecutable(file: string, contents = "#!/usr/bin/env node\n"): Promise<void> {
+  await writeFixture(file, contents);
   await chmod(file, 0o755);
+}
+
+async function writePackage(root: string, name: string) {
+  await writeFixture(path.join(root, "package.json"), JSON.stringify({ name }));
 }
 
 async function writePackageLauncher(owner: string): Promise<string> {
@@ -77,48 +95,33 @@ describe("managed Codex app-server binary", () => {
   });
 
   it("resolves native dependencies from the real package behind an isolated install shim", async () => {
-    const installRoot = await realpath(
-      await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-isolated-")),
+    const installRoot = root;
+    const platform = process.platform === "win32" ? "win32" : "linux";
+    const modulesDir = path.join(installRoot, "node_modules");
+    const realScopeDir = path.join(modulesDir, ".pnpm", "codex-slot", "node_modules", "@openai");
+    const packageRoot = path.join(realScopeDir, "codex");
+    const platformPackage = `@openai/codex-${platform}-x64`;
+    const platformRoot = path.join(realScopeDir, `codex-${platform}-x64`);
+    const native = path.join(
+      platformRoot,
+      "vendor",
+      platform === "win32" ? "x86_64-pc-windows-msvc" : "x86_64-unknown-linux-musl",
+      "bin",
+      platform === "win32" ? "codex.exe" : "codex",
     );
-    try {
-      const platform = process.platform === "win32" ? "win32" : "linux";
-      const modulesDir = path.join(installRoot, "node_modules");
-      const realScopeDir = path.join(modulesDir, ".pnpm", "codex-slot", "node_modules", "@openai");
-      const packageRoot = path.join(realScopeDir, "codex");
-      const platformPackage = `@openai/codex-${platform}-x64`;
-      const platformRoot = path.join(realScopeDir, `codex-${platform}-x64`);
-      const native = path.join(
-        platformRoot,
-        "vendor",
-        platform === "win32" ? "x86_64-pc-windows-msvc" : "x86_64-unknown-linux-musl",
-        "bin",
-        platform === "win32" ? "codex.exe" : "codex",
-      );
-      const command = managedCommandPath(installRoot, platform);
-      await mkdir(packageRoot, { recursive: true });
-      await mkdir(path.dirname(native), { recursive: true });
-      await mkdir(path.dirname(command), { recursive: true });
-      await mkdir(path.join(modulesDir, "@openai"), { recursive: true });
-      await writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "@openai/codex" }),
-      );
-      await writeFile(
-        path.join(platformRoot, "package.json"),
-        JSON.stringify({ name: platformPackage }),
-      );
-      await writeFile(native, "native artifact fixture");
-      await writeFile(command, "launcher fixture");
-      await symlink(
-        packageRoot,
-        path.join(modulesDir, "@openai", "codex"),
-        platform === "win32" ? "junction" : "dir",
-      );
+    const command = managedCommandPath(installRoot, platform);
+    await mkdir(path.join(modulesDir, "@openai"), { recursive: true });
+    await writePackage(packageRoot, "@openai/codex");
+    await writePackage(platformRoot, platformPackage);
+    await writeFixture(native, "native artifact fixture");
+    await writeFixture(command, "launcher fixture");
+    await symlink(
+      packageRoot,
+      path.join(modulesDir, "@openai", "codex"),
+      platform === "win32" ? "junction" : "dir",
+    );
 
-      expect(resolveManagedCodexNativeCommand(command, { platform, arch: "x64" })).toBe(native);
-    } finally {
-      await rm(installRoot, { recursive: true, force: true });
-    }
+    expect(resolveManagedCodexNativeCommand(command, { platform, arch: "x64" })).toBe(native);
   });
 
   it("reports the signed desktop bundle binary as its native artifact", () => {
@@ -167,16 +170,7 @@ describe("managed Codex app-server binary", () => {
     await writePackageLauncher(path.join(root, "npm", "projects", "openclaw-codex-fixture"));
     await writeExecutable(managedCommandPath(root, platform));
 
-    await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform,
-        pluginRoot,
-      }),
-    ).resolves.toEqual({
-      ...startOptions("managed"),
-      command: launcher,
-      commandSource: "resolved-managed",
-    });
+    await expect(resolveStart({ platform, pluginRoot })).resolves.toEqual(resolvedStart(launcher));
   });
 
   it("shares the registered owner with separately loaded runtime modules", async () => {
@@ -195,10 +189,7 @@ describe("managed Codex app-server binary", () => {
     buildMigrationProvider();
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform: "linux",
-        preferInstalled: false,
-      }),
+      resolveStart({ platform: "linux", preferInstalled: false }),
     ).resolves.toMatchObject({ commandSource: "resolved-managed" });
   });
 
@@ -257,20 +248,15 @@ describe("managed Codex app-server binary", () => {
     const pluginRoot = path.join(root, "extensions", "codex");
     await mkdir(pluginRoot, { recursive: true });
     await writeExecutable(managedCommandPath(root, "linux"));
-    await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform: "linux",
-        pluginRoot,
-      }),
-    ).rejects.toThrow("Managed Codex app-server binary was not found");
+    await expect(resolveStart({ platform: "linux", pluginRoot })).rejects.toThrow(
+      "Managed Codex app-server binary was not found",
+    );
   });
 
   it("requires a loader-registered owner instead of guessing from the runtime module", async () => {
-    await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform: "linux",
-      }),
-    ).rejects.toThrow("Codex plugin root is unavailable");
+    await expect(resolveStart({ platform: "linux" })).rejects.toThrow(
+      "Codex plugin root is unavailable",
+    );
   });
 });
 
@@ -318,13 +304,8 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     const platformRoot = path.join(packageRoot, "node_modules", "@openai", `codex-${target}`);
     const native = path.join(platformRoot, "vendor", NATIVE_TRIPLES[target]!, "bin", "codex");
     const launcher = await writePackageLauncher(path.join(root, "prefix", "lib"));
-    await mkdir(path.dirname(native), { recursive: true });
-    await writeFile(
-      path.join(platformRoot, "package.json"),
-      JSON.stringify({ name: `@openai/codex-${target}` }),
-    );
-    await writeFile(native, `#!/bin/sh\n${versionScript}\n`);
-    await chmod(native, 0o755);
+    await writePackage(platformRoot, `@openai/codex-${target}`);
+    await writeExecutable(native, `#!/bin/sh\n${versionScript}\n`);
     await symlink(launcher, path.join(bin, "codex"));
     expect(path.dirname(path.dirname(launcher))).toBe(packageRoot);
     return { launcher, native };
@@ -345,6 +326,13 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     return { clientVersion, selected: installedState.selected };
   }
   const BUNDLED = { clientVersion: CODEX_APP_SERVER_VERSION, selected: undefined };
+
+  function selectInstalled(command = "/opt/codex/bin/codex", nativeCommand = command) {
+    const selected = { command, nativeCommand, version: NEWER };
+    installedState.selection = Promise.resolve(selected);
+    installedState.selected = selected;
+    return selected;
+  }
 
   function expectChoice(message: string) {
     expect(embeddedAgentLog.info).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(message));
@@ -456,8 +444,7 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
   });
 
   it("rejects script wrappers that are not the official npm launcher", async () => {
-    await writeFile(path.join(bin, "codex"), `#!/bin/sh\necho "codex-cli ${NEWER}"\n`);
-    await chmod(path.join(bin, "codex"), 0o755);
+    await writeExecutable(path.join(bin, "codex"), `#!/bin/sh\necho "codex-cli ${NEWER}"\n`);
 
     await expect(select()).resolves.toEqual(BUNDLED);
     expectChoice("is not a native Codex executable or the official @openai/codex launcher");
@@ -480,9 +467,7 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
 
   it("does not adopt a desktop-owned binary found through a PATH symlink", async () => {
     const desktop = path.join(root, "Codex.app", "Contents", "Resources", "codex");
-    await mkdir(path.dirname(desktop), { recursive: true });
-    await writeFile(desktop, "\u007fELF native fixture");
-    await chmod(desktop, 0o755);
+    await writeExecutable(desktop, "\u007fELF native fixture");
     await symlink(desktop, path.join(bin, "codex"));
     vi.spyOn(desktopAppPaths, "resolveMacOSDesktopCodexAppServerCommandCandidates").mockReturnValue(
       [desktop],
@@ -504,21 +489,14 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
   it("starts the selected installed Codex first with the package as its fallback", async () => {
     const pluginRoot = path.join(root, "plugin");
     const packaged = await writePackageLauncher(pluginRoot);
-    const selected = {
-      command: "/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
-      nativeCommand: "/usr/local/lib/node_modules/@openai/codex/vendor/codex",
-      version: NEWER,
-    };
-    installedState.selection = Promise.resolve(selected);
-    installedState.selected = selected;
+    const selected = selectInstalled(
+      "/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
+      "/usr/local/lib/node_modules/@openai/codex/vendor/codex",
+    );
     const pathExists = async () => true;
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform: "linux",
-        pluginRoot,
-        pathExists,
-      }),
+      resolveStart({ platform: "linux", pluginRoot, pathExists }),
     ).resolves.toMatchObject({
       command: selected.command,
       commandSource: "resolved-managed",
@@ -526,12 +504,7 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     });
     expect(resolveManagedCodexNativeCommand(selected.command)).toBe(selected.nativeCommand);
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform: "linux",
-        pluginRoot,
-        pathExists,
-        preferInstalled: false,
-      }),
+      resolveStart({ platform: "linux", pluginRoot, pathExists, preferInstalled: false }),
     ).resolves.toMatchObject({ command: packaged });
   });
 
@@ -542,11 +515,14 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       command.includes("Codex.app") || command === packaged;
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
-        platform: "darwin",
-        pluginRoot,
-        pathExists: desktopInstalled,
-      }),
+      resolveStart(
+        {
+          platform: "darwin",
+          pluginRoot,
+          pathExists: desktopInstalled,
+        },
+        "desktop-first",
+      ),
     ).resolves.toMatchObject({
       command: expect.stringContaining("Codex.app"),
       managedFallbackCommandPaths: expect.arrayContaining([packaged]),
@@ -605,13 +581,7 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
   );
 
   it("lets every start that captured a rejected installed Codex fall back, logging once", () => {
-    const selected = {
-      command: "/opt/codex/bin/codex",
-      nativeCommand: "/opt/codex/bin/codex",
-      version: NEWER,
-    };
-    installedState.selection = Promise.resolve(selected);
-    installedState.selected = selected;
+    const selected = selectInstalled();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
 
     expect(rejectInstalledCodexAppServer(selected.command, new Error("spawn EACCES"))).toBe(true);
