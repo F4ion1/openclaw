@@ -45,6 +45,11 @@ const snapshot = (pids?: readonly number[]) =>
   readDarwinProcessSnapshot(performance.now() + 1000, pids);
 const tree = (roots: readonly number[]) => readDarwinProcessTree(performance.now() + 1000, roots);
 const commandLine = () => readDarwinProcessCommandLine(123, performance.now() + 1000);
+function fail(mock: typeof native.census, code: ConstructorParameters<typeof ProcSafeError>[0]) {
+  mock.mockImplementation(() => {
+    throw new ProcSafeError(code, "unavailable");
+  });
+}
 beforeEach(() => {
   native.census.mockReset().mockReturnValue([row]);
   native.command.mockReset();
@@ -65,9 +70,7 @@ it("omits incomplete topology only after proving that the PID disappeared", asyn
   native.identity.mockReturnValue(null);
   expect(await snapshot()).toEqual([]);
   expect(native.identity).toHaveBeenCalledExactlyOnceWith(123);
-  native.identity.mockImplementation(() => {
-    throw new ProcSafeError("access-denied", "denied");
-  });
+  fail(native.identity, "access-denied");
   await expect(snapshot()).rejects.toMatchObject({ reason: "permission" });
 });
 
@@ -98,9 +101,7 @@ it.each([
   ["incomplete", "unavailable", "EIO"],
   ["helper-unavailable", "unavailable", "EIO"],
 ] as const)("preserves %s failure semantics", async (code, reason, mappedCode) => {
-  native.census.mockImplementation(() => {
-    throw new ProcSafeError(code, "unavailable");
-  });
+  fail(native.census, code);
   await expect(snapshot()).rejects.toMatchObject({ reason, code: mappedCode });
 });
 
@@ -149,8 +150,6 @@ it("reads arguments without requesting environment and keeps errors distinct fro
   expect(native.command).toHaveBeenCalledExactlyOnceWith(123);
   native.command.mockReturnValue(null);
   expect(await commandLine()).toBe("");
-  native.command.mockImplementation(() => {
-    throw new ProcSafeError("access-denied", "denied");
-  });
+  fail(native.command, "access-denied");
   await expect(commandLine()).rejects.toMatchObject({ reason: "permission" });
 });

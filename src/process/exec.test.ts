@@ -14,7 +14,11 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { waitForDead } from "../../test/helpers/process-wait.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setVerbose } from "../global-state.js";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -31,6 +35,7 @@ import {
   runUtf8CommandWithTimeout,
   type CommandOptions,
   type RunExecOptions,
+  type SpawnResult,
 } from "./exec.js";
 
 const nodeCommand = (source: string) => [process.execPath, "-e", source];
@@ -40,14 +45,21 @@ const bufferNode = (source: string, options: Parameters<typeof runCommandBuffere
   runCommandBuffered(nodeCommand(source), { timeoutMs: 3_000, ...options });
 const execNode = (source: string, options?: RunExecOptions) =>
   runExec(process.execPath, ["-e", source], options);
+async function advanceTime(...steps: (number | "next")[]) {
+  for (const step of steps) {
+    if (step === "next") {
+      await vi.advanceTimersToNextTimerAsync();
+    } else {
+      await vi.advanceTimersByTimeAsync(step);
+    }
+  }
+}
 
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts.close();
-});
+afterAll(() => receipts.close());
 afterEach(() => vi.unstubAllEnvs());
 
 describe("runCommandWithTimeout", () => {
@@ -55,10 +67,7 @@ describe("runCommandWithTimeout", () => {
     "reports invocation cleanup and honors the initial SIGINT signal: %s",
     async (mode) => {
       const controller = new AbortController();
-      let ready!: () => void;
-      const started = new Promise<void>((resolve) => {
-        ready = resolve;
-      });
+      const started = createDeferred<void>();
       const program = `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
       // Keep process I/O and polling real, but don't let host scheduling consume the grace period.
       const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -69,11 +78,9 @@ describe("runCommandWithTimeout", () => {
           killSignal: "SIGINT",
           killGraceMs: 100,
           timeoutMs: 5000,
-          onOutputChunk: () => {
-            ready();
-          },
+          onOutputChunk: () => started.resolve(undefined),
         });
-        await started;
+        await started.promise;
         controller.abort();
         if (mode === "forced") {
           now.mockReturnValue(1_100);
@@ -114,7 +121,6 @@ describe("runCommandWithTimeout", () => {
         const result = await withinTest(running, signal);
         expect(Number.isSafeInteger(descendant) && descendant! > 0).toBe(true);
         expect(result).toMatchObject({ code: 0, cleanup: "forced" });
-        // Forced settlement is recorded only after exec-termination observes the group absent.
         expect(isPidAlive(descendant!)).toBe(false);
       } finally {
         await running?.catch(() => undefined);
@@ -224,18 +230,15 @@ describe("runCommandWithTimeout", () => {
     });
   });
 
-  it("keeps the combined output tail when tail capture is selected", async () => {
-    const result = await runNode("process.stdout.write('abcdefgh')", {
-      maxCombinedOutputBytes: 4,
-      maxOutputBytes: 16,
-      outputCapture: "tail",
-    });
-
-    expect(result).toMatchObject({ stdout: "efgh", stdoutTruncatedBytes: 4 });
-  });
-
-  it("does not treat combined overflow as a selected stream overflow", async () => {
-    const result = await runNode(
+  it.each<[string, string, CommandOptions, Partial<SpawnResult>]>([
+    [
+      "keeps the combined tail",
+      "process.stdout.write('abcdefgh')",
+      { maxCombinedOutputBytes: 4, maxOutputBytes: 16, outputCapture: "tail" },
+      { stdout: "efgh", stdoutTruncatedBytes: 4 },
+    ],
+    [
+      "does not treat combined overflow as selected-stream overflow",
       "process.stderr.write('abcdefgh'); setImmediate(() => process.stdout.write('x'))",
       {
         maxCombinedOutputBytes: 8,
@@ -243,27 +246,25 @@ describe("runCommandWithTimeout", () => {
         outputCapture: "head",
         terminateOnOutputLimit: { stdout: true },
       },
-    );
-
-    expect(result).toMatchObject({ termination: "exit", stdout: "", stderr: "abcdefgh" });
-    expect(result.outputLimitExceeded).toBeUndefined();
-  });
-
-  it("terminates commands that exceed a selected stream cap", async () => {
-    const result = await runNode(
+      {
+        termination: "exit",
+        stdout: "",
+        stderr: "abcdefgh",
+        outputLimitExceeded: undefined,
+      },
+    ],
+    [
+      "terminates on selected-stream overflow",
       "process.stdout.write('x'.repeat(100)); setInterval(() => {}, 1000)",
       {
         maxOutputBytes: { stdout: 16, stderr: 16 },
         outputCapture: "head",
         terminateOnOutputLimit: { stdout: true },
       },
-    );
-
-    expect(result).toMatchObject({
-      outputLimitExceeded: true,
-      termination: "signal",
-      stdout: "x".repeat(16),
-    });
+      { outputLimitExceeded: true, termination: "signal", stdout: "x".repeat(16) },
+    ],
+  ])("%s", async (_name, source, options, expected) => {
+    expect(await runNode(source, options)).toMatchObject(expected);
   });
 
   it("rejects mixed capture modes under a combined cap", async () => {
@@ -319,17 +320,25 @@ describe("runCommandWithTimeout", () => {
 });
 
 describe("runCommandBuffered", () => {
-  it("caps stdout and stderr under one aggregate output budget", async () => {
-    const result = await bufferNode(
-      "process.stdout.write('abcd'); setImmediate(() => process.stderr.write('efgh'))",
-      {
-        maxCombinedOutputBytes: 6,
-        maxOutputBytes: 8,
-      },
-    );
-
-    expect(result).toMatchObject({ termination: "output-limit", outputLimitStream: "stderr" });
-    expect([result.stdout, result.stderr]).toEqual([Buffer.from("abcd"), Buffer.from("ef")]);
+  it.each([
+    {
+      name: "caps stdout and stderr under one aggregate budget",
+      source: "process.stdout.write('abcd'); setImmediate(() => process.stderr.write('efgh'))",
+      options: { maxCombinedOutputBytes: 6, maxOutputBytes: 8 },
+      expected: { termination: "output-limit", outputLimitStream: "stderr" },
+      output: ["abcd", "ef"],
+    },
+    {
+      name: "discards stderr without applying its byte cap",
+      source: "process.stderr.write('x'.repeat(1024)); process.stdout.write('ok')",
+      options: { discardOutput: { stderr: true }, maxOutputBytes: { stdout: 32, stderr: 8 } },
+      expected: { code: 0, termination: "exit" },
+      output: ["ok", ""],
+    },
+  ])("$name", async ({ source, options, expected, output }) => {
+    const result = await bufferNode(source, options);
+    expect(result).toMatchObject(expected);
+    expect([result.stdout, result.stderr]).toEqual(output.map((text) => Buffer.from(text)));
   });
 
   it("maps timeout and pre-aborted signals without throwing", async () => {
@@ -358,8 +367,7 @@ describe("runCommandBuffered", () => {
       withTempDir("openclaw-exec-descendant-", async (dir) => {
         const pidPath = path.join(dir, "descendant.pid");
         const termPath = path.join(dir, "sigterm");
-        // Acknowledge only after the handler and keepalive exist. Stay quiet so
-        // inherited-pipe release cannot kill the descendant through EPIPE.
+        // Stay quiet so inherited-pipe release cannot kill the descendant through EPIPE.
         const descendantSource = [
           "import { writeFileSync } from 'node:fs'",
           fixtureReceiptClientSource(receipts.endpoint),
@@ -378,8 +386,7 @@ describe("runCommandBuffered", () => {
         let parent: ChildProcess | undefined;
         let descendantPid: number | undefined;
         let command: ReturnType<typeof runCommandBuffered> | undefined;
-        // Freeze deadlines, not subprocess I/O: Node startup must not consume the
-        // timeout or the 100ms inherited-pipe idle grace. Receipts stay real.
+        // Freeze deadlines so startup cannot consume timeout/pipe grace; receipts stay real.
         vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
         try {
           let settled = false;
@@ -412,8 +419,7 @@ describe("runCommandBuffered", () => {
           expect(settled).toBe(false);
 
           if (escaped) {
-            // This pipe holder has its own group: root-group termination cannot
-            // close its pipes. Quiet successful output still belongs to the deadline.
+            // The escaped pipe holder is outside root-group termination; wait for the deadline.
             await vi.advanceTimersByTimeAsync(101);
             await new Promise<void>((resolve) => {
               setImmediate(resolve);
@@ -424,15 +430,9 @@ describe("runCommandBuffered", () => {
             expect(isPidAlive(descendantPid)).toBe(true);
             expect(existsSync(termPath)).toBe(false);
 
-            // The test signal unwinds cleanup if output release never reaches close.
             const closed = once(parent, "close");
-            await vi.advanceTimersByTimeAsync(timeoutMs - 101);
-            await vi.advanceTimersToNextTimerAsync();
-            await vi.advanceTimersByTimeAsync(100);
-            await vi.advanceTimersToNextTimerAsync();
-            await vi.advanceTimersByTimeAsync(100);
-            // Output release runs in the next timers phase so buffered pipe I/O
-            // gets a poll turn on both Node and Bun.
+            await advanceTime(timeoutMs - 101, "next", 100, "next", 100);
+            // Give Node/Bun pipe I/O its poll turn before release.
             await vi.advanceTimersByTimeAsync(1);
             await withinTest(closed, signal);
             expect(await withinTest(command, signal)).toMatchObject({
@@ -446,13 +446,9 @@ describe("runCommandBuffered", () => {
 
           if (exitCode === 0) {
             expect(existsSync(termPath)).toBe(false);
-            await vi.advanceTimersByTimeAsync(50);
-            await vi.advanceTimersToNextTimerAsync();
-            await vi.advanceTimersByTimeAsync(100);
-            await vi.advanceTimersToNextTimerAsync();
+            await advanceTime(50, "next", 100, "next");
           }
-          // Receipt delivery is independent of command completion. The handler writes
-          // its durable marker first, so that marker decides if completion wins the race.
+          // The durable marker precedes the receipt and arbitrates completion races.
           await withinTest(
             Promise.race([
               receipts.waitFor(termPath, "handled"),
@@ -479,8 +475,7 @@ describe("runCommandBuffered", () => {
           expect(isPidAlive(descendantPid)).toBe(false);
         } finally {
           try {
-            // Record the spawned descendant before its readiness acknowledgement,
-            // so even an early root/IPC failure can reap the explicitly owned group.
+            // Recover ownership even after an early root/IPC failure.
             if (descendantPid === undefined && existsSync(pidPath)) {
               descendantPid = await readPidFile(pidPath);
             }
@@ -526,19 +521,6 @@ describe("runCommandBuffered", () => {
       expect(result.error).toBeUndefined();
     },
   );
-
-  it("can discard a diagnostic stream without applying its byte cap", async () => {
-    const result = await bufferNode(
-      "process.stderr.write('x'.repeat(1024)); process.stdout.write('ok')",
-      {
-        discardOutput: { stderr: true },
-        maxOutputBytes: { stdout: 32, stderr: 8 },
-      },
-    );
-
-    expect(result).toMatchObject({ code: 0, termination: "exit" });
-    expect([result.stdout, result.stderr]).toEqual([Buffer.from("ok"), Buffer.alloc(0)]);
-  });
 
   it("keeps argv values out of buffered transport errors", async () => {
     const privateArg = "private-buffered-argument";

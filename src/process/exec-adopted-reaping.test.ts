@@ -44,7 +44,6 @@ const unrelated = spawn(process.execPath, ["-e", \`
 \`], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
 const unrelatedExit = once(unrelated, "exit");
 await once(unrelated, "message");
-const reports = [];
 try {
   for (const mode of ["runner", "scope"]) {
     const receipt = path.join(directory, mode + ".json");
@@ -64,11 +63,11 @@ try {
       const child = spawn(process.execPath, ["-e", \${JSON.stringify(descendant)}], {
         stdio: ["ignore", "ignore", "ignore", "ipc"],
       });
-      require("node:fs").writeFileSync(\${JSON.stringify(receipt)},
-        JSON.stringify({ root: process.pid, descendant: child.pid }));
+      const record = (ready = false) => require("node:fs").writeFileSync(\${JSON.stringify(receipt)},
+        JSON.stringify({ root: process.pid, descendant: child.pid, ready }));
+      record();
       child.once("message", () => {
-        require("node:fs").writeFileSync(\${JSON.stringify(receipt)},
-          JSON.stringify({ root: process.pid, descendant: child.pid, ready: true }));
+        record(true);
         child.disconnect();
         child.unref();
       });
@@ -99,16 +98,12 @@ try {
     const fields = remaining?.slice(remaining.lastIndexOf(")") + 2).split(" ");
     try {
       assert.equal(pids.ready, true, "descendant must be ready before root exit");
-      reports.push({
-        mode,
-        rootCode: mode === "runner" ? result?.code : result?.exitCode,
-        rootSignal: result?.signal ?? null,
-        cleanup: mode === "runner" ? result?.cleanup : failure ? "failed" : "settled",
-        descendantPresent: fields !== undefined,
-        cooperative: existsSync(marker),
-        ...(fields ? { descendant: { state: fields[0], parent: Number(fields[1]), group: Number(fields[2]) } } : {}),
-        ...(failure ? { failure } : {}),
-      });
+      assert.equal(failure, undefined, mode);
+      assert.equal(mode === "runner" ? result?.code : result?.exitCode, 0, mode);
+      assert.equal(result?.signal ?? null, null, mode);
+      if (mode === "runner") assert.equal(result?.cleanup, "cooperative");
+      assert.equal(fields, undefined, mode + ": descendant must be reaped");
+      assert.equal(existsSync(marker), mode === "runner", mode + ": cooperative stop");
     } finally {
       // A red regression can leave our adopted zombie. Never consume the tracked root.
       if (fields) {
@@ -137,7 +132,7 @@ try {
   assert.equal(unrelated.exitCode, null, "cleanup must leave the unrelated child running");
   unrelated.send("finish");
   assert.deepEqual(await unrelatedExit, [37, null], "libuv must retain unrelated exit status");
-  process.stdout.write(JSON.stringify(reports));
+  process.stdout.write("reaped");
 } finally {
   if (unrelated.exitCode === null && unrelated.signalCode === null) unrelated.kill("SIGKILL");
   await unrelatedExit;
@@ -149,23 +144,6 @@ try {
       encoding: "utf8",
       timeout: 15_000,
     });
-    expect(JSON.parse(stdout)).toEqual([
-      {
-        mode: "runner",
-        rootCode: 0,
-        rootSignal: null,
-        cleanup: "cooperative",
-        descendantPresent: false,
-        cooperative: true,
-      },
-      {
-        mode: "scope",
-        rootCode: 0,
-        rootSignal: null,
-        cleanup: "settled",
-        descendantPresent: false,
-        cooperative: false,
-      },
-    ]);
+    expect(stdout).toBe("reaped");
   },
 );

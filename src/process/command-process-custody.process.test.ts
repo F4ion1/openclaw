@@ -20,15 +20,23 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts?.close();
-});
+afterAll(() => receipts?.close());
 
 it.skipIf(process.platform === "win32")(
   "retains and stops a detached writer after its busy scope owner is killed",
   async ({ signal }) => {
     const root = directories.make("command-custody-");
     const receipt = path.join(root, "custody.json");
+    const readReceipt = () =>
+      JSON.parse(readFileSync(receipt, "utf8")) as {
+        state: string;
+        identity?: CommandProcessIdentity;
+      };
+    const settle = async (identity: CommandProcessIdentity) =>
+      expect(
+        await settleCommandProcessGroups([identity]),
+        "fixture writer cleanup must remain owned",
+      ).toEqual({ settled: true, pids: [] });
     const effect = path.join(root, "effect");
     const node = requireNodeTool("node");
     const moduleUrl = (name: string, sourceWorkerName = name) =>
@@ -110,31 +118,17 @@ it.skipIf(process.platform === "win32")(
       }
       expect(result.cleanup).toBe("forced");
       expect(isChildProcessTreeAlive({ pid: ready.root })).toBe(false);
-      expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual({
-        state: "spawned",
-        identity: ready.identity,
-      });
+      expect(readReceipt()).toEqual({ state: "spawned", identity: ready.identity });
       process.kill(ready.identity.pid, "SIGUSR2");
       await withinTest(receipts.waitFor(effect, "written"), signal);
       expect(readFileSync(effect, "utf8")).toBe("still writable");
-      expect(await settleCommandProcessGroups([ready.identity])).toEqual({
-        settled: true,
-        pids: [],
-      });
+      await settle(ready.identity);
       expect(isChildProcessTreeAlive(ready.identity)).toBe(false);
     } finally {
       const identity =
-        ready?.identity ??
-        (existsSync(receipt)
-          ? (JSON.parse(readFileSync(receipt, "utf8")) as { identity?: CommandProcessIdentity })
-              .identity
-          : undefined);
+        ready?.identity ?? (existsSync(receipt) ? readReceipt().identity : undefined);
       if (identity) {
-        const cleanup = await settleCommandProcessGroups([identity]);
-        expect(cleanup, "fixture writer cleanup must remain owned").toEqual({
-          settled: true,
-          pids: [],
-        });
+        await settle(identity);
       }
     }
   },

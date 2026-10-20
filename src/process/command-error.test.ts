@@ -52,21 +52,12 @@ it("keeps independent recent stream tails within the existing error budget", () 
     "worktree setup",
     120_000,
   );
-  expect(error.message).toContain("stdout recovery 🦞");
-  expect(error.message).toContain("warning detail 🦞");
-  expect(error.message).not.toContain("old output");
-  expect(error.message).not.toContain("old warning");
-  expect(error.message).toContain(":\n");
   const detail = error.message.slice(error.message.indexOf(":\n") + 2);
-  expect(detail).toMatch(/^stderr: …\n/u);
-  expect(detail).toContain("\nstdout: …\n");
+  expect(detail).toMatch(/^stderr: …\ny+\nwarning detail 🦞\nstdout: …\nx+\nstdout recovery 🦞$/u);
   expect(detail.length).toBeLessThanOrEqual(2_000);
-  expect(detail).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
-  expect(detail).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
   expect(error.message.length).toBeLessThan(2300);
 });
 
-// Buffered capture/launch failures carry an error termination, sometimes with an exit code.
 it("keeps buffered errors without exit metadata", () => {
   const error = errorFor({
     ...failure,
@@ -90,10 +81,9 @@ it("retains a short already-omitted tail alongside the other stream", () => {
       stdout: "recovery",
     }),
   );
-  expect(error.message).toContain("stderr: …\nnote 1\n");
-  expect(error.message).not.toContain("note 0\n");
-  expect(error.message).toContain("note 12\nstdout: recovery");
-  expect(error.message.match(/…/g)).toHaveLength(1);
+  expect(error.message).toBe(
+    `setup failed (exit code 23):\nstderr: …\n${Array.from({ length: 12 }, (_, i) => `note ${i + 1}`).join("\n")}\nstdout: recovery`,
+  );
 });
 
 it("does not widen the result stdout cap for a single stream", () => {
