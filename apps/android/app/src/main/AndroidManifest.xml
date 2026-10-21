@@ -178,8 +178,21 @@
             <action android:name="android.service.voice.VoiceInteractionService" />
         </intent-filter>
         <meta-data
-            android:name="voice_interaction_settings_activity"
+            android:name="settings_activity"
             android:value=".MainActivity" />
+        <meta-data
+            android:name="voice_interaction_service"
+            android:value=".voice.OpenClawVoiceInteractionSessionService" />
+        
+    </service>
+    <!-- Session factory resolved by VoiceInteractionManagerService via meta-data "session_service" -->
+    <service
+        android:name=".voice.OpenClawVoiceInteractionSessionService"
+        android:exported="true"
+        android:permission="android.permission.BIND_VOICE_INTERACTION">
+        <intent-filter>
+            <action android:name="android.service.voice.VoiceInteractionSessionService" />
+        </intent-filter>
     </service>
     </application>
 </manifest>
